@@ -37,6 +37,7 @@
 #include "htmlPage.h"
 #include "udc.h"
 #include "hex.h"
+#include "pipeline.h"
 #include <dirent.h>
 #include <openssl/sha.h>
 
@@ -165,6 +166,27 @@ static char *redirName = "redir";
 static int cacheTimeout = 0;
 
 #define MAX_SKIP_TO_SAVE_RECONNECT (udcMaxBytesPerRemoteFetch / 2)
+
+/* pseudo-URLs with this prefix (e.g. "s3://" get run through a command to get resolved to real HTTPS URLs) */
+struct slName *resolvProts = NULL;
+static char *resolvCmd = NULL;
+
+bool udcIsResolvable(char *url) 
+/* check if third-party protocol resolving (e.g. for "s3://") is enabled and if the url starts with a protocol handled by the resolver */
+{
+if (!resolvProts || !resolvCmd)
+    return FALSE;
+
+char *colon = strchr(url, ':');
+if (!colon)
+    return FALSE;
+
+int colonPos = colon - url;
+char *protocol = cloneStringZ(url, colonPos);
+bool isFound = (slNameFind(resolvProts, protocol) != NULL);
+freez(&protocol);
+return isFound;
+}
 
 static off_t ourMustLseek(struct ioStats *ioStats, int fd, off_t offset, int whence)
 {
@@ -434,6 +456,13 @@ return TRUE;
 static char *defaultDir = "/tmp/udcCache";
 static bool udcInitialized = FALSE;
 
+void udcSetResolver(char *prots, char *cmd)
+/* Set protocols and local wrapper program to resolve s3:// and similar URLs to HTTPS */
+{
+    resolvProts = slNameListFromString(cloneString(prots), ',');
+    resolvCmd = cmd;
+}
+
 static void initializeUdc()
 /* Use the $TMPDIR environment variable, if set, to amend the default location
  * of the cache */
@@ -477,12 +506,29 @@ static bool udcCacheEnabled()
 return (defaultDir != NULL);
 }
 
+static char* resolveUrl(char *url) 
+/* return the HTTPS URL given a pseudo-URL e.g. s3://xxxx. Result must be freed. */
+{
+char *cmd1[] = {resolvCmd, url, NULL};
+char **cmds[] = {cmd1, NULL};
+struct pipeline *pl = pipelineOpen(cmds, pipelineRead | pipelineNoAbort, NULL, NULL, 0);
+struct lineFile *lf = pipelineLineFile(pl);
+char *line;
+lineFileNext(lf, &line, NULL); // XX do I need to free &line ?
+stripString(line, "\n");
+line = cloneString(line);
+pipelineClose(&pl);  /* Takes care of lf too. */
+return line;
+}
+
 int udcDataViaHttpOrFtp( char *url, bits64 offset, int size, void *buffer, struct udcFile *file)
 /* Fetch a block of data of given size into buffer using url's protocol,
  * which must be http, https or ftp.  Returns number of bytes actually read.
  * Does an errAbort on error.
  * Typically will be called with size in the 8k-64k range. */
 {
+if (udcIsResolvable(url))
+        url = resolveUrl(url);
 if (startsWith("http://",url) || startsWith("https://",url) || startsWith("ftp://",url))
     verbose(4, "reading http/https/ftp data - %d bytes at %lld - on %s\n", size, offset, url);
 else
@@ -530,6 +576,10 @@ char *sizeString = NULL;
 while (TRUE)
     {
     hash = newHash(0);
+    if (udcIsResolvable(url)) {
+        url = resolveUrl(url); // XX url is never freed
+    }
+
     status = netUrlHead(url, hash);
     sizeString = hashFindValUpperCase(hash, "Content-Length:");
     if (status == 200 && sizeString)
@@ -561,7 +611,9 @@ while (TRUE)
 	warn("code %d redirects: exceeded limit of 5 redirects, %s", status, url);
 	return FALSE;
 	}
+
     char *newUrl = hashFindValUpperCase(hash, "Location:");
+
      if (!newUrl)
 	{
 	warn("code %d redirects: redirect location missing, %s", status, url);
@@ -848,7 +900,7 @@ else if (sameString(upToColon, "slow"))
     prot->fetchInfo = udcInfoViaSlow;
     prot->type = "slow";
     }
-else if (sameString(upToColon, "http") || sameString(upToColon, "https"))
+else if (sameString(upToColon, "http") || sameString(upToColon, "https") || (resolvProts && slNameFind(resolvProts, upToColon)))
     {
     prot->fetchData = udcDataViaHttpOrFtp;
     prot->fetchInfo = udcInfoViaHttp;
@@ -2061,7 +2113,7 @@ if (cacheSize!=-1)
 off_t ret = -1;
 struct udcRemoteFileInfo info;
 
-if (startsWith("http://",url) || startsWith("https://",url))
+if (startsWith("http://",url) || startsWith("https://",url) || udcIsResolvable(url) )
     {
     if (udcInfoViaHttp(url, &info))
 	ret = info.size;
