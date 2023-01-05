@@ -1397,7 +1397,7 @@ if (! (cgiScriptName() && endsWith(cgiScriptName(), "hgSession")))
 #endif /* GBROWSE */
 
 /* wire up the assembly hubs so we can operate without sql */
-setUdcTimeout(cart);
+setUdcOptions(cart);
 if (cartVarExists(cart, hgHubDoDisconnect))
     doDisconnectHub(cart);
 
