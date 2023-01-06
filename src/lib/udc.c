@@ -93,6 +93,7 @@ struct connInfo
     bits64 offset;		/* Current file offset of socket. */
     int ctrlSocket;             /* (FTP only) Control socket descriptor or 0. */
     char *redirUrl;             /* (HTTP(S) only) use redirected url */
+    char *resolvedUrl;          /* resolved HTTPS URL, if url is a pseudo-URL (s3://) */
     };
 
 typedef int (*UdcDataCallback)(char *url, bits64 offset, int size, void *buffer,
@@ -133,6 +134,7 @@ struct udcFile
     char *bitmapFileName;	/* Name of bitmap file. */
     char *sparseFileName;	/* Name of sparse data file. */
     char *redirFileName;	/* Name of redir file. */
+    char *resolvedFileName;     /* Name of file that stores final, resolved URL */
     int fdSparse;		/* File descriptor for sparse data file. */
     boolean sparseReadAhead;    /* Read-ahead has something in the buffer */
     char *sparseReadAheadBuf;   /* Read-ahead buffer, if any */
@@ -162,6 +164,8 @@ struct udcBitmap
 static char *bitmapName = "bitmap";
 static char *sparseDataName = "sparseData";
 static char *redirName = "redir";
+static char *resolvedName = "resolv";
+
 #define udcBitmapHeaderSize (64)
 static int cacheTimeout = 0;
 
@@ -184,6 +188,8 @@ if (!colon)
 int colonPos = colon - url;
 char *protocol = cloneStringZ(url, colonPos);
 bool isFound = (slNameFind(resolvProts, protocol) != NULL);
+if (isFound)
+    verbose(4, "URL %s has special protocol:// and needs resolving", url);
 freez(&protocol);
 return isFound;
 }
@@ -509,6 +515,7 @@ return (defaultDir != NULL);
 static char* resolveUrl(char *url) 
 /* return the HTTPS URL given a pseudo-URL e.g. s3://xxxx. Result must be freed. */
 {
+verbose(4, "Resolving url %s using command %s", url, resolvCmd);
 char *cmd1[] = {resolvCmd, url, NULL};
 char **cmds[] = {cmd1, NULL};
 struct pipeline *pl = pipelineOpen(cmds, pipelineRead | pipelineNoAbort, NULL, NULL, 0);
@@ -518,6 +525,7 @@ lineFileNext(lf, &line, NULL); // XX do I need to free &line ?
 stripString(line, "\n");
 line = cloneString(line);
 pipelineClose(&pl);  /* Takes care of lf too. */
+verbose(4, "Resolved url is %s - orig URL: %s", line, url);
 return line;
 }
 
@@ -527,8 +535,19 @@ int udcDataViaHttpOrFtp( char *url, bits64 offset, int size, void *buffer, struc
  * Does an errAbort on error.
  * Typically will be called with size in the 8k-64k range. */
 {
-if (udcIsResolvable(url))
-        url = resolveUrl(url);
+if (udcIsResolvable(url)) 
+    {
+        if (file->connInfo.resolvedUrl) {
+            verbose(4, "URL %s was already resolved to %s", url, file->connInfo.resolvedUrl);
+            url = file->connInfo.resolvedUrl;
+        }
+        else
+            {
+            url = resolveUrl(url);
+            file->connInfo.resolvedUrl = url;
+            }
+    }
+
 if (startsWith("http://",url) || startsWith("https://",url) || startsWith("ftp://",url))
     verbose(4, "reading http/https/ftp data - %d bytes at %lld - on %s\n", size, offset, url);
 else
@@ -576,9 +595,20 @@ char *sizeString = NULL;
 while (TRUE)
     {
     hash = newHash(0);
-    if (udcIsResolvable(url)) {
-        url = resolveUrl(url); // XX url is never freed
-    }
+
+    if (udcIsResolvable(url))
+        {
+        if (retInfo->ci.resolvedUrl) 
+            {
+            verbose(4, "udcInfoViaHttp: URL %s was already resolved to %s", url, retInfo->ci.resolvedUrl);
+            url = retInfo->ci.resolvedUrl;
+            }
+        else 
+            {
+            url = resolveUrl(url); // XX url is never freed
+            retInfo->ci.resolvedUrl = url;
+            }
+        }
 
     status = netUrlHead(url, hash);
     sizeString = hashFindValUpperCase(hash, "Content-Length:");
@@ -1147,6 +1177,7 @@ safef(file->cacheDir, len, "%s/%s/%s", cacheDir, protocol, hashedAfterProtocol);
 file->bitmapFileName = fileNameInCacheDir(file, bitmapName);
 file->sparseFileName = fileNameInCacheDir(file, sparseDataName);
 file->redirFileName = fileNameInCacheDir(file, redirName);
+file->resolvedFileName = fileNameInCacheDir(file, resolvedName);
 }
 
 static long long int udcSizeAndModTimeFromBitmap(char *bitmapFileName, time_t *retTime)
@@ -1163,6 +1194,33 @@ if (bits != NULL)
     }
 udcBitmapClose(&bits);
 return ret;
+}
+
+void udcLoadCachedResolvedUrl(struct udcFile *file)
+/* load resolved URL from cache or create a new one file and write it */
+{
+char *cacheFname = file->resolvedFileName;
+
+if (!cacheFname)
+    return; // URL does not need resolving
+
+if (fileExists(cacheFname)) 
+    {
+    // read URL from cache
+    char *newUrl = NULL;
+    readInGulp(cacheFname, &newUrl, NULL);
+    verbose(4, "Read resolved URL %s from cache", newUrl);
+    file->connInfo.resolvedUrl = newUrl;
+    }
+else if (file->connInfo.resolvedUrl)
+    {
+    // write URL to cache
+    char *newUrl = file->connInfo.resolvedUrl;
+    char *temp = catTwoStrings(cacheFname, ".temp");
+    writeGulp(temp, newUrl, strlen(newUrl));
+    rename(temp, cacheFname);
+    freeMem(temp);
+    }
 }
 
 static void udcTestAndSetRedirect(struct udcFile *file, char *protocol, boolean useCacheInfo)
@@ -1250,6 +1308,11 @@ if (!isTransparent)
 	}
     }
 
+if (useCacheInfo)
+    verbose(4, "Cache is used for %s", url);
+else
+    verbose(4, "Cache is not used for %s", url);
+
 /* Allocate file object and start filling it in. */
 struct udcFile *file;
 AllocVar(file);
@@ -1271,6 +1334,11 @@ if (isTransparent)
 else 
     {
     udcPathAndFileNames(file, cacheDir, protocol, afterProtocol);
+
+    file->connInfo.resolvedUrl = info.ci.resolvedUrl; // no need to resolve again if udcInfoViaHttp already did that
+    if (udcIsResolvable(file->url) && !file->connInfo.resolvedUrl)
+        udcLoadCachedResolvedUrl(file);
+
     if (!useCacheInfo)
 	{
 	file->updateTime = info.updateTime;
@@ -1295,7 +1363,6 @@ else
 
 	// update redir with latest redirect status	
 	udcTestAndSetRedirect(file, protocol, useCacheInfo);
-	
         }
 
     }

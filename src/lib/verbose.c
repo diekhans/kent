@@ -16,6 +16,8 @@ static boolean checkedDotsEnabled = FALSE;  /* have we check for dot output
                                              * being enabled? */
 static boolean dotsEnabled = FALSE;         /* is dot output enabled? */
 
+static boolean doHtml = FALSE;
+
 void verboseVa(int verbosity, char *format, va_list args)
 /* Log with at given verbosity vprintf formatted args. */
 {
@@ -23,7 +25,14 @@ if (verbosity <= logVerbosity)
     {
     if (logFile == NULL)
         logFile = stderr;
-    vfprintf(logFile, format, args);
+    if (doHtml)
+        {
+        char buf[4096];
+        safef(buf, sizeof(buf), "%s<br>", format); // cannot do two printfs, as they are not thread safe, so the <br> will not stay with the line
+        vfprintf(logFile, buf, args);
+        }
+    else
+        vfprintf(logFile, format, args);
     fflush(logFile);
     }
 }
@@ -128,4 +137,17 @@ FILE *verboseLogFile()
 if (logFile == NULL)
     logFile = stderr;
 return logFile;
+}
+
+void verboseCgi(char *level) 
+/* Set verbosity level for a CGI: if level is not NULL, set output file to stdout, set verbosity and print a content-type header */
+{
+    if (level==NULL)
+        return;
+    int levelNum = atoi(level);
+    verboseSetLevel(levelNum);
+    verboseSetLogFile("stdout");
+    puts("Content-type: text/html\n");
+    doHtml = TRUE;
+    verbose(0, "Debugging output activated, level %d", levelNum);
 }
