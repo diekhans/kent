@@ -7,6 +7,7 @@
 #include "common.h"
 #include "portable.h"
 #include "verbose.h"
+#include "obscure.h"
 
 
 static int logVerbosity = 1;	/* The level of log verbosity.  0 is silent. */
@@ -28,7 +29,8 @@ if (verbosity <= logVerbosity)
     if (doHtml)
         {
         char buf[4096];
-        safef(buf, sizeof(buf), "%s<br>", format); // cannot do two printfs, as they are not thread safe, so the <br> will not stay with the line
+        int threadId = get_thread_id();
+        safef(buf, sizeof(buf), "%d %s<br>", threadId, format); // cannot do two printfs, as they are not thread safe, so the <br> will not stay with the line
         vfprintf(logFile, buf, args);
         }
     else

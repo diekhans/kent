@@ -40,6 +40,7 @@
 #include "pipeline.h"
 #include <dirent.h>
 #include <openssl/sha.h>
+#include <sys/wait.h>
 
 /* The stdio stream we'll use to output statistics on file i/o.  Off by default. */
 FILE *udcLogStream = NULL;
@@ -189,7 +190,7 @@ int colonPos = colon - url;
 char *protocol = cloneStringZ(url, colonPos);
 bool isFound = (slNameFind(resolvProts, protocol) != NULL);
 if (isFound)
-    verbose(4, "URL %s has special protocol:// and needs resolving", url);
+    verbose(4, "Check: URL %s has special protocol://, will need resolving\n", url);
 freez(&protocol);
 return isFound;
 }
@@ -515,18 +516,46 @@ return (defaultDir != NULL);
 static char* resolveUrl(char *url) 
 /* return the HTTPS URL given a pseudo-URL e.g. s3://xxxx. Result must be freed. */
 {
-verbose(4, "Resolving url %s using command %s", url, resolvCmd);
-char *cmd1[] = {resolvCmd, url, NULL};
-char **cmds[] = {cmd1, NULL};
-struct pipeline *pl = pipelineOpen(cmds, pipelineRead | pipelineNoAbort, NULL, NULL, 0);
-struct lineFile *lf = pipelineLineFile(pl);
-char *line;
-lineFileNext(lf, &line, NULL); // XX do I need to free &line ?
-stripString(line, "\n");
-line = cloneString(line);
-pipelineClose(&pl);  /* Takes care of lf too. */
-verbose(4, "Resolved url is %s - orig URL: %s", line, url);
-return line;
+char filename[1024];
+safef(filename, sizeof filename, "%s/udcTmp-XXXXXX", getTempDir());
+mkstemp(filename);
+
+verbose(4, "Resolving url %s using command %s\n", url, resolvCmd);
+
+char* program = resolvCmd;
+char* args[4];
+args[0] = program;
+args[1] = url;
+args[2] = filename;
+args[3] = NULL;
+
+pid_t pid = 0;
+int status;
+pid = fork();
+
+if (pid < 0)
+    errAbort("udc:resolveUrl: error in fork");
+if (pid == 0)
+    {
+    // child process
+    int err = execv(program, args);
+    if (err!=0)
+        errAbort("Cannot run %s", program);
+    exit(0);
+    }
+
+// pid > 0 = main process
+pid = wait(&status);
+char* newUrl = NULL;
+size_t len = 0;
+readInGulp(filename, &newUrl, &len);
+unlink(filename);
+if (len <= 0)
+    errAbort("Got empty string in output file, from %s, args %s %s", program, url, filename);
+
+stripString(newUrl, "\n");
+verbose(4, "Resolved url: %s -> %s\n", url, newUrl);
+return newUrl;
 }
 
 int udcDataViaHttpOrFtp( char *url, bits64 offset, int size, void *buffer, struct udcFile *file)
@@ -538,7 +567,7 @@ int udcDataViaHttpOrFtp( char *url, bits64 offset, int size, void *buffer, struc
 if (udcIsResolvable(url)) 
     {
         if (file->connInfo.resolvedUrl) {
-            verbose(4, "URL %s was already resolved to %s", url, file->connInfo.resolvedUrl);
+            verbose(4, "URL %s was already resolved to %s\n", url, file->connInfo.resolvedUrl);
             url = file->connInfo.resolvedUrl;
         }
         else
@@ -584,6 +613,24 @@ int redirectCount = 0;
 struct hash *hash;
 int status;
 char *sizeString = NULL;
+char *origUrl = url;
+
+// an unusual case, usually deactivated: URLS of the style s3:// or similar
+bool needsResolving = udcIsResolvable(url);
+if (needsResolving)
+    {
+    if (retInfo->ci.resolvedUrl) 
+        {
+        verbose(4, "udcInfoViaHttp: URL %s was already resolved to %s\n", url, retInfo->ci.resolvedUrl);
+        url = retInfo->ci.resolvedUrl;
+        }
+    else 
+        {
+        url = resolveUrl(url); // url is never freed 
+        retInfo->ci.resolvedUrl = url;
+        }
+    }
+
 /*
  For caching, sites should support byte-range and last-modified.
  However, several groups including ENCODE have made sites that use CGIs to 
@@ -592,24 +639,12 @@ char *sizeString = NULL;
  so they do without them, effectively defeat caching. Every 5 minutes (udcTimeout),
  they get re-downloaded, even when the data has not changed.  
 */
+
 while (TRUE)
     {
     hash = newHash(0);
 
-    if (udcIsResolvable(url))
-        {
-        if (retInfo->ci.resolvedUrl) 
-            {
-            verbose(4, "udcInfoViaHttp: URL %s was already resolved to %s", url, retInfo->ci.resolvedUrl);
-            url = retInfo->ci.resolvedUrl;
-            }
-        else 
-            {
-            url = resolveUrl(url); // XX url is never freed
-            retInfo->ci.resolvedUrl = url;
-            }
-        }
-
+    verbose(4, "HTTP HEAD for %s\n", url);
     status = netUrlHead(url, hash);
     sizeString = hashFindValUpperCase(hash, "Content-Length:");
     if (status == 200 && sizeString)
@@ -625,6 +660,7 @@ while (TRUE)
     */
     if (status == 403 || (status==200 && !sizeString))
 	{ 
+        verbose(4, "Got 403 or no size from HEAD, trying netUrlFakeHeadByGet = HTTP GET with byterange 0-0 to get size, URL %s\n", url);
 	hashFree(&hash);
 	hash = newHash(0);
 	status = netUrlFakeHeadByGet(url, hash);
@@ -632,6 +668,15 @@ while (TRUE)
 	    break;
 	if (status == 200)  // helps get more info to user
 	    break;
+        verbose(4, "netUrlFakeHeadByGet: got status %d for URL %s\n", status, url);
+        // presigned Amazon URLs return 403 after they are expired
+        if (status == 403 && needsResolving)
+            {
+            verbose(4, "403 = expired URL: need to resolve URL %s again\n", origUrl);
+            url = resolveUrl(origUrl); // XX url is never freed
+            retInfo->ci.resolvedUrl = url;
+            continue;
+            }
 	}
     if (status != 301 && status != 302 && status != 307 && status != 308)
 	return FALSE;
@@ -1172,6 +1217,7 @@ char *hashedAfterProtocol = longDirHash(cacheDir, afterProtocol);
 int len = strlen(cacheDir) + 1 + strlen(protocol) + 1 + strlen(hashedAfterProtocol) + 1;
 file->cacheDir = needMem(len);
 safef(file->cacheDir, len, "%s/%s/%s", cacheDir, protocol, hashedAfterProtocol);
+verbose(4, "UDC dir: %s\n", file->cacheDir);
 
 /* Create file names for bitmap and data portions. */
 file->bitmapFileName = fileNameInCacheDir(file, bitmapName);
