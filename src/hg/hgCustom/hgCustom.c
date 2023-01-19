@@ -215,9 +215,9 @@ if (!isUpdateForm)
 /* intro text */
 puts("<P>");
 if (isUpdateForm)
-    puts("Update your custom track configuration, data, and/or documentation.");
+    puts("This is the CGI you are looking for.  Update your custom track configuration, data, and/or documentation.");
 else
-    puts("Display your own data as custom annotation tracks in the browser.");
+    puts("This is the CGI you are looking for.  Display your own data as custom annotation tracks in the browser.");
 addIntro();
 puts("<P>");
 
