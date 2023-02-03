@@ -998,6 +998,11 @@ return isCenterLabelsPackOff(track);
 boolean isCenterLabelIncluded(struct track *track)
 /* Center labels may be conditionally included */
 {
+/*   need to make this generic for squishyPack tracks  */
+/*
+if (sameString(track->track, "knownGeneSquish"))
+    return FALSE;
+    */
 if (!isWithCenterLabels(track))
     return FALSE;
 if (theImgBox)
@@ -14244,12 +14249,10 @@ else if (sameWord(type, "psl"))
     if (startsWith("pubs", track->track))
         pubsBlatPslMethods(track);
     }
-#ifdef NOTNOW
 else if (sameWord(type, "snake"))
     {
     snakeMethods(track, tdb, wordCount, words);
     }
-#endif
 else if (sameWord(type, "chain"))
     {
     chainMethods(track, tdb, wordCount, words);

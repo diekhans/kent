@@ -979,6 +979,16 @@ while ((psl = pslNext(f)) != NULL)
 	lf = lfFromPslx(psl, sizeMul, TRUE, FALSE, tg);
 	sprintf(buf2, "%s %s", ss, psl->qName);
 	lf->extra = cloneString(buf2);
+
+        // set mouse over and color to indicate query position and strand
+        char over[256];
+        safef(over, sizeof over, "%d-%d of %d bp, strand %c", psl->qStart, psl->qEnd, psl->qSize, psl->strand[0]);
+        lf->mouseOver = cloneString(over);
+        if (sameString(psl->strand, "+"))
+            lf->filterColor = MAKECOLOR_32(0,0,0);
+        else
+            lf->filterColor = MAKECOLOR_32(0,0,100);
+
 	slAddHead(&lfList, lf);
 	/* Don't free psl -- used in drawing phase by baseColor code. */
 	}
@@ -4717,6 +4727,56 @@ lineFileClose(&lf);
 return nonEmptySubtracksHash;
 }
 
+static void expandSquishyPackTracks(struct track *trackList)
+/* Step through track list and duplicated tracks with squishyPackPoint defined */
+{
+struct track *nextTrack = NULL, *track;
+for (track = trackList; track != NULL; track = nextTrack)
+    {
+    nextTrack = track->next;
+
+    if (track->visibility != tvPack)
+        continue;
+
+    char *string = trackDbSetting(track->tdb, "squishyPackPoint");
+    if (string != NULL)
+        {
+        double squishyPackPoint = atof(string);
+
+        /* clone the track */
+        struct track *squishTrack = CloneVar(track);
+        squishTrack->tdb = CloneVar(track->tdb);
+        squishTrack->visibility = tvSquish;
+        squishTrack->limitedVis = tvSquish;
+        struct linkedFeatures *lf = track->items;
+
+        /* distribute the items based on squishyPackPoint */
+        track->items = NULL;
+        squishTrack->items = NULL;
+        struct linkedFeatures *nextLf;
+        for(; lf; lf = nextLf)
+            {
+            nextLf = lf->next;
+            if (lf->squishyPackVal >= squishyPackPoint)
+                slAddHead(&squishTrack->items, lf);
+            else
+                slAddHead(&track->items, lf);
+            }
+        slReverse(&track->items);
+        slReverse(&squishTrack->items);
+        
+        /* these should be changed to something more rational. */
+        squishTrack->track = cloneString("knownGeneSquish");
+        squishTrack->shortLabel = cloneString("knownGeneSquish");
+        squishTrack->longLabel = cloneString("knownGeneSquish");
+
+        /* insert the squished track */
+        track->next = squishTrack;
+        squishTrack->next = nextTrack;
+        }
+    }
+}
+
 void makeActiveImage(struct track *trackList, char *psOutput)
 /* Make image and image map. */
 {
@@ -4848,6 +4908,7 @@ if (rulerMode != tvHide)
         }
     }
 
+expandSquishyPackTracks(trackList);
 
 /* Hash tracks/subtracks, limit visibility and calculate total image height: */
 

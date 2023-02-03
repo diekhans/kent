@@ -29,6 +29,8 @@
 #include "halBlockViz.h"
 #include "bigPsl.h"
 
+#include "snake.h"
+
 // this is the number of pixels used by the target self-align bar
 #define DUP_LINE_HEIGHT	4
 // this is the number of pixels used when displaying the insertion lengths
@@ -223,10 +225,6 @@ for(temp=proposedList; temp; temp = next)
     }
 }
 
-struct snakeInfo
-{
-int maxLevel;
-} snakeInfo;
 
 static void freeFullLevels()
 // free the connection levels and bitmaps for each level
