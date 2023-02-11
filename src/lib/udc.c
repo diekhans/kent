@@ -2075,15 +2075,17 @@ freeMem(longBuf);
 return retString;
 }
 
-char *udcFileReadAll(char *url, char *cacheDir, size_t maxSize, size_t *retSize)
-/* Read a complete file via UDC. The cacheDir may be null in which case udcDefaultDir()
- * will be used.  If maxSize is non-zero, check size against maxSize
- * and abort if it's bigger.  Returns file data (with an extra terminal for the
- * common case where it's treated as a C string).  If retSize is non-NULL then
- * returns size of file in *retSize. Do a freeMem or freez of the returned buffer
- * when done. */
+char *udcFileReadAllIfExists(char *url, char *cacheDir, size_t maxSize, size_t *retSize)
+/* Read a complete file via UDC. Return NULL if the file doesn't exist.  The
+ * cacheDir may be null in which case udcDefaultDir() will be used.  If
+ * maxSize is non-zero, check size against maxSize and abort if it's bigger.
+ * Returns file data (with an extra terminal for the common case where it's
+ * treated as a C string).  If retSize is non-NULL then returns size of file
+ * in *retSize. Do a freeMem or freez of the returned buffer when done. */
 {
-struct udcFile  *file = udcFileOpen(url, cacheDir);
+struct udcFile  *file = udcFileMayOpen(url, cacheDir);
+if (file == NULL)
+    return NULL;
 size_t size = file->size;
 if (maxSize != 0 && size > maxSize)
     errAbort("%s is %lld bytes, but maxSize to udcFileReadAll is %lld",
@@ -2094,6 +2096,20 @@ buf[size] = 0;	// add trailing zero for string processing
 udcFileClose(&file);
 if (retSize != NULL)
     *retSize = size;
+return buf;
+}
+
+char *udcFileReadAll(char *url, char *cacheDir, size_t maxSize, size_t *retSize)
+/* Read a complete file via UDC. The cacheDir may be null in which case udcDefaultDir()
+ * will be used.  If maxSize is non-zero, check size against maxSize
+ * and abort if it's bigger.  Returns file data (with an extra terminal for the
+ * common case where it's treated as a C string).  If retSize is non-NULL then
+ * returns size of file in *retSize. Do a freeMem or freez of the returned buffer
+ * when done. */
+{
+char *buf = udcFileReadAllIfExists(url, cacheDir, maxSize, retSize);
+if (buf == NULL)
+    errAbort("Couldn't open %s", url);
 return buf;
 }
 
