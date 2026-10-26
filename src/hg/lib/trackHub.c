@@ -1932,6 +1932,17 @@ while ((hel = hashNext(&cookie)) != NULL)
             char *str = (sameWord(cartSelected, "on") || atoi(cartSelected) > 0) ? "on" : "off";
             dyStringPrintf(dy, "parent %s %s\n", trackHubSkipHubName(tdb->parent->track), str);
             }
+        else if (tdb->parent != NULL)
+            {
+            // The setting names the parent as its trackDb spelled it, but a hub's track names
+            // are polished when it is read (trackHubFixName turns the dots of
+            // "GCA_009914755.4_T2T-CHM13v2.0ChainNet" into underbars), and the stanza we
+            // wrote for the parent carries the polished name.  Name it that way here too, or
+            // the lifted hub fails with "Parent ... doesn't exist".  Keep any on/off after it.
+            char *rest = skipToSpaces((char *)hel->val);
+            dyStringPrintf(dy, "parent %s%s\n", trackHubSkipHubName(tdb->parent->track),
+                           rest ? rest : "");
+            }
         else
             dyStringPrintf(dy, "%s %s\n", hel->name, trackHubSkipHubName(((char *)hel->val)));
         }
