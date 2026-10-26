@@ -195,12 +195,12 @@ t.test('a cluster is named by the super-population nearest its centroid', functi
     t.contains(n.near, 'Yoruba in Ibadan, Nigeria 100%', 'nearest populations, with shares');
     t.eq(A.ancClusterName(ANC_PANEL, 0.445, -1.314).name, 'European', 'European, Peruvians nearby notwithstanding');
 });
-t.test('one cluster reads as ancestry here; several as a mix by bases', function () {
+t.test('one cluster reads as ancestry in this region; several as a mix by bases', function () {
     var A = startPage().api;
     var one = A.ancSummary({ windows: [ancWin(0, 100, -1.743, 0.207), ancWin(100, 300, -1.743, 0.207)] }, ANC_PANEL);
-    t.eq(A.ancText(one), 'African ancestry here', 'one');
+    t.eq(A.ancText(one), 'African ancestry in this region', 'one');
     var mix = A.ancSummary({ windows: [ancWin(0, 300, 0.445, -1.314), ancWin(300, 400, -1.743, 0.207, 850)] }, ANC_PANEL);
-    t.eq(A.ancText(mix), 'Mixed here: European 75% · African 25%', 'by bases, largest first');
+    t.eq(A.ancText(mix), 'Mixed in this region: European 75% · African 25%', 'by bases, largest first');
     t.eq(mix.minConf, 850, 'the lowest confidence is kept, for the note');
     t.eq(mix.parts.length, 2, 'two parts, so a strip');
 });

@@ -908,7 +908,7 @@ function contigProblem(contig) {
 // named from the reference panel - by the 1000 Genomes populations whose
 // haplotypes lie nearest its centroid - and the nearest populations are given
 // alongside, so the name can be checked.  It is ancestry at this region, not
-// the person's ancestry, and the wording says "here" for that reason.
+// the person's ancestry, and the wording says "in this region" for that reason.
 
 // The 1000 Genomes super-populations of the panel's 21 populations.
 var ANC_SUPERPOP = {
@@ -986,10 +986,10 @@ function ancSwatch(rgb) {
     return sw;
 }
 
-// "European ancestry here", or "Mixed here: European 70% · African 30%".
+// "European ancestry in this region", or "Mixed in this region: European 70% · African 30%".
 function ancText(sum) {
-    if (sum.parts.length === 1) return sum.parts[0].name + " ancestry here";
-    return "Mixed here: " + sum.parts.map(function (p) {
+    if (sum.parts.length === 1) return sum.parts[0].name + " ancestry in this region";
+    return "Mixed in this region: " + sum.parts.map(function (p) {
         return p.name + " " + Math.round(p.pct) + "%";
     }).join(" · ");
 }
@@ -1042,7 +1042,7 @@ function ancFill(slot, point, panel, start, end) {
     clear(slot);
     if (!point || !point.windows || !point.windows.length) {
         slot.appendChild(el("span", { class: "pgMuted",
-            text: "No ancestry call here: no pcLAI window covers this region" }));
+            text: "No ancestry call in this region: no pcLAI window covers it" }));
         return null;
     }
     var sum = ancSummary(point, panel);
@@ -1094,13 +1094,13 @@ function ancRead(asks) {
             if (a.db && /^GC[AF]_/.test(a.db)) {
                 clear(a.slot);
                 a.slot.appendChild(el("span", { class: "pgMuted",
-                    text: "Could not read the ancestry here: " + err.message }));
+                    text: "Could not read the ancestry in this region: " + err.message }));
             }
         });
     });
 }
 
-// With two or more targets: how their ancestry here adds up, and the plot.
+// With two or more targets: how their ancestry in this region adds up, and the plot.
 function ancSummaryLine(asks, resp) {
     var box = $("pgcAncSummary");
     if (!box) return;
@@ -1114,7 +1114,7 @@ function ancSummaryLine(asks, resp) {
     });
     order.sort(function (x, y) { return count[y] - count[x]; });
     clear(box);
-    box.appendChild(el("span", { text: "Ancestry at this region: " + order.map(function (k) {
+    box.appendChild(el("span", { text: "Ancestry in this region: " + order.map(function (k) {
         return count[k] + " " + k;
     }).join(" · ") }));
     if (typeof pgpInit !== "function") return;
@@ -1128,7 +1128,7 @@ function ancSummaryLine(asks, resp) {
         return { id: a.id, hap: a.hap, acc: a.db, contig: a.contig, start: a.start, end: a.end,
                  coverage: null, placement: 0, placements: 1, url: a.url,
                  info: [["Assembly", a.db], ["Region", fmtPos(a.contig, a.start, a.end)],
-                        ["Ancestry here", ancText(a.sum)],
+                        ["Ancestry in this region", ancText(a.sum)],
                         ["Role", a.role === "source" ? "the source of this conversion"
                                                      : "a target of this conversion"]] };
     });
