@@ -3333,9 +3333,11 @@ printf("<div class='pgMuted'>To convert a different region, go to it in the "
        "</td></tr>\n");
 
 /* ---- destination ---- */
-printf("<tr><td><label for='pgcTargets'><b>Target assemblies</b></label></td>\n");
+printf("<tr><td><label for='pgcFilter'><b>Target assemblies</b></label></td>\n");
 printf("<td>\n");
-printf("<input type='search' id='pgcFilter' size='24' placeholder='filter assemblies…'>\n");
+printf("<div class='pgcFind'>");
+printf("<input type='search' id='pgcFilter' size='30' "
+       "placeholder='Search haplotypes or populations'>\n");
 /* One checkbox rather than two buttons that swapped places.  The pair looked
  * like two separate actions and gave no sign of which state the list was in;
  * a checkbox says both what it does and whether it is on. */
@@ -3343,22 +3345,21 @@ printf("<label for='pgcReachableOnly' class='pgcToggle' title='Ask the graph "
        "which assemblies this region exists on, and list only those'>"
        "<input type='checkbox' id='pgcReachableOnly'> "
        "Only assemblies with this region</label>\n");
-/* Grouping by the sample's population, as the HPRC describes it.  Off gives
- * the flat list back, which is the one "best first" ranks. */
-printf("<label for='pgcGroupPop' class='pgcToggle' title='Group the list by the "
-       "population each sample comes from, as the HPRC describes it'>"
-       "<input type='checkbox' id='pgcGroupPop' checked> "
-       "Group by population</label>\n");
-printf("<div class='pgMuted' id='pgcTargetCount'></div>\n");
-/* The list, and beside it the populations it holds with their counts; a
- * population there narrows the list to it. */
-printf("<div class='pgcPick'>\n");
-printf("<select id='pgcTargets' multiple size='10' class='pgcTargets'></select>\n");
-printf("<div id='pgcPops' class='pgcPops'></div>\n");
 printf("</div>\n");
-printf("<div class='pgMuted'>Hold Ctrl (Cmd on a Mac) to pick several, "
-       "up to %d at a time.</div>\n",
-       atoi(cfgOr("pangenome.maxLiftTargets", "5")));
+/* What has been chosen, as chips that can be taken back one at a time. */
+printf("<div id='pgcChosen' class='pgcChosen' aria-live='polite'></div>\n");
+/* The picker: the populations on the left, with their counts, and the
+ * haplotypes of the one picked on the right, as checkboxes.  Populations are
+ * the HPRC's own descriptions (hgPangenomeSamples.js). */
+printf("<div class='pgcPick'>\n");
+printf("<div id='pgcPops' class='pgcPops'></div>\n");
+printf("<div id='pgcHaps' class='pgcHaps'></div>\n");
+printf("</div>\n");
+printf("<div class='pgMuted' id='pgcTargetCount'></div>\n");
+/* The list the rest of the page reads the choice from.  Hidden: the picker
+ * above is the control, and keeps this one in step. */
+printf("<select id='pgcTargets' multiple class='pgcTargets' hidden "
+       "aria-hidden='true' tabindex='-1'></select>\n");
 printf("</td></tr>\n");
 
 /* ---- annotations ---- */

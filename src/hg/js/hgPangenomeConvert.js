@@ -289,6 +289,7 @@ function loadHaplotypes() {
         loadContigs();
         fillTargets("");
         preselectDefaultTarget();
+        fillTargets($("pgcFilter").value);      // so the picker shows the default
         hideStatus();
         // Arriving from hgConvert the user has already chosen a source, a
         // position and a destination and pressed Submit once; make them press
@@ -309,11 +310,17 @@ function loadHaplotypes() {
 // ---- Populations -------------------------------------------------------------
 //
 // Each sample's population as the HPRC describes it - 1000 Genomes code and
-// descriptor, from hgPangenomeSamples.js - groups and filters the target list.
+// descriptor, from hgPangenomeSamples.js - organises the target picker.
 // Super-populations are not used: the HPRC follows the NHGRI's guidelines for
 // referring to populations, which do not, and leaves them out of its metadata.
+//
+// The picker is two panes: the populations, with their counts, and the
+// haplotypes of the one picked, as checkboxes.  Above them, what has been
+// chosen, as chips.  The hidden #pgcTargets list underneath holds every
+// candidate and is what the rest of the page reads the choice from; the panes
+// only ever change which of its options are selected.
 
-var popFilter = null;          // the group the list is narrowed to, or null
+var popFilter = null;          // the population the right pane shows, or null for all
 
 function samplePop(hap) {
     var table = window.pangenomeSamples || {};
@@ -333,7 +340,7 @@ function popGroupOf(hap) {
     return { key: p.code, label: p.desc + " (" + p.code + ")", rank: 1, desc: p.desc };
 }
 
-// Every option in the list, whether it sits under a population or not.
+// Every option in the list, whether it sits under a group or not.
 function targetOptions(sel) {
     var out = [];
     if (!sel) return out;
@@ -344,11 +351,6 @@ function targetOptions(sel) {
             out.push(c);
     });
     return out;
-}
-
-function groupingOn() {
-    var box = $("pgcGroupPop");
-    return !!(box && box.checked);
 }
 
 // The groups among some haplotypes, in display order, each with its members.
@@ -368,110 +370,179 @@ function popGroups(list) {
     return groups;
 }
 
-// Beside the list: how many of the candidates come from each population, how
-// many of those are chosen, and a way to narrow the list to one.  Counted over
-// every candidate - all assemblies, or those with this region - and not over
-// what the text filter leaves, so typing does not empty it.
-function fillPops(candidates, chosen) {
-    var box = $("pgcPops");
+// Does the search text match this haplotype, by its name or its population?
+function matchesSearch(h, f) {
+    if (!f) return true;
+    var g = popGroupOf(h);
+    return h.toLowerCase().indexOf(f) >= 0 || hapLabel(h).toLowerCase().indexOf(f) >= 0 ||
+           (g.rank === 1 && (g.key.toLowerCase().indexOf(f) >= 0 ||
+                             g.desc.toLowerCase().indexOf(f) >= 0));
+}
+
+// Choose or let go of one haplotype, then draw the picker again.
+function setChosen(hap, on) {
+    targetOptions($("pgcTargets")).forEach(function (o) {
+        if (o.value === hap) o.selected = !!on;
+    });
+    fillTargets($("pgcFilter") ? $("pgcFilter").value : "");
+}
+
+// The chips: what has been chosen, each with a way to take it back.
+function drawChosen(chosen) {
+    var box = $("pgcChosen");
     if (!box) return;
     clear(box);
-    var groups = popGroups(candidates);
-    var pops = groups.filter(function (g) { return g.rank === 1; });
-    var samples = Object.create(null);
-    candidates.forEach(function (h) { samples[String(h).split("#")[0].toLowerCase()] = true; });
-    box.appendChild(el("div", { class: "pgcPopsHead", text:
-        candidates.length + " haplotypes from " + Object.keys(samples).length + " samples, " +
-        pops.length + (pops.length === 1 ? " population" : " populations") +
-        (reachable ? ", all with this region" : "") }));
-    var chosenSet = Object.create(null);
-    chosen.forEach(function (h) { chosenSet[String(h).toLowerCase()] = true; });
-    var listBox = el("div", { class: "pgcPopsList", role: "list" });
+    var over = chosen.length > MAX_TARGETS;
+    box.appendChild(el("span", { class: "pgcChosenHead" + (over ? " over" : ""), text:
+        chosen.length ? "Chosen " + chosen.length + " of " + MAX_TARGETS +
+                        (over ? " — too many" : "")
+                      : "Choose up to " + MAX_TARGETS + " target assemblies below" }));
+    chosen.forEach(function (h) {
+        var p = samplePop(h);
+        var chip = el("span", { class: "pgcChip", title: p ? p.desc : "" }, [
+            el("span", { text: hapLabel(h) }),
+            p ? el("span", { class: "pgcChipPop", text: p.code }) : null,
+            el("button", { type: "button", class: "pgcChipX", "data-unchoose": h,
+                           "aria-label": "Remove " + hapLabel(h), text: "×" })
+        ]);
+        box.appendChild(chip);
+    });
+}
+
+// Left: the populations among the candidates the search allows, with how
+// many there are in each and how many of those are chosen.  "All" first.
+function drawPops(matches, chosenSet) {
+    var box = $("pgcPops");
+    if (!box) return;
+    var keep = box.querySelector ? box.querySelector(".pgcPopsList") : null;
+    var scroll = keep ? keep.scrollTop : 0;
+    clear(box);
+    var groups = popGroups(matches);
+    var npops = groups.filter(function (g) { return g.rank === 1; }).length;
+    box.appendChild(el("div", { class: "pgcPaneHead", text:
+        npops + (npops === 1 ? " population" : " populations") }));
+    var listBox = el("div", { class: "pgcPopsList" });
+    function row(key, label, code, n, picked) {
+        var on = (popFilter || "") === key;
+        var b = el("button", { type: "button", class: "pgcPop" + (on ? " on" : ""),
+                               "data-pop": key, "aria-pressed": on ? "true" : "false",
+                               title: label });
+        b.appendChild(el("span", { class: "pgcPopName", text: label }));
+        if (code) b.appendChild(el("span", { class: "pgcPopCode", text: code }));
+        if (picked) b.appendChild(el("span", { class: "pgcPopPicked", text: String(picked),
+                                               title: picked + " chosen" }));
+        b.appendChild(el("span", { class: "pgcPopN", text: String(n) }));
+        listBox.appendChild(b);
+    }
+    var allPicked = matches.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
+    row("", "All populations", "", matches.length, allPicked);
     groups.forEach(function (g) {
         var picked = g.haps.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
-        var on = popFilter === g.key;
-        var b = el("button", { type: "button", class: "pgcPop" + (on ? " on" : ""),
-            "data-pop": g.key, role: "listitem", "aria-pressed": on ? "true" : "false",
-            title: (on ? "Show every population again" : "List only " + g.label) });
-        b.appendChild(el("span", { class: "pgcPopName", text: g.label }));
-        b.appendChild(el("span", { class: "pgcPopN", text: String(g.haps.length) +
-            (picked ? " · " + picked + " chosen" : "") }));
-        listBox.appendChild(b);
+        row(g.key, g.rank === 1 ? g.desc : g.label, g.rank === 1 ? g.key : "", g.haps.length, picked);
     });
     box.appendChild(listBox);
-    if (popFilter)
-        box.appendChild(el("button", { type: "button", class: "pgcPopAll", "data-pop": "",
-                                       text: "Show every population" }));
+    listBox.scrollTop = scroll;
+}
+
+// Right: the haplotypes of the population picked, as checkboxes, in the order
+// the list has them (alphabetical, or best first once ranked).
+function drawHaps(shown, chosenSet, full) {
+    var box = $("pgcHaps");
+    if (!box) return;
+    var keep = box.querySelector ? box.querySelector(".pgcHapsList") : null;
+    var scroll = keep ? keep.scrollTop : 0;
+    clear(box);
+    var g = popFilter ? popGroups(shown.length ? shown : []).filter(function (x) {
+        return x.key === popFilter; })[0] : null;
+    var title = popFilter ? (g ? g.label : "This population") : "All populations";
+    box.appendChild(el("div", { class: "pgcPaneHead" }, [
+        el("span", { text: title }),
+        el("span", { class: "pgcPaneN", text: shown.length + (shown.length === 1 ? " haplotype" : " haplotypes") +
+            (reachableScored ? ", best first" : "") })
+    ]));
+    var listBox = el("div", { class: "pgcHapsList" });
+    if (!shown.length) {
+        listBox.appendChild(el("div", { class: "pgMuted pgcEmpty",
+            text: "No haplotype matches. Clear the search or pick another population." }));
+    }
+    shown.forEach(function (h) {
+        var on = !!chosenSet[h.toLowerCase()];
+        var id = "pgcHap_" + h.replace(/[^A-Za-z0-9]/g, "_");
+        var box2 = el("input", { type: "checkbox", id: id, "data-hap": h });
+        box2.checked = on;
+        if (full && !on) {
+            box2.disabled = true;
+            box2.setAttribute("title", "Up to " + MAX_TARGETS + " at a time");
+        }
+        var p = popFilter ? null : samplePop(h);
+        var cov = reachable ? reachable[h.toLowerCase()] : null;
+        var lab = el("label", { class: "pgcHap" + (on ? " on" : "") + (box2.disabled ? " dis" : ""),
+                                for: id }, [
+            box2,
+            el("span", { text: hapLabel(h) }),
+            p ? el("span", { class: "pgcHapPop", text: p.code, title: p.desc }) : null,
+            cov == null ? null : el("span", { class: "pgcHapCov", text: (Math.round(cov * 10) / 10) + "%" })
+        ]);
+        listBox.appendChild(lab);
+    });
+    box.appendChild(listBox);
+    listBox.scrollTop = scroll;
 }
 
 function fillTargets(filter) {
     var sel = $("pgcTargets");
     var chosen = selectedTargets();
-    var f = String(filter || "").toLowerCase();
+    var f = String(filter || "").trim().toLowerCase();
     var srcHap = currentSourceHap();
     clear(sel);
     // The candidates: everything but the source, and with "only with this
-    // region" on, only those.  The population panel counts these.
+    // region" on, only those.  The hidden list holds all of them, so that a
+    // choice survives searching and moving between populations.
     var candidates = allHaplotypes.filter(function (h) {
         var lower = h.toLowerCase();
         if (srcHap && lower === String(srcHap).toLowerCase()) return false; // no self-conversion
         if (reachable && !(lower in reachable)) return false;
         return true;
     });
-    // What the list shows: the candidates the text and the population allow.
-    // The text matches a haplotype's name or its population, by code or name.
-    var list = candidates.filter(function (h) {
-        var g = popGroupOf(h);
-        if (popFilter && g.key !== popFilter) return false;
-        if (!f) return true;
-        return h.toLowerCase().indexOf(f) >= 0 ||
-               (g.rank === 1 && (g.key.toLowerCase().indexOf(f) >= 0 ||
-                                 g.desc.toLowerCase().indexOf(f) >= 0));
-    });
     // With scores, the most relevant destinations come first; otherwise keep the
     // alphabetical order the list arrived in.
     if (reachableScored)
-        list.sort(function (a, b) {
+        candidates.sort(function (a, b) {
             var ca = reachable[a.toLowerCase()], cb = reachable[b.toLowerCase()];
             ca = (ca == null ? -1 : ca); cb = (cb == null ? -1 : cb);
             if (cb !== ca) return cb - ca;
             return a.localeCompare(b);
         });
-    function option(h, withPop) {
+    candidates.forEach(function (h) {
         var cov = reachable ? reachable[h.toLowerCase()] : null;
-        var p = withPop ? samplePop(h) : null;
-        var label = hapLabel(h) + (p ? "  · " + p.code : "") +
-                    (cov == null ? "" : "  (" + (Math.round(cov * 10) / 10) + "%)");
-        var o = el("option", { text: label });
+        var o = el("option", { text: (cov == null) ? hapLabel(h)
+                                     : hapLabel(h) + "  (" + (Math.round(cov * 10) / 10) + "%)" });
+        sel.appendChild(o);
         o.value = h;                       // the bare name is what gets submitted
         o.selected = chosen.indexOf(h) >= 0;
-        if (p) o.setAttribute("title", p.desc);
-        return o;
-    }
-    if (groupingOn()) {
-        // One group per population; within it, the order above (alphabetical,
-        // or best first when ranked).
-        popGroups(list).forEach(function (g) {
-            var og = el("optgroup", { label: g.label + " — " + g.haps.length });
-            g.haps.forEach(function (h) { og.appendChild(option(h, false)); });
-            sel.appendChild(og);
-        });
-    } else {
-        list.forEach(function (h) { sel.appendChild(option(h, true)); });
-    }
-    var chosenNow = selectedTargets().length;
-    fillPops(candidates, selectedTargets());
-    // Kept short on purpose.  This line sits between the filter and the list,
-    // and the filter lengthens it; when it grew from one line to two the list
-    // moved down under the cursor that had just ticked the box.  The stylesheet
-    // reserves two lines, and this stays inside them.
-    $("pgcTargetCount").textContent = list.length + " of " + allHaplotypes.length +
+    });
+    var chosenNow = selectedTargets();
+    var chosenSet = Object.create(null);
+    chosenNow.forEach(function (h) { chosenSet[h.toLowerCase()] = true; });
+
+    // What the panes show: the candidates the search allows, and on the right
+    // only the population picked.  A population the search leaves empty is let go.
+    var matches = candidates.filter(function (h) { return matchesSearch(h, f); });
+    if (popFilter && !matches.some(function (h) { return popGroupOf(h).key === popFilter; }))
+        popFilter = null;
+    var shown = popFilter ? matches.filter(function (h) { return popGroupOf(h).key === popFilter; })
+                          : matches;
+    drawChosen(chosenNow);
+    drawPops(matches, chosenSet);
+    drawHaps(shown, chosenSet, chosenNow.length >= MAX_TARGETS);
+
+    // Kept to one short line, under the picker, so nothing above it moves.
+    $("pgcTargetCount").textContent = candidates.length + " of " + allHaplotypes.length +
         " assembl" + (allHaplotypes.length === 1 ? "y" : "ies") +
         (reachable ? (reachableScored ? " sharing this region, best first"
                                       : " containing this region") : "") +
-        (srcHap ? " (the source haplotype is excluded)" : "") +
-        "; " + chosenNow + " selected, max " + MAX_TARGETS +
-        (chosenNow > MAX_TARGETS ? " — too many" : "");
+        (srcHap ? "; the source haplotype is excluded" : "") +
+        (f ? "; " + matches.length + " match the search" : "");
 }
 
 // Ask the graph which haplotypes this region exists on, and narrow the picker to
@@ -1495,20 +1566,27 @@ function init() {
         fillTargets($("pgcFilter").value);      // refresh the "N selected" line
     });
     $("pgcReachableOnly").addEventListener("change", onReachableToggle);
-    if ($("pgcGroupPop")) {
-        $("pgcGroupPop").addEventListener("change", function () {
-            fillTargets($("pgcFilter").value);
-        });
-    }
-    // A population beside the list narrows it to that population; the same
-    // one again, or "Show every population", lets it go.
+    // The picker's three parts answer for themselves: a population on the
+    // left shows its haplotypes, a box on the right chooses one, and a chip's
+    // cross lets one go.
     if ($("pgcPops")) {
         $("pgcPops").addEventListener("click", function (ev) {
             var b = ev.target && ev.target.closest ? ev.target.closest("[data-pop]") : null;
             if (!b) return;
-            var key = b.getAttribute("data-pop");
-            popFilter = (!key || popFilter === key) ? null : key;
+            popFilter = b.getAttribute("data-pop") || null;
             fillTargets($("pgcFilter").value);
+        });
+    }
+    if ($("pgcHaps")) {
+        $("pgcHaps").addEventListener("change", function (ev) {
+            var hap = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-hap");
+            if (hap) setChosen(hap, ev.target.checked);
+        });
+    }
+    if ($("pgcChosen")) {
+        $("pgcChosen").addEventListener("click", function (ev) {
+            var hap = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-unchoose");
+            if (hap) setChosen(hap, false);
         });
     }
 
@@ -1558,6 +1636,7 @@ if (typeof module !== "undefined" && module.exports)
         selectedTargets: selectedTargets,
         fillTargets: fillTargets,
         setPopFilter: function (k) { popFilter = k; },
+        setChosen: setChosen,
         init: init
     };
 

@@ -18,7 +18,8 @@ var PAGE_IDS = ['pgcForm', 'pgcSrcHap', 'pgcSrcDb', 'pgcSrcNote', 'pgcSrcLabel',
                 'pgcPos', 'pgcFilter',
                 'pgcTargetCount', 'pgcTargets', 'pgcSubmit', 'pgcClear',
                 'pgcReachableOnly',
-                'pgcStatus', 'pgcResults', 'pgcQuickLift', 'pgcHideTracks'];
+                'pgcStatus', 'pgcResults', 'pgcQuickLift', 'pgcHideTracks',
+                'pgcChosen', 'pgcPops', 'pgcHaps'];
 
 // Load the convert page's client with a stubbed fetch.
 function startPage(opts) {
@@ -105,49 +106,65 @@ t.test('groups: the references, then populations by name, then none given', func
     t.eq(g[1].label, 'British from England and Scotland (GBR)', 'labelled by name and code');
     t.eq(g[3].label, 'No population given', 'HG002');
 });
-var grouped = startPage({ extraIds: ['pgcGroupPop', 'pgcPops'] });
+var picker = startPage();
 setTimeout(function () {
-    t.suite('populations: the grouped list');
-    var sel = grouped.el.pgcTargets, api = grouped.api;
-    grouped.el.pgcGroupPop.checked = true;
+    t.suite('populations: the picker');
+    var api = picker.api, el = picker.el;
+    // The haplotype boxes in the right pane, as "name:checked".
+    function boxes() {
+        return picker.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT'; })
+            .map(function (n) { return n.getAttribute('data-hap') + (n.checked ? ':on' : ''); });
+    }
+    function popRows() {
+        return picker.findAll(el.pgcPops, function (n) { return n.tagName === 'BUTTON'; })
+            .map(function (n) { return n.getAttribute('data-pop'); });
+    }
     api.fillTargets('');
-    var heads = sel.children.map(function (c) { return c.tagName + ':' + c.getAttribute('label'); });
-    t.test('the list is grouped under population headers', function () {
-        t.eq(heads.join(' | '), 'OPTGROUP:Reference assemblies \u2014 2 | ' +
-             'OPTGROUP:British from England and Scotland (GBR) \u2014 1 | ' +
-             'OPTGROUP:No population given \u2014 1', 'groups, the source excluded');
+    t.test('the left pane lists all, then the groups in order', function () {
+        t.eq(popRows().join(','), ',~ref,GBR,~none', 'All, references, GBR, none given');
+        t.contains(el.pgcPops.textContent, '1 population', 'counted');
+        t.contains(el.pgcPops.textContent, 'British from England and Scotland', 'by name');
     });
-    t.test('a choice inside a group still counts as chosen', function () {
-        api.targetOptions(sel).forEach(function (o) { o.selected = (o.value === 'HG00097#2'); });
-        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'found inside its group');
-        api.fillTargets('');
-        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'and kept across a redraw');
+    t.test('the right pane lists every candidate, the default chosen', function () {
+        t.eq(boxes().join(','), 'CHM13#0,GRCh38#0:on,HG00097#2,HG01234#2', 'source excluded, GRCh38 ticked');
+        t.contains(el.pgcChosen.textContent, 'Chosen 1 of 3', 'and as a chip');
     });
-    t.test('the panel counts each population and what is chosen from it', function () {
-        var pops = grouped.el.pgcPops.textContent;
-        t.contains(pops, '4 haplotypes from 4 samples, 1 population', 'summary');
-        t.contains(pops, 'British from England and Scotland (GBR)1 \u00b7 1 chosen', 'count and chosen');
+    t.test('a box chooses, a chip lets go, and the hidden list follows', function () {
+        api.setChosen('HG00097#2', true);
+        t.eq(api.selectedTargets().sort().join(','), 'GRCh38#0,HG00097#2', 'chosen');
+        t.contains(el.pgcChosen.textContent, 'HG00097', 'a chip for it');
+        t.contains(el.pgcChosen.textContent, 'GBR', 'with its population');
+        api.setChosen('GRCh38#0', false);
+        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'let go');
     });
-    t.test('typing a population name or code filters by it', function () {
-        api.fillTargets('british');
-        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).join(','), 'HG00097#2', 'by name');
-        api.fillTargets('gbr');
-        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).join(','), 'HG00097#2', 'by code');
-    });
-    t.test('a population chosen in the panel narrows the list to it', function () {
+    t.test('a population on the left narrows the right pane, and the choice survives', function () {
         api.setPopFilter('~ref');
         api.fillTargets('');
-        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).sort().join(','),
-             'CHM13#0,GRCh38#0', 'references only');
-        t.contains(grouped.el.pgcPops.textContent, 'Show every population', 'with a way back');
+        t.eq(boxes().join(','), 'CHM13#0,GRCh38#0', 'references only');
+        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'HG00097#2 still chosen');
+        t.contains(el.pgcHaps.textContent, 'Reference assemblies', 'the pane says which');
         api.setPopFilter(null);
     });
-    t.test('ungrouped, each name carries its population code', function () {
-        grouped.el.pgcGroupPop.checked = false;
+    t.test('the search matches a name or a population, and keeps the choice', function () {
+        api.fillTargets('british');
+        t.eq(boxes().join(','), 'HG00097#2:on', 'by population name');
+        api.fillTargets('gbr');
+        t.eq(boxes().join(','), 'HG00097#2:on', 'by code');
+        api.fillTargets('zzz');
+        t.contains(el.pgcHaps.textContent, 'No haplotype matches', 'says so when nothing does');
+        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'still chosen');
         api.fillTargets('');
-        var labels = api.targetOptions(sel).map(function (o) { return o.textContent; });
-        t.ok(labels.some(function (l) { return /HG00097.*\u00b7 GBR/.test(l); }), 'code on the name');
-        t.ok(sel.children.every(function (c) { return c.tagName === 'OPTION'; }), 'no groups');
+    });
+    t.test('at the limit, the other boxes are disabled', function () {
+        api.setChosen('CHM13#0', true);
+        api.setChosen('HG01234#2', true);
+        var dis = picker.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT' && n.disabled; })
+            .map(function (n) { return n.getAttribute('data-hap'); });
+        t.eq(dis.join(','), 'GRCh38#0', 'the one left over');
+        t.contains(el.pgcChosen.textContent, 'Chosen 3 of 3', 'full');
+    });
+    t.test('with all populations shown, each name carries its code', function () {
+        t.contains(el.pgcHaps.textContent, 'HG00097 hap2GBR', 'code beside the name');
     });
 }, 40);
 
@@ -677,10 +694,9 @@ setTimeout(function () {
 
     t.suite('too many targets at once');
 
-    t.test('the count line states the limit and how many are selected', function () {
-        t.contains(page.el.pgcTargetCount.textContent, 'max 3',
-                   'limit visible before submitting');
-        t.contains(page.el.pgcTargetCount.textContent, 'selected', 'running count');
+    t.test('the chosen line states the limit and how many are chosen', function () {
+        t.contains(page.el.pgcChosen.textContent, 'Chosen 1 of 3',
+                   'limit and running count visible before submitting');
     });
 
     t.test('selecting more than the limit is refused before any request', function () {
