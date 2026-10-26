@@ -306,18 +306,127 @@ function loadHaplotypes() {
     });
 }
 
+// ---- Populations -------------------------------------------------------------
+//
+// Each sample's population as the HPRC describes it - 1000 Genomes code and
+// descriptor, from hgPangenomeSamples.js - groups and filters the target list.
+// Super-populations are not used: the HPRC follows the NHGRI's guidelines for
+// referring to populations, which do not, and leaves them out of its metadata.
+
+var popFilter = null;          // the group the list is narrowed to, or null
+
+function samplePop(hap) {
+    var table = window.pangenomeSamples || {};
+    var key = String(hap || "").split("#")[0].toLowerCase();
+    var p = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
+    return p ? { code: p[0], desc: p[1] } : null;
+}
+
+// The group a haplotype is listed under: the references first, then each
+// population by name, then the samples with no population given.
+function popGroupOf(hap) {
+    var lower = String(hap).toLowerCase();
+    if (lower === "grch38#0" || lower === "chm13#0")
+        return { key: "~ref", label: "Reference assemblies", rank: 0 };
+    var p = samplePop(hap);
+    if (!p) return { key: "~none", label: "No population given", rank: 2 };
+    return { key: p.code, label: p.desc + " (" + p.code + ")", rank: 1, desc: p.desc };
+}
+
+// Every option in the list, whether it sits under a population or not.
+function targetOptions(sel) {
+    var out = [];
+    if (!sel) return out;
+    Array.prototype.forEach.call(sel.children, function (c) {
+        if (c.tagName === "OPTGROUP")
+            Array.prototype.forEach.call(c.children, function (o) { out.push(o); });
+        else
+            out.push(c);
+    });
+    return out;
+}
+
+function groupingOn() {
+    var box = $("pgcGroupPop");
+    return !!(box && box.checked);
+}
+
+// The groups among some haplotypes, in display order, each with its members.
+function popGroups(list) {
+    var byKey = Object.create(null), groups = [];
+    list.forEach(function (h) {
+        var g = popGroupOf(h);
+        if (!byKey[g.key]) {
+            byKey[g.key] = { key: g.key, label: g.label, rank: g.rank, desc: g.desc || "", haps: [] };
+            groups.push(byKey[g.key]);
+        }
+        byKey[g.key].haps.push(h);
+    });
+    groups.sort(function (a, b) {
+        return (a.rank - b.rank) || a.desc.localeCompare(b.desc);
+    });
+    return groups;
+}
+
+// Beside the list: how many of the candidates come from each population, how
+// many of those are chosen, and a way to narrow the list to one.  Counted over
+// every candidate - all assemblies, or those with this region - and not over
+// what the text filter leaves, so typing does not empty it.
+function fillPops(candidates, chosen) {
+    var box = $("pgcPops");
+    if (!box) return;
+    clear(box);
+    var groups = popGroups(candidates);
+    var pops = groups.filter(function (g) { return g.rank === 1; });
+    var samples = Object.create(null);
+    candidates.forEach(function (h) { samples[String(h).split("#")[0].toLowerCase()] = true; });
+    box.appendChild(el("div", { class: "pgcPopsHead", text:
+        candidates.length + " haplotypes from " + Object.keys(samples).length + " samples, " +
+        pops.length + (pops.length === 1 ? " population" : " populations") +
+        (reachable ? ", all with this region" : "") }));
+    var chosenSet = Object.create(null);
+    chosen.forEach(function (h) { chosenSet[String(h).toLowerCase()] = true; });
+    var listBox = el("div", { class: "pgcPopsList", role: "list" });
+    groups.forEach(function (g) {
+        var picked = g.haps.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
+        var on = popFilter === g.key;
+        var b = el("button", { type: "button", class: "pgcPop" + (on ? " on" : ""),
+            "data-pop": g.key, role: "listitem", "aria-pressed": on ? "true" : "false",
+            title: (on ? "Show every population again" : "List only " + g.label) });
+        b.appendChild(el("span", { class: "pgcPopName", text: g.label }));
+        b.appendChild(el("span", { class: "pgcPopN", text: String(g.haps.length) +
+            (picked ? " · " + picked + " chosen" : "") }));
+        listBox.appendChild(b);
+    });
+    box.appendChild(listBox);
+    if (popFilter)
+        box.appendChild(el("button", { type: "button", class: "pgcPopAll", "data-pop": "",
+                                       text: "Show every population" }));
+}
+
 function fillTargets(filter) {
     var sel = $("pgcTargets");
     var chosen = selectedTargets();
     var f = String(filter || "").toLowerCase();
     var srcHap = currentSourceHap();
     clear(sel);
-    var list = allHaplotypes.filter(function (h) {
+    // The candidates: everything but the source, and with "only with this
+    // region" on, only those.  The population panel counts these.
+    var candidates = allHaplotypes.filter(function (h) {
         var lower = h.toLowerCase();
-        if (f && lower.indexOf(f) < 0) return false;
         if (srcHap && lower === String(srcHap).toLowerCase()) return false; // no self-conversion
         if (reachable && !(lower in reachable)) return false;
         return true;
+    });
+    // What the list shows: the candidates the text and the population allow.
+    // The text matches a haplotype's name or its population, by code or name.
+    var list = candidates.filter(function (h) {
+        var g = popGroupOf(h);
+        if (popFilter && g.key !== popFilter) return false;
+        if (!f) return true;
+        return h.toLowerCase().indexOf(f) >= 0 ||
+               (g.rank === 1 && (g.key.toLowerCase().indexOf(f) >= 0 ||
+                                 g.desc.toLowerCase().indexOf(f) >= 0));
     });
     // With scores, the most relevant destinations come first; otherwise keep the
     // alphabetical order the list arrived in.
@@ -328,16 +437,30 @@ function fillTargets(filter) {
             if (cb !== ca) return cb - ca;
             return a.localeCompare(b);
         });
-    list.forEach(function (h) {
+    function option(h, withPop) {
         var cov = reachable ? reachable[h.toLowerCase()] : null;
-        var label = (cov == null) ? hapLabel(h)
-                                 : hapLabel(h) + "  (" + (Math.round(cov * 10) / 10) + "%)";
+        var p = withPop ? samplePop(h) : null;
+        var label = hapLabel(h) + (p ? "  · " + p.code : "") +
+                    (cov == null ? "" : "  (" + (Math.round(cov * 10) / 10) + "%)");
         var o = el("option", { text: label });
-        sel.appendChild(o);
         o.value = h;                       // the bare name is what gets submitted
         o.selected = chosen.indexOf(h) >= 0;
-    });
+        if (p) o.setAttribute("title", p.desc);
+        return o;
+    }
+    if (groupingOn()) {
+        // One group per population; within it, the order above (alphabetical,
+        // or best first when ranked).
+        popGroups(list).forEach(function (g) {
+            var og = el("optgroup", { label: g.label + " — " + g.haps.length });
+            g.haps.forEach(function (h) { og.appendChild(option(h, false)); });
+            sel.appendChild(og);
+        });
+    } else {
+        list.forEach(function (h) { sel.appendChild(option(h, true)); });
+    }
     var chosenNow = selectedTargets().length;
+    fillPops(candidates, selectedTargets());
     // Kept short on purpose.  This line sits between the filter and the list,
     // and the filter lengthens it; when it grew from one line to two the list
     // moved down under the cursor that had just ticked the box.  The stylesheet
@@ -348,7 +471,7 @@ function fillTargets(filter) {
                                       : " containing this region") : "") +
         (srcHap ? " (the source haplotype is excluded)" : "") +
         "; " + chosenNow + " selected, max " + MAX_TARGETS +
-        (chosenNow > MAX_TARGETS ? " \u2014 too many" : "");
+        (chosenNow > MAX_TARGETS ? " — too many" : "");
 }
 
 // Ask the graph which haplotypes this region exists on, and narrow the picker to
@@ -458,17 +581,15 @@ function preselectDefaultTarget() {
     if (!want) return;
     var src = String(currentSourceHap() || "").toLowerCase();
     if (want === src) return;
-    var sel = $("pgcTargets");
-    Array.prototype.forEach.call(sel.children, function (o) {
+    targetOptions($("pgcTargets")).forEach(function (o) {
         if (String(o.value || o.textContent).toLowerCase() === want)
             o.selected = true;
     });
 }
 
 function selectedTargets() {
-    var sel = $("pgcTargets"), out = [];
-    if (!sel) return out;
-    Array.prototype.forEach.call(sel.children, function (o) {
+    var out = [];
+    targetOptions($("pgcTargets")).forEach(function (o) {
         // o.value is the bare haplotype name; the label may carry a percentage
         if (o.selected) out.push(o.value || o.textContent);
     });
@@ -974,9 +1095,11 @@ function renderResults(srcLabel, targets, intervals) {
     var box = $("pgcResults");
     clear(box);
 
+    var sPop = samplePop(currentSourceHap());
     box.appendChild(el("div", { class: "pgcFrom" }, [
         el("span", { text: "Converted from " }),
-        el("code", { text: srcLabel })
+        el("code", { text: srcLabel }),
+        sPop ? el("span", { class: "pgcCardPop", text: sPop.desc + " (" + sPop.code + ")" }) : null
     ]));
     // What the ancestry readout fills in once it has an answer: a slot under
     // the source, one under each region, a summary line and the plot.
@@ -1018,8 +1141,10 @@ function renderResults(srcLabel, targets, intervals) {
     targets.forEach(function (t) {
         var card = el("div", { class: "pgCard" });
         var pieces = byHap[String(t).toLowerCase()] || [];
+        var tPop = samplePop(t);
         card.appendChild(el("div", { class: "pgCardHead" }, [
             el("span", { class: "pgName", text: hapLabel(t) }),
+            tPop ? el("span", { class: "pgcCardPop", text: tPop.desc + " (" + tPop.code + ")" }) : null,
             el("span", { class: "pgBadge " + (pieces.length ? "pgMapped" : "pgUnmapped"),
                 text: pieces.length === 0 ? "no equivalent region"
                      : pieces.length + (pieces.length === 1 ? " region" : " regions") })
@@ -1324,6 +1449,7 @@ function doConvert() {
 function onClear() {
     $("pgcPos").value = "";
     $("pgcFilter").value = "";
+    popFilter = null;
     reachable = null;
     reachableScored = false;
     reachableCache = null;
@@ -1369,6 +1495,22 @@ function init() {
         fillTargets($("pgcFilter").value);      // refresh the "N selected" line
     });
     $("pgcReachableOnly").addEventListener("change", onReachableToggle);
+    if ($("pgcGroupPop")) {
+        $("pgcGroupPop").addEventListener("change", function () {
+            fillTargets($("pgcFilter").value);
+        });
+    }
+    // A population beside the list narrows it to that population; the same
+    // one again, or "Show every population", lets it go.
+    if ($("pgcPops")) {
+        $("pgcPops").addEventListener("click", function (ev) {
+            var b = ev.target && ev.target.closest ? ev.target.closest("[data-pop]") : null;
+            if (!b) return;
+            var key = b.getAttribute("data-pop");
+            popFilter = (!key || popFilter === key) ? null : key;
+            fillTargets($("pgcFilter").value);
+        });
+    }
 
     loadHaplotypes();
     // Ask on the way in as well as on a change: arriving here from a browser
@@ -1409,6 +1551,13 @@ if (typeof module !== "undefined" && module.exports)
         ancSummary: ancSummary,
         ancText: ancText,
         ancNone: ancNone,
+        samplePop: samplePop,
+        popGroupOf: popGroupOf,
+        popGroups: popGroups,
+        targetOptions: targetOptions,
+        selectedTargets: selectedTargets,
+        fillTargets: fillTargets,
+        setPopFilter: function (k) { popFilter = k; },
         init: init
     };
 

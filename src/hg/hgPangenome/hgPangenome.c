@@ -3343,8 +3343,19 @@ printf("<label for='pgcReachableOnly' class='pgcToggle' title='Ask the graph "
        "which assemblies this region exists on, and list only those'>"
        "<input type='checkbox' id='pgcReachableOnly'> "
        "Only assemblies with this region</label>\n");
+/* Grouping by the sample's population, as the HPRC describes it.  Off gives
+ * the flat list back, which is the one "best first" ranks. */
+printf("<label for='pgcGroupPop' class='pgcToggle' title='Group the list by the "
+       "population each sample comes from, as the HPRC describes it'>"
+       "<input type='checkbox' id='pgcGroupPop' checked> "
+       "Group by population</label>\n");
 printf("<div class='pgMuted' id='pgcTargetCount'></div>\n");
+/* The list, and beside it the populations it holds with their counts; a
+ * population there narrows the list to it. */
+printf("<div class='pgcPick'>\n");
 printf("<select id='pgcTargets' multiple size='10' class='pgcTargets'></select>\n");
+printf("<div id='pgcPops' class='pgcPops'></div>\n");
+printf("</div>\n");
 printf("<div class='pgMuted'>Hold Ctrl (Cmd on a Mac) to pick several, "
        "up to %d at a time.</div>\n",
        atoi(cfgOr("pangenome.maxLiftTargets", "5")));
@@ -3575,6 +3586,7 @@ if (sameOk(cgiOptionalString("page"), "convert"))
     boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
     jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
+    jsIncludeFile("hgPangenomeSamples.js", NULL);   /* generated sample->population table */
     if (pclai)
         jsIncludeFile("hgPangenomePclai.js", NULL);
     jsIncludeFile("hgPangenomeConvert.js", NULL);

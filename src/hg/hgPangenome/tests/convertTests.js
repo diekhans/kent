@@ -26,7 +26,7 @@ function startPage(opts) {
     var calls = [];
     var c = loader.load({
         script: 'hgPangenomeConvert.js',
-        ids: PAGE_IDS,
+        ids: PAGE_IDS.concat(opts.extraIds || []),
         readyState: 'loading',
         fetch: function (url, o) {
             calls.push({ url: String(url), opts: o });
@@ -86,6 +86,70 @@ function links(c) {
 
 var page = startPage();
 var pg = page.api;
+
+// ---- populations in the target picker ---------------------------------------
+
+t.suite('populations');
+t.test("a sample's population is the HPRC's own description", function () {
+    t.eq(JSON.stringify(pg.samplePop('HG00097#1')),
+         JSON.stringify({ code: 'GBR', desc: 'British from England and Scotland' }), 'GBR');
+    t.eq(pg.samplePop('hg00097#2').code, 'GBR', 'either phase, any case');
+    t.eq(pg.samplePop('HG002#1'), null, 'HG002 has none given');
+    t.eq(pg.samplePop('GRCh38#0'), null, 'nor the references');
+    t.contains(pg.samplePop('HG02572#1').desc, 'Western Division \u2013 Mandinka', 'the mis-encoded dash repaired');
+});
+t.test('groups: the references, then populations by name, then none given', function () {
+    var g = pg.popGroups(['HG002#1', 'HG02572#1', 'GRCh38#0', 'HG00097#1', 'HG00097#2', 'CHM13#0']);
+    t.eq(g.map(function (x) { return x.key; }).join(','), '~ref,GBR,GWD,~none', 'order');
+    t.eq(g[1].haps.length, 2, 'both phases of a sample together');
+    t.eq(g[1].label, 'British from England and Scotland (GBR)', 'labelled by name and code');
+    t.eq(g[3].label, 'No population given', 'HG002');
+});
+var grouped = startPage({ extraIds: ['pgcGroupPop', 'pgcPops'] });
+setTimeout(function () {
+    t.suite('populations: the grouped list');
+    var sel = grouped.el.pgcTargets, api = grouped.api;
+    grouped.el.pgcGroupPop.checked = true;
+    api.fillTargets('');
+    var heads = sel.children.map(function (c) { return c.tagName + ':' + c.getAttribute('label'); });
+    t.test('the list is grouped under population headers', function () {
+        t.eq(heads.join(' | '), 'OPTGROUP:Reference assemblies \u2014 2 | ' +
+             'OPTGROUP:British from England and Scotland (GBR) \u2014 1 | ' +
+             'OPTGROUP:No population given \u2014 1', 'groups, the source excluded');
+    });
+    t.test('a choice inside a group still counts as chosen', function () {
+        api.targetOptions(sel).forEach(function (o) { o.selected = (o.value === 'HG00097#2'); });
+        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'found inside its group');
+        api.fillTargets('');
+        t.eq(api.selectedTargets().join(','), 'HG00097#2', 'and kept across a redraw');
+    });
+    t.test('the panel counts each population and what is chosen from it', function () {
+        var pops = grouped.el.pgcPops.textContent;
+        t.contains(pops, '4 haplotypes from 4 samples, 1 population', 'summary');
+        t.contains(pops, 'British from England and Scotland (GBR)1 \u00b7 1 chosen', 'count and chosen');
+    });
+    t.test('typing a population name or code filters by it', function () {
+        api.fillTargets('british');
+        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).join(','), 'HG00097#2', 'by name');
+        api.fillTargets('gbr');
+        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).join(','), 'HG00097#2', 'by code');
+    });
+    t.test('a population chosen in the panel narrows the list to it', function () {
+        api.setPopFilter('~ref');
+        api.fillTargets('');
+        t.eq(api.targetOptions(sel).map(function (o) { return o.value; }).sort().join(','),
+             'CHM13#0,GRCh38#0', 'references only');
+        t.contains(grouped.el.pgcPops.textContent, 'Show every population', 'with a way back');
+        api.setPopFilter(null);
+    });
+    t.test('ungrouped, each name carries its population code', function () {
+        grouped.el.pgcGroupPop.checked = false;
+        api.fillTargets('');
+        var labels = api.targetOptions(sel).map(function (o) { return o.textContent; });
+        t.ok(labels.some(function (l) { return /HG00097.*\u00b7 GBR/.test(l); }), 'code on the name');
+        t.ok(sel.children.every(function (c) { return c.tagName === 'OPTION'; }), 'no groups');
+    });
+}, 40);
 
 // ================================================= blocks (annotation lifting)
 //

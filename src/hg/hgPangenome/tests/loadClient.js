@@ -163,6 +163,11 @@ function load(options) {
             vm.runInContext(fs.readFileSync(tablePath, 'utf8'), sandbox,
                             { filename: 'hgPangenomeAssemblies.js' });
     }
+    // And the sample->population table, which PanLift's picker groups by.
+    var samplesPath = path.join(JS_DIR, 'hgPangenomeSamples.js');
+    if (options.withAssemblies !== false && fs.existsSync(samplesPath))
+        vm.runInContext(fs.readFileSync(samplesPath, 'utf8'), sandbox,
+                        { filename: 'hgPangenomeSamples.js' });
 
     if (options.withMock !== false)
         vm.runInContext(fs.readFileSync(path.join(JS_DIR, 'hgPangenomeMock.js'), 'utf8'),

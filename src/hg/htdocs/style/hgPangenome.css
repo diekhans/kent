@@ -142,6 +142,32 @@
 .pgcFrom { margin: 6px 0 10px; font-size: 0.9em; }
 .pgcInterval { padding: 3px 0; border-bottom: 1px solid #eef0f2; }
 .pgcInterval:last-child { border-bottom: none; }
+/* Populations beside the target list: the list keeps its width, the panel
+ * takes the rest and scrolls at the list's height.  Each population is a
+ * button that narrows the list to it. */
+/* No wrapping on a wide screen: the form is a table, and a row that may wrap
+ * lets its cell shrink to the wrapped layout, which put the panel under the
+ * list.  On a narrow one it stacks. */
+.pgcPick { display: flex; gap: 14px; align-items: flex-start; flex-wrap: nowrap; }
+.pgcPick .pgcTargets { flex: 0 0 auto; }
+.pgcPops { flex: 0 0 440px; min-width: 0; font-size: 0.85em; }
+@media (max-width: 900px) {
+    .pgcPick { flex-wrap: wrap; }
+    .pgcPops { flex-basis: 100%; }
+}
+.pgcPopsHead { color: #444; margin-bottom: 4px; }
+.pgcPopsList { max-height: 172px; overflow-y: auto; border: 1px solid #c8ccd2; background: #fff;
+    display: grid; grid-template-columns: 1fr; }
+.pgcPop { display: flex; justify-content: space-between; gap: 10px; text-align: left;
+    background: none; border: 0; border-bottom: 1px solid #eef0f2; padding: 3px 8px;
+    font: inherit; color: #1e2833; cursor: pointer; }
+.pgcPop:hover { background: #eef3fa; }
+.pgcPop:focus-visible { outline: 2px solid #003a72; outline-offset: -2px; }
+.pgcPop.on { background: #cfe0f5; font-weight: bold; }
+.pgcPopN { color: #555; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pgcPopAll { margin-top: 4px; font: inherit; font-size: 0.95em; background: none; border: 0;
+    color: #003a72; text-decoration: underline; cursor: pointer; padding: 0; }
+.pgcCardPop { margin-left: 10px; color: #555; font-size: 0.85em; font-weight: normal; }
 /* Ancestry at each region (pcLAI): a line under the region, a strip of its
  * windows where the ancestry changes inside it, and a summary over the cards. */
 .pgcAnc { margin: 3px 0 1px; font-size: 0.9em; }
