@@ -1127,6 +1127,7 @@ function ancSummaryLine(asks, resp) {
     var spots = plotted.map(function (a) {
         return { id: a.id, hap: a.hap, acc: a.db, contig: a.contig, start: a.start, end: a.end,
                  coverage: null, placement: 0, placements: 1, url: a.url,
+                 openId: a.anchor ? a.id : null,
                  info: [["Assembly", a.db], ["Region", fmtPos(a.contig, a.start, a.end)],
                         ["Ancestry in this region", ancText(a.sum)],
                         ["Role", a.role === "source" ? "the source of this conversion"
@@ -1196,6 +1197,16 @@ function renderResults(srcLabel, targets, intervals) {
         box.appendChild(el("div", { class: "pgcAncSummary gbApp", id: "pgcAncSummary" }));
         var plotHost = el("div", { class: "pgrPanel gbApp", id: "pgrPclaiPlot" });
         plotHost.style.display = "none";
+        // A region's "View in Genome Browser" in the plot is that region's card
+        // link, clicked: one way to open a target, whichever place it is from.
+        plotHost.addEventListener("click", function (ev) {
+            var b = ev.target && ev.target.closest ? ev.target.closest("[data-pgp-open]") : null;
+            if (!b) return;
+            var hit = anc.filter(function (x) { return x.id === b.getAttribute("data-pgp-open"); })[0];
+            if (!hit || !hit.anchor) return;            // no card link: the plain href stands
+            ev.preventDefault();
+            hit.anchor.click();
+        });
         box.appendChild(plotHost);
     }
 
@@ -1270,9 +1281,13 @@ function renderResults(srcLabel, targets, intervals) {
                     row.appendChild(slot);
                     var ivParts = String(iv.haplotype || "").split("#");
                     var ivHap = ivParts.slice(0, 2).join("#");
+                    // The card's own link goes along: the plot's "View in Genome
+                    // Browser" clicks it, so annotations and the alignment
+                    // differences come with it exactly as they do from here.
                     anc.push({ slot: slot, role: "target", hap: ivHap,
                                db: assemblyForHap(ivHap), contig: ivParts.slice(2).join("#"),
-                               start: iv.start, end: iv.end, url: link ? link.url : null });
+                               start: iv.start, end: iv.end, url: link ? link.url : null,
+                               anchor: link ? a : null });
                 }
                 body.appendChild(row);
             });

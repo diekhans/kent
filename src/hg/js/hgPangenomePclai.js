@@ -811,9 +811,13 @@ function pgpDetailHtml() {
                   pgpSelGroup.length + ' here</a>' : "") +
                '</div>');
     } else if (spot && spot.url) {
-        // A page with no table to delegate to gives the spot its own link.
+        // A page with no table to delegate to gives the spot its own link.  With
+        // an openId the page answers the click itself - PanLift sends it to the
+        // region's own link, so the plot opens exactly what the card does.
         o.push('<div class="pgrDetailActions"><a class="gbPill primary" href="' +
-               pgpEsc(spot.url) + '">View in Genome Browser</a></div>');
+               pgpEsc(spot.url) + '"' +
+               (spot.openId ? ' data-pgp-open="' + pgpEsc(spot.openId) + '"' : '') +
+               '>View in Genome Browser</a></div>');
     }
     o.push('</div>');
     return o.join("");
