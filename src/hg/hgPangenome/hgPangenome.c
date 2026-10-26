@@ -102,7 +102,7 @@
  *                            overload it.
  *   pangenome.quickLift      "on"/"off" default for the "show the source's gene
  *                            annotations on the target" checkbox on the
- *                            conversion page; default "off".  The checkbox is
+ *                            conversion page; default "on".  The checkbox is
  *                            only offered when browser.quickLift is on, since
  *                            it drives the browser's own QuickLift machinery.
  *   pangenome.annotationRefs references the results page can bring annotations
@@ -3244,7 +3244,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           atoi(cfgOr("pangenome.maxLiftTargets", "10")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
-          sameString(cfgOr("pangenome.quickLift", "off"), "on") ? "true" : "false",
+          sameString(cfgOr("pangenome.quickLift", "on"), "on") ? "true" : "false",
           sameString(cfgOr("pangenome.resultsPage", "on"), "on") ? "true" : "false");
 }
 
@@ -3365,7 +3365,7 @@ printf("</td></tr>\n");
 /* ---- annotations ---- */
 if (quickLiftEnabled(cart))
     {
-    boolean on = sameString(cfgOr("pangenome.quickLift", "off"), "on");
+    boolean on = sameString(cfgOr("pangenome.quickLift", "on"), "on");
     /* Worded as hgConvert words it.  The explanation that used to sit under
      * these two is in their tooltips, where it is available without taking up
      * the form. */
