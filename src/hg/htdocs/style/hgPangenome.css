@@ -312,6 +312,10 @@
 .pgrMsg a:hover { color:var(--accentHover); }
 .pgrErr { padding:10px 18px; border-bottom:1px solid #e3b3b3; background:#fdf2f2;
     border-left:3px solid #8b1a1a; color:var(--ink); font-size:14px; }
+/* "Annotations from" in the strip: a setting dressed as one of its stats. */
+.pgrAnnotStat .k { cursor:help; }
+.pgrAnnotStat select { font-size:14px; font-weight:700; font-family:inherit; color:var(--ink);
+    border:1px solid var(--btnLine); border-radius:0; background:#fff; padding:1px 4px; }
 .pgrSeqBar { flex:1 1 100%; display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
 .pgrSeqText { flex:1 1 100%; min-height:150px; margin-top:10px; padding:8px; white-space:pre;
     font-family:'Roboto Mono','Courier New',monospace; font-size:13px; color:var(--ink);

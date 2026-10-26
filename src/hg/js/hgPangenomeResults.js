@@ -551,11 +551,15 @@ function pgrPickCell(r) {
 // the sequence, and writing them is a POST.  The query itself is not on this
 // page - it was left on the search form - so the job id goes instead and the
 // CGI reads the sequence back from the copy taken at submit time.
-function pgrArm(row) {
-    if (row.armed) { return Promise.resolve(row.armed); }
+// Armed afresh on every click, never reused: "ss" is a single cart variable,
+// so opening another row in between points it at that row's alignment, and a
+// remembered URL would then open this one with the other's sequence.
+function pgrArm(row, opening) {
     var payload = {
         db: row.db, contig: row.contig, name: row.query, job_id: pgrJobId(),
-        cigar: row.cigar, start: row.start, strand: row.strand
+        cigar: row.cigar, start: row.start, strand: row.strand,
+        // Opening the browser: drop what was lifted onto the last haplotype.
+        dropLifts: opening ? "on" : "off"
     };
     var body = { cmd: "alignTrack", payload: JSON.stringify(payload) };
     var hgsid = pgrCfg().hgsid;
@@ -569,12 +573,122 @@ function pgrArm(row) {
         if (!resp || resp.status === "error") {
             throw new Error((resp && resp.error) || "could not prepare the track");
         }
-        row.armed = resp;
         return resp;
     });
 }
 
+// ---- a reference's annotations on the haplotype ---------------------------
+//
+// One choice for the whole page, in the strip: when a haplotype is opened, the
+// tracks the user has turned on in GRCh38 (or CHM13) come with it, carried
+// across through the graph by cmd=refAnnot.  The choice comes from the link
+// (refAnnot=), else what this viewer chose last, else the install's default.
+
+var pgrAnnotRef = null;     // {hap, label, db} or null for none
+
+function pgrAnnotRefs() {
+    return pgrPage().annotRefs || [];
+}
+
+// "GRCh38", "grch38#0", "none" -> the reference it names, null for none,
+// undefined when it names nothing this page knows.
+function pgrAnnotMatch(name) {
+    if (name == null || name === "") { return undefined; }
+    var key = String(name).toLowerCase();
+    if (key === "none" || key === "off") { return null; }
+    var found = pgrAnnotRefs().filter(function (r) {
+        return r.hap.toLowerCase() === key || r.label.toLowerCase() === key;
+    });
+    return found.length ? found[0] : undefined;
+}
+
+function pgrAnnotInit() {
+    var page = pgrPage();
+    var saved = null;
+    try { saved = window.localStorage.getItem("hgPangenome.annotRef"); } catch (e) { saved = null; }
+    var picks = [page.annotUrl, saved, page.annotDefault];
+    for (var i = 0; i < picks.length; i++) {
+        var m = pgrAnnotMatch(picks[i]);
+        if (m !== undefined) { pgrAnnotRef = m; return; }
+    }
+    pgrAnnotRef = null;
+}
+
+function pgrAnnotSet(value) {
+    var m = pgrAnnotMatch(value);
+    pgrAnnotRef = (m === undefined) ? null : m;
+    try {
+        window.localStorage.setItem("hgPangenome.annotRef", pgrAnnotRef ? pgrAnnotRef.hap : "none");
+    } catch (e) { /* remembered for this page only */ }
+}
+
+// The reference whose annotations this row would open with, or null: none is
+// chosen, the row has no position, it is a hub assembly the browser opens
+// elsewhere, or it is that reference already.
+function pgrAnnotFor(row) {
+    var ref = pgrAnnotRef;
+    if (!ref || row.contig == null || !row.db || /^https?:/.test(row.db)) { return null; }
+    return pgrHapKey(row.hap) === pgrHapKey(ref.hap) ? null : ref;
+}
+
+function pgrRefAnnot(row, ref, position) {
+    var payload = { db: row.db, path: row.hap + "#" + row.contig, start: row.start,
+                    end: row.end, ref: ref.hap, position: position };
+    var body = { cmd: "refAnnot", payload: JSON.stringify(payload) };
+    var hgsid = pgrCfg().hgsid;
+    if (hgsid) { body.hgsid = hgsid; }
+    return fetch(pgrSelf, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded",
+                   Accept: "application/json" },
+        body: pgrForm(body)
+    }).then(pgrCheck).then(function (resp) {
+        if (!resp || resp.status !== "ok" || !resp.url) {
+            throw new Error((resp && resp.error) || "no answer");
+        }
+        return resp;
+    });
+}
+
+// The armed URL opens the right genome, by the name that keeps the sequence
+// track; the annotation URL adds the hubs that carry the lifted tracks.  Take
+// the first, and from the second everything but its db and position.
+function pgrJoinUrl(armedUrl, annotUrl) {
+    var q = String(annotUrl).split("?")[1] || "";
+    var extra = q.split("&").filter(function (kv) {
+        var k = kv.split("=")[0];
+        return kv && k !== "db" && k !== "position";
+    });
+    return extra.length ? armedUrl + "&" + extra.join("&") : armedUrl;
+}
+
+function pgrQueryParam(url, name) {
+    var m = new RegExp("[?&]" + name + "=([^&]*)").exec(String(url));
+    return m ? decodeURIComponent(m[1].replace(/\+/g, " ")) : null;
+}
+
+function pgrAnnotControl() {
+    var refs = pgrAnnotRefs();
+    if (!refs.length) { return ""; }
+    var cur = pgrAnnotRef ? pgrAnnotRef.hap : "";
+    var opts = refs.map(function (r) {
+        return '<option value="' + pgrEsc(r.hap) + '"' + (r.hap === cur ? " selected" : "") +
+               ">" + pgrEsc(r.label) + "</option>";
+    }).concat('<option value="none"' + (cur ? "" : " selected") + ">none</option>");
+    return '<div class="gbStat pgrAnnotStat"><span class="k" title="When you open a ' +
+           "haplotype in the Genome Browser, the tracks you have turned on in this " +
+           "reference come with it, carried across through the pangenome graph. " +
+           'Choose none to open the haplotype with only its own tracks.">' +
+           "Annotations from</span>" +
+           '<span class="v"><select id="pgrAnnotRef">' + opts.join("") + "</select></span></div>";
+}
+
 function pgrAct(row, what, link) {
+    // "plain" is the browser link again, without the annotations - offered
+    // when bringing them failed.
+    var plain = what === "plain";
+    if (plain) { what = "browser"; }
+    var ref = (what === "details" || plain) ? null : pgrAnnotFor(row);
     // Only the link that is about to sit there waiting says so.  "new tab" is
     // never touched: its label carries the little new-tab icon as an <svg>, and
     // restoring it through textContent would write back the plain words and
@@ -585,14 +699,30 @@ function pgrAct(row, what, link) {
     // A new tab has to be opened in the click itself or the popup blocker takes
     // it, so it is opened now and pointed at the answer when it arrives.
     var tab = (what === "newtab") ? window.open("", "_blank") : null;
-    pgrArm(row).then(function (resp) {
+    pgrArm(row, what !== "details").then(function (resp) {
+        if (what === "details") { return resp.details; }
+        if (!ref) { return resp.url; }
+        if (busy) { link.innerHTML = "adding " + pgrEsc(ref.label) + " annotations&#8230;"; }
+        return pgrRefAnnot(row, ref, pgrQueryParam(resp.url, "position"))
+            .then(function (annot) { return pgrJoinUrl(resp.url, annot.url); })
+            .catch(function (err) {
+                // Opening anyway would hide why the tracks are missing, so stay
+                // and say so, with the plain link one click away.
+                err.annot = ref;
+                throw err;
+            });
+    }).then(function (url) {
         if (busy) { link.innerHTML = was; }
-        var url = (what === "details") ? resp.details : resp.url;
         if (tab) { tab.location = url; } else { window.location = url; }
     }).catch(function (err) {
         if (busy) { link.innerHTML = was; }
         if (tab) { tab.close(); }
-        pgrFail("Could not open this match: " + err.message);
+        if (err.annot) {
+            pgrFail("Could not bring " + err.annot.label + " annotations onto " + row.hap +
+                    ": " + err.message + ".", row);
+        } else {
+            pgrFail("Could not open this match: " + err.message);
+        }
     });
 }
 
@@ -1091,7 +1221,7 @@ function pgrPage() {
 
 // A problem with one action - an alignment that would not open, say - goes in a
 // line at the top of the results card, where it is seen without hiding them.
-function pgrFail(msg) {
+function pgrFail(msg, plainRow) {
     var slot = document.getElementById("pgrErr");
     if (!slot) {
         var el = document.getElementById("pgrResults");
@@ -1101,6 +1231,16 @@ function pgrFail(msg) {
     }
     slot.className = "pgrErr";
     slot.textContent = msg;
+    if (plainRow) {
+        // Inside #pgrResults, so the page's one click handler opens it.
+        var a = document.createElement("a");
+        a.href = "#";
+        a.setAttribute("data-rank", plainRow.rank);
+        a.setAttribute("data-act", "plain");
+        a.textContent = "Open it without them";
+        slot.appendChild(document.createTextNode(" "));
+        slot.appendChild(a);
+    }
 }
 
 // ---- summary strip, detail panel, downloads --------------------------------
@@ -1121,6 +1261,8 @@ function pgrSummaryStrip(queries, rows, multiPlace) {
         if (multiPlace) { stats += div + pgrStat("Placements", pgrFmt(r0.placements)); }
     }
     stats += div + pgrStat("Haplotypes", pgrFmt(rows.length));
+    var annot = pgrAnnotControl();
+    if (annot) { stats += div + annot; }
     var page = pgrPage();
     var acts = "";
     if (page.querySeqs && page.querySeqs.length) {
@@ -1499,6 +1641,9 @@ function pgrDraw(queries, allRows, note) {
         document.getElementById("pgrSeqBtn").onclick = pgrShowSeq;
     }
     document.getElementById("pgrHapBtn").onclick = pgrShowHapBox;
+    if (document.getElementById("pgrAnnotRef")) {
+        document.getElementById("pgrAnnotRef").onchange = function () { pgrAnnotSet(this.value); };
+    }
     pgrDt = dt;
     pgrPlaceColShow();
     pgrMoreShow();
@@ -1533,6 +1678,7 @@ function pgrMessage(el, html, busy) {
 function pgrStart() {
     var el = document.getElementById("pgrResults");
     if (!el) { return; }
+    pgrAnnotInit();
     var job = pgrJobId();
     if (!job) {
         pgrMessage(el, "No job was named in this link. " +

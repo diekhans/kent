@@ -36,6 +36,10 @@
  *                 points at it, so the browser's own QuickLift draws them on
  *                 the target.  Talks to no middleware; it needs the cart, so
  *                 it is the one command that runs inside the cart shell.
+ *   cmd=refAnnot  the same, for the results page: translate a hit's region on
+ *                 its haplotype to a reference (GRCh38, CHM13) through the
+ *                 graph, then QuickLift the tracks the user has on in that
+ *                 reference onto the haplotype.  Also inside the cart shell.
  * The map/poll modes emit raw application/json (the middleware's answer, or a
  * synthesized {"status":"error",...}) and never touch the cart, so they are
  * cheap and DB-free.  Nothing about BLAT is used or changed.
@@ -101,6 +105,13 @@
  *                            conversion page; default "off".  The checkbox is
  *                            only offered when browser.quickLift is on, since
  *                            it drives the browser's own QuickLift machinery.
+ *   pangenome.annotationRefs references the results page can bring annotations
+ *                            from, as "haplotype=db" pairs; default
+ *                            "GRCh38#0=hg38,CHM13#0=hs1".  Also needs
+ *                            browser.quickLift.
+ *   pangenome.annotationDefault  the one chosen when the page opens; default
+ *                            "GRCh38#0", "none" for none.  A results URL's
+ *                            refAnnot= overrides it.
  *   pangenome.apiToken       shared secret sent to the middleware as the
  *                            X-Pangenome-Token header; if empty, no auth header
  *                            is sent (middleware runs auth-off for testing)
@@ -1751,6 +1762,109 @@ errCatchFree(&errCatch);
 return root;
 }
 
+static boolean pgLiftInterval(char *srcPath, char *tgt, long start, long end,
+                              char **retPath, long *retStart, long *retEnd,
+                              char **retError)
+/* Where one interval lands on another haplotype: the largest of the intervals
+ * the mapping service translates it to, as a full contig path ("GRCh38#0#chr1")
+ * and absolute coordinates on it.  A region that splits - across an inversion,
+ * say - lands in several pieces; the largest is where its annotations are. */
+{
+static char why[512];
+char *apiBase = cloneString(cfgOr("pangenome.apiBase", ""));
+if (isEmpty(apiBase))
+    { *retError = "pangenome.apiBase is not configured"; return FALSE; }
+if (endsWith(apiBase, "/"))
+    apiBase[strlen(apiBase) - 1] = '\0';
+struct dyString *body = dyStringNew(256);
+dyStringPrintf(body, "{\"src\":\"%s\",\"start\":%ld,\"end\":%ld,\"tgt\":\"%s\"}",
+               jsonStringEscape(srcPath), start, end, jsonStringEscape(tgt));
+char url[2048];
+safef(url, sizeof(url), "%s/api/v1/liftover", apiBase);
+struct pgResp r = pgHttp(url, body->string,
+                         atoi(cfgOr("pangenome.timeoutSecs", "120")),
+                         cfgOr("pangenome.apiToken", ""));
+dyStringFree(&body);
+if (r.transportErr)
+    {
+    safef(why, sizeof(why), "could not reach the mapping server: %s",
+          r.errMsg ? r.errMsg : "unknown error");
+    *retError = why;
+    return FALSE;
+    }
+if (r.code >= 400)
+    {
+    safef(why, sizeof(why), "mapping server returned HTTP %ld", r.code);
+    *retError = why;
+    return FALSE;
+    }
+struct jsonElement *root = NULL;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    root = jsonParse(r.body->string);
+errCatchEnd(errCatch);
+boolean bad = errCatch->gotError || root == NULL;
+errCatchFree(&errCatch);
+if (bad)
+    { *retError = "unreadable reply from the mapping server"; return FALSE; }
+
+struct jsonElement *ivs = jsonFindNamedField(root, "", "intervals");
+long bestSize = 0;
+if (ivs != NULL && ivs->type == jsonList)
+    {
+    struct slRef *ref;
+    for (ref = ivs->val.jeList; ref != NULL; ref = ref->next)
+        {
+        struct jsonElement *iv = ref->val;
+        if (iv->type != jsonObject)
+            continue;
+        char *name = jsonOptionalStringField(iv, "haplotype", NULL);
+        struct jsonElement *sEl = jsonFindNamedField(iv, "", "start");
+        struct jsonElement *eEl = jsonFindNamedField(iv, "", "end");
+        if (isEmpty(name) || sEl == NULL || eEl == NULL ||
+            sEl->type != jsonNumber || eEl->type != jsonNumber)
+            continue;
+        /* The two subpath forms the graph uses, "name[offset]" and a fourth
+         * "#offset" field: the offset is where the fragment starts on the real
+         * contig, so it is added to the coordinates and left off the name. */
+        char *path = cloneString(name);
+        long offset = 0;
+        char *bracket = strchr(path, '[');
+        if (bracket != NULL)
+            {
+            offset = atol(bracket + 1);
+            *bracket = '\0';
+            }
+        char *contig = pgContigOf(path);
+        if (contig == NULL)
+            continue;
+        char *third = strchr(strchr(path, '#') + 1, '#');
+        char *fourth = strchr(third + 1, '#');
+        if (fourth != NULL)
+            {
+            offset = atol(fourth + 1);
+            *fourth = '\0';
+            }
+        long ivStart = offset + (long)sEl->val.jeNumber;
+        long ivEnd = offset + (long)eEl->val.jeNumber;
+        if (ivEnd - ivStart > bestSize)
+            {
+            bestSize = ivEnd - ivStart;
+            *retPath = path;
+            *retStart = ivStart;
+            *retEnd = ivEnd;
+            }
+        }
+    }
+if (bestSize == 0)
+    {
+    safef(why, sizeof(why), "this region has no counterpart on %s", tgt);
+    *retError = why;
+    return FALSE;
+    }
+return TRUE;
+}
+
 static void doContigs()
 /* The sequences of one assembly, under both the names it is known by.
  *
@@ -1896,13 +2010,13 @@ dyStringFree(&out);
 dyStringFree(&skipped);
 }
 
-static void doQuickLift(boolean wide)
+static void doQuickLift(char *payload, boolean wide)
 /* Build a chain from the blocks the page already has, wrap the source's
  * annotation tracks in a hub that points at it, and hand back a Genome Browser
  * URL on the target.  Needs the cart (for the hub), so unlike the other
- * commands this runs inside the cart shell and writes its own JSON header. */
+ * commands this runs inside the cart shell and writes its own JSON header.
+ * The payload is the conversion page's, or one doRefAnnot() builds. */
 {
-char *payload = cgiOptionalString("payload");
 if (isEmpty(payload))
     {
     emitJsonError("missing 'payload'");
@@ -2231,6 +2345,138 @@ dyStringAppend(out, "}");
 emitJson(out->string);
 dyStringFree(&out);
 dyStringFree(&url);
+}
+
+/* ---- A reference's annotations on a mapped haplotype ----------------------
+ *
+ * The results page opens a haplotype with the user's sequence drawn on it.
+ * With a reference chosen, the tracks the user has turned on in that reference
+ * come too: the hit's region is translated to the reference through the graph,
+ * and that interval is handed to doQuickLift() as a conversion from the
+ * reference onto the haplotype - the same path PanLift's "PanLift tracks"
+ * takes, chain from the graph and all, so neither depends on precomputed chain
+ * files. */
+
+static struct slPair *pgAnnotRefs()
+/* The references whose annotations can be brought, from
+ * pangenome.annotationRefs: "haplotype=db" pairs, comma separated.  A future
+ * reference is one more pair. */
+{
+static struct slPair *refs = NULL;
+static boolean done = FALSE;
+if (done)
+    return refs;
+done = TRUE;
+char *spec = cloneString(cfgOr("pangenome.annotationRefs", "GRCh38#0=hg38,CHM13#0=hs1"));
+char *words[32];
+int n = chopByChar(spec, ',', words, ArraySize(words));
+int i;
+for (i = 0; i < n; i++)
+    {
+    char *pair = trimSpaces(words[i]);
+    char *eq = strchr(pair, '=');
+    if (eq == NULL)
+        continue;
+    *eq = '\0';
+    char *hap = trimSpaces(pair), *db = trimSpaces(eq + 1);
+    if (countChars(hap, '#') == 1 && pgValidDb(db))
+        slAddTail(&refs, slPairNew(hap, cloneString(db)));
+    }
+return refs;
+}
+
+static char *pgRefLabel(char *hap)
+/* "GRCh38#0" -> "GRCh38", for the hub's label and the page. */
+{
+char *label = cloneString(hap);
+char *hash = strchr(label, '#');
+if (hash != NULL)
+    *hash = '\0';
+return label;
+}
+
+static void doRefAnnot()
+/* Bring the reference's annotations onto the haplotype a hit is on.  The
+ * payload names the hit - its assembly, its contig path in the graph and its
+ * extent - the reference, and the position the browser will open on. */
+{
+char *payload = cgiOptionalString("payload");
+if (isEmpty(payload))
+    {
+    emitJsonError("missing 'payload'");
+    return;
+    }
+struct jsonElement *root = NULL;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    root = jsonParse(payload);
+errCatchEnd(errCatch);
+boolean bad = errCatch->gotError || root == NULL;
+errCatchFree(&errCatch);
+if (bad)
+    {
+    emitJsonError("invalid JSON payload");
+    return;
+    }
+char *db = jsonOptionalStringField(root, "db", NULL);
+char *path = jsonOptionalStringField(root, "path", NULL);
+char *ref = jsonOptionalStringField(root, "ref", NULL);
+char *position = jsonOptionalStringField(root, "position", NULL);
+struct jsonElement *sEl = jsonFindNamedField(root, "", "start");
+struct jsonElement *eEl = jsonFindNamedField(root, "", "end");
+struct slPair *refPair = isEmpty(ref) ? NULL : slPairFind(pgAnnotRefs(), ref);
+if (refPair == NULL)
+    {
+    emitJsonError("annotations cannot be brought from '%s'", ref ? ref : "");
+    return;
+    }
+if (!pgValidDb(db) || isEmpty(path) || pgContigOf(path) == NULL || isEmpty(position))
+    {
+    emitJsonError("missing or malformed assembly, sequence or position");
+    return;
+    }
+if (sEl == NULL || eEl == NULL || sEl->type != jsonNumber || eEl->type != jsonNumber ||
+    sEl->val.jeNumber < 0 || eEl->val.jeNumber <= sEl->val.jeNumber)
+    {
+    emitJsonError("missing or malformed start and end");
+    return;
+    }
+long start = (long)sEl->val.jeNumber, end = (long)eEl->val.jeNumber;
+long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
+if (end - start > maxSpan)
+    {
+    emitJsonError("the hit is longer than the %ld bp a translation may cover", maxSpan);
+    return;
+    }
+char *refDb = (char *)refPair->val;
+/* The haplotype the hit is on, as the graph names it ("HG00097#1"). */
+char *hap = cloneString(path);
+*strchr(strchr(hap, '#') + 1, '#') = '\0';
+if (sameWord(hap, ref))
+    {
+    emitJsonError("this hit is already on %s", pgRefLabel(ref));
+    return;
+    }
+
+char *refPath = NULL, *err = NULL;
+long refStart = 0, refEnd = 0;
+if (!pgLiftInterval(path, ref, start, end, &refPath, &refStart, &refEnd, &err))
+    {
+    emitJsonError("%s", err);
+    return;
+    }
+
+/* A conversion from the reference onto the haplotype, as PanLift would send
+ * it: doQuickLift() pads the interval, fetches the blocks and builds the rest. */
+struct dyString *ql = dyStringNew(512);
+dyStringPrintf(ql, "{\"srcDb\":\"%s\",\"tgtDb\":\"%s\",\"src\":\"%s\","
+                   "\"srcHap\":\"%s\",\"srcStart\":%ld,\"srcEnd\":%ld,"
+                   "\"tgt\":\"%s\",\"position\":\"%s\",\"hideTracks\":\"off\"}",
+               jsonStringEscape(refDb), jsonStringEscape(db), jsonStringEscape(refPath),
+               jsonStringEscape(pgRefLabel(ref)), refStart, refEnd,
+               jsonStringEscape(hap), jsonStringEscape(position));
+doQuickLift(ql->string, FALSE);
+dyStringFree(&ql);
 }
 
 /* ---- The mapped sequence as a track on the target ------------------------
@@ -2772,6 +3018,11 @@ if (isEmpty(seq))
                          jsonOptionalStringField(root, "name", NULL));
 char *cigar = jsonOptionalStringField(root, "cigar", NULL);
 char *strand = jsonOptionalStringField(root, "strand", "+");
+/* The results page sets this when the browser is about to open: whatever was
+ * lifted onto the last haplotype it opened stays connected in the cart and
+ * would show here too, so let it go.  A reference's annotations, if chosen,
+ * are attached again by the cmd=refAnnot that follows. */
+boolean dropLifts = sameOk(jsonOptionalStringField(root, "dropLifts", "off"), "on");
 struct jsonElement *startEl = jsonFindNamedField(root, "", "start");
 
 if (!pgValidDb(db) || isEmpty(contig))
@@ -2832,6 +3083,8 @@ safef(ss, sizeof(ss), "%s %s", pslTn.forCgi, faTn.forCgi);
 cartSetString(cart, "db", viewDb);
 cartSetString(cart, "position", pos);
 cartSetString(cart, "ss", ss);
+if (dropLifts)
+    pgForgetStaleHubs(NULL, FALSE);
 /* Name the track for this tool rather than leaving hgBlat's label on it. */
 cartSetString(cart, "ssShortLabel", "Pangenome Seq");
 cartSetString(cart, "ssLongLabel", "Your Sequence from Pangenome Mapping");
@@ -3089,7 +3342,13 @@ if (sameOk(cgiOptionalString("cmd"), "liftCheck"))
  * one comes through the cart shell.  It writes its own JSON header. */
 if (sameOk(cgiOptionalString("cmd"), "quickLift"))
     {
-    doQuickLift(FALSE);
+    doQuickLift(cgiOptionalString("payload"), FALSE);
+    return;
+    }
+/* A reference's annotations on a mapped haplotype, for the results page. */
+if (sameOk(cgiOptionalString("cmd"), "refAnnot"))
+    {
+    doRefAnnot();
     return;
     }
 /* Same work, wider chain.  Sent after the user has followed the link, so the
@@ -3097,7 +3356,7 @@ if (sameOk(cgiOptionalString("cmd"), "quickLift"))
  * Nothing waits for it, and the reply goes nowhere. */
 if (sameOk(cgiOptionalString("cmd"), "extendChain"))
     {
-    doQuickLift(TRUE);
+    doQuickLift(cgiOptionalString("payload"), TRUE);
     /* Deliberately not returning: cartCheckout() would write this request's
      * copy of the cart over whatever the browser has done in the seconds since,
      * undoing tracks the user turned on while we were working.  We have nothing
@@ -3167,6 +3426,36 @@ if (sameOk(cgiOptionalString("page"), "results"))
     jsonWriteString(jw, "graphLabel",
                     cfgOr("pangenome.graphLabel",
                           "Human Pangenome Reference Consortium, release 2"));
+    /* The references whose annotations can come along when a haplotype is
+     * opened.  Offered only where the browser's QuickLift is on, since that is
+     * what draws them. */
+    if (quickLiftEnabled(cart))
+        {
+        jsonWriteListStart(jw, "annotRefs");
+        struct slPair *rp;
+        for (rp = pgAnnotRefs(); rp != NULL; rp = rp->next)
+            {
+            jsonWriteObjectStart(jw, NULL);
+            jsonWriteString(jw, "hap", rp->name);
+            jsonWriteString(jw, "label", pgRefLabel(rp->name));
+            jsonWriteString(jw, "db", (char *)rp->val);
+            jsonWriteObjectEnd(jw);
+            }
+        jsonWriteListEnd(jw);
+        jsonWriteString(jw, "annotDefault",
+                        cfgOr("pangenome.annotationDefault", "GRCh38#0"));
+        /* Named in the link ("refAnnot=CHM13", "refAnnot=none"), which wins
+         * over both the default and what this viewer last chose.  Only its
+         * characters are checked here; the page matches it to a reference. */
+        char *fromUrl = cgiOptionalString("refAnnot");
+        boolean urlOk = !isEmpty(fromUrl) && strlen(fromUrl) < 64;
+        char *c;
+        for (c = fromUrl; urlOk && *c != '\0'; ++c)
+            if (!(isalnum((unsigned char)*c) || *c == '#'))
+                urlOk = FALSE;
+        if (urlOk)
+            jsonWriteString(jw, "annotUrl", fromUrl);
+        }
     jsonWriteObjectEnd(jw);
     jsInlineF("var pangenomeResultsPage = %s;\n", jw->dy->string);
     jsonWriteFree(&jw);
@@ -3352,7 +3641,8 @@ if (sameOk(cmd, "alignTrack"))
     return 0;
     }
 
-if (sameOk(cmd, "quickLift") || sameOk(cmd, "extendChain") || sameOk(cmd, "liftCheck"))
+if (sameOk(cmd, "quickLift") || sameOk(cmd, "extendChain") || sameOk(cmd, "liftCheck") ||
+    sameOk(cmd, "refAnnot"))
     {
     struct errCatch *errCatch = errCatchNew();
     if (errCatchStart(errCatch))

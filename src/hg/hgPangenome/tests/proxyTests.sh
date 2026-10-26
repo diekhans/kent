@@ -693,6 +693,36 @@ else
     ql_reject "unknown assembly reported, not crashed on" \
         '{"srcDb":"noSuchDb","tgtDb":"alsoNoSuchDb","src":"a#1#c","position":"c:1-2"}' \
         "no sequence sizes available"
+
+    # cmd=refAnnot: a reference's annotations on a mapped haplotype.  Every one
+    # of these is refused before the mapping server is asked anything.
+    ra_reject() {                    # ra_reject <label> <payload> <expected text>
+        : > "$REC"
+        local o
+        o=$(cgi_post_cmd "$QCONF" refAnnot "$2")
+        check_contains "$1" "$o" "$3"
+        check_eq "$1 - middleware untouched" "$(mock_count)" "0"
+    }
+    RA_OK='"db":"GCA_046000115.1","path":"HG04187#1#CM099739.1","start":100,"end":200,"position":"CM099739.1:1-300"'
+    ra_reject "refAnnot: malformed JSON rejected" 'not json' "invalid JSON payload"
+    ra_reject "refAnnot: a reference not configured is refused" \
+        "{$RA_OK,\"ref\":\"XX#0\"}" "annotations cannot be brought from 'XX#0'"
+    ra_reject "refAnnot: no reference refused" "{$RA_OK}" "annotations cannot be brought"
+    ra_reject "refAnnot: assembly name with a slash refused" \
+        '{"db":"../../etc","path":"HG04187#1#CM099739.1","start":1,"end":2,"position":"c:1-2","ref":"GRCh38#0"}' \
+        "missing or malformed assembly"
+    ra_reject "refAnnot: a path that is not a full contig refused" \
+        '{"db":"GCA_046000115.1","path":"HG04187#1","start":1,"end":2,"position":"c:1-2","ref":"GRCh38#0"}' \
+        "missing or malformed assembly"
+    ra_reject "refAnnot: an empty extent refused" \
+        '{"db":"GCA_046000115.1","path":"HG04187#1#CM099739.1","start":5,"end":5,"position":"c:1-2","ref":"GRCh38#0"}' \
+        "missing or malformed start and end"
+    ra_reject "refAnnot: longer than a translation may cover refused" \
+        '{"db":"GCA_046000115.1","path":"HG04187#1#CM099739.1","start":0,"end":999999999,"position":"c:1-2","ref":"GRCh38#0"}' \
+        "longer than the"
+    ra_reject "refAnnot: a hit already on the reference is not translated" \
+        '{"db":"hg38","path":"GRCh38#0#chr1","start":1,"end":2,"position":"chr1:1-2","ref":"GRCh38#0"}' \
+        "this hit is already on GRCh38"
 fi
 
 # --------------------------------------------------------------------- report

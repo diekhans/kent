@@ -1223,9 +1223,12 @@ function pollJob(jobId, total) {
                 // results lived only in this page's variables.
                 if (handingOff) {
                     busyNow("Opening the results\u2026");
+                    // A demo link's choice of annotations goes along with it.
+                    var refAnnot = /[?&]refAnnot=([^&]*)/.exec(window.location.search);
                     window.location = window.location.pathname + "?page=results" +
                         "&job_id=" + encodeURIComponent(jobId) +
-                        (HGSID ? "&hgsid=" + encodeURIComponent(HGSID) : "");
+                        (HGSID ? "&hgsid=" + encodeURIComponent(HGSID) : "") +
+                        (refAnnot ? "&refAnnot=" + refAnnot[1] : "");
                 }
                 return;
             }

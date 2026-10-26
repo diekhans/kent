@@ -290,4 +290,66 @@ t.test('once shown, the bar offers the best only; while loading, it says so', fu
     setPlaces(R, [], [], 0); R.pgrPlaceList = null;
 });
 
+t.suite('reference annotations');
+var REFS = [{ hap: 'GRCh38#0', label: 'GRCh38', db: 'hg38' },
+            { hap: 'CHM13#0', label: 'CHM13', db: 'hs1' }];
+function annotPage(over, saved) {
+    var page = { annotRefs: REFS, annotDefault: 'GRCh38#0' };
+    Object.keys(over || {}).forEach(function (k) { page[k] = over[k]; });
+    var store = { 'hgPangenome.annotRef': saved };
+    var R2 = loadResults({ pangenomePclai: false, pangenomeResultsPage: page });
+    R2.window.localStorage = { getItem: function (k) { return store[k] === undefined ? null : store[k]; },
+                               setItem: function (k, v) { store[k] = v; } };
+    R2.pgrAnnotInit();
+    return { R: R2, store: store };
+}
+t.test('names match a reference by label or haplotype, any case; none is none', function () {
+    var x = annotPage();
+    t.eq(x.R.pgrAnnotMatch('chm13').db, 'hs1', 'label');
+    t.eq(x.R.pgrAnnotMatch('GRCh38#0').db, 'hg38', 'haplotype');
+    t.eq(x.R.pgrAnnotMatch('none'), null, 'none');
+    t.eq(x.R.pgrAnnotMatch('GREF'), undefined, 'unknown');
+});
+t.test('the link wins over what was chosen last, which wins over the default', function () {
+    t.eq(annotPage().R.pgrAnnotRef.label, 'GRCh38', 'default');
+    t.eq(annotPage({}, 'CHM13#0').R.pgrAnnotRef.label, 'CHM13', 'remembered');
+    t.eq(annotPage({ annotUrl: 'none' }, 'CHM13#0').R.pgrAnnotRef, null, 'link says none');
+    t.eq(annotPage({ annotUrl: 'chm13' }).R.pgrAnnotRef.label, 'CHM13', 'link names one');
+    t.eq(annotPage({ annotUrl: 'GREF' }, 'CHM13#0').R.pgrAnnotRef.label, 'CHM13', 'an unknown name is skipped');
+    t.eq(annotPage({ annotRefs: [] }).R.pgrAnnotRef, null, 'nothing offered: none');
+});
+t.test('a choice is remembered for next time', function () {
+    var x = annotPage();
+    x.R.pgrAnnotSet('none');
+    t.eq(x.store['hgPangenome.annotRef'], 'none', 'none');
+    x.R.pgrAnnotSet('CHM13#0');
+    t.eq(x.store['hgPangenome.annotRef'], 'CHM13#0', 'CHM13');
+    t.eq(x.R.pgrAnnotRef.db, 'hs1', 'and in effect');
+});
+t.test('which rows get annotations', function () {
+    var x = annotPage();
+    t.eq(x.R.pgrAnnotFor(row()).label, 'GRCh38', 'a haplotype');
+    t.eq(x.R.pgrAnnotFor(row({ hap: 'GRCh38#0', db: 'hg38', contig: 'chr1' })), null, 'GRCh38 itself');
+    t.eq(x.R.pgrAnnotFor(row({ contig: null })), null, 'no position');
+    t.eq(x.R.pgrAnnotFor(row({ db: 'https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_1_HG002' })), null, 'a hub assembly');
+    x.R.pgrAnnotSet('CHM13#0');
+    t.eq(x.R.pgrAnnotFor(row({ hap: 'GRCh38#0', db: 'hg38', contig: 'chr1' })).label, 'CHM13', 'CHM13 onto GRCh38');
+    x.R.pgrAnnotSet('none');
+    t.eq(x.R.pgrAnnotFor(row()), null, 'none chosen');
+});
+t.test('the opened URL keeps its genome and position and gains the hubs', function () {
+    var u = R.pgrJoinUrl('hgTracks?db=hub_7_GCA_1.1&position=CM1.1%3A1-9',
+        'hgTracks?db=GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.204866=1&hgHubConnect.hub.12=1');
+    t.eq(u, 'hgTracks?db=hub_7_GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.204866=1&hgHubConnect.hub.12=1', 'joined');
+    t.eq(R.pgrQueryParam('hgTracks?db=x&position=CM1.1%3A1-9', 'position'), 'CM1.1:1-9', 'position read back');
+    t.eq(R.pgrJoinUrl('a?db=x', 'b?db=y&position=z'), 'a?db=x', 'nothing to add');
+});
+t.test('the strip offers each reference and none, the current one selected', function () {
+    var x = annotPage({}, 'CHM13#0');
+    var h = x.R.pgrAnnotControl();
+    t.contains(h, '<option value="CHM13#0" selected>CHM13</option>', 'CHM13 selected');
+    t.contains(h, '<option value="none">none</option>', 'none offered');
+    t.eq(annotPage({ annotRefs: [] }).R.pgrAnnotControl(), '', 'nothing when QuickLift is off');
+});
+
 process.exit(t.report());
