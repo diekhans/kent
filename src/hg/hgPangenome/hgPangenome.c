@@ -766,7 +766,7 @@ else /* cmd == "liftover" */
         return;
         }
     long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
-    int maxTargets = atoi(cfgOr("pangenome.maxLiftTargets", "5"));
+    int maxTargets = atoi(cfgOr("pangenome.maxLiftTargets", "10"));
     char *bad = pgValidateLiftover(payload, maxSpan, TRUE, maxTargets);
     if (bad != NULL)
         {
@@ -3241,7 +3241,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           cfgOr("pangenome.minTargetCoverage", "10"),
           cfgOr("pangenome.maxTargetNodes", "300"),
           atol(cfgOr("pangenome.wideRegionBp", "100000")),
-          atoi(cfgOr("pangenome.maxLiftTargets", "5")),
+          atoi(cfgOr("pangenome.maxLiftTargets", "10")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
           sameString(cfgOr("pangenome.quickLift", "off"), "on") ? "true" : "false",
