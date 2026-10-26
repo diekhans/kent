@@ -2772,11 +2772,34 @@ freez(&arkPath);
 return cloneString(dir);
 }
 
-static boolean pgPclaiPoint(char *dir, char *chrom, int start, int end,
-                            double *retX, double *retY, int *retConf,
-                            char *retRgb, int rgbSize)
+static boolean pgPclaiRgbOk(char *rgb)
+/* "R,G,B" with nothing but digits and commas, since it reaches a style
+ * attribute as the file wrote it. */
+{
+if (countChars(rgb, ',') != 2)
+    return FALSE;
+char *p;
+for (p = rgb; *p != '\0'; ++p)
+    if (!isdigit((unsigned char)*p) && *p != ',')
+        return FALSE;
+return TRUE;
+}
+
+#define PCLAI_MAX_WINDOWS 200   /* a 1 Mb conversion spans about ten */
+
+static boolean pgPclaiRead(char *dir, char *chrom, int start, int end,
+                           double *retX, double *retY, int *retConf,
+                           char *retRgb, int rgbSize, struct dyString *windows)
 /* The pcLAI coordinate of one haplotype over one interval of its own assembly,
- * or FALSE if there is no file or no window there.
+ * or FALSE if there is no file or no window there.  The coordinate is the
+ * window that overlaps the interval most - for a mapping hit, shorter than a
+ * window, that is the one window it falls in.
+ *
+ * With windows non-NULL, also writes every window the interval overlaps as a
+ * JSON list, each clipped to the interval: what PanLift shows for a region
+ * long enough to cross windows, and how it tells where the ancestry changes.
+ * "c" is the authors' discretized call, the PCA centroid of the ancestry
+ * cluster the window falls in - four values across the whole release.
  *
  * retRgb takes the window's itemRgb, which is the authors' own colour for that
  * coordinate - "generated from a perceptual mapping", per the pcLAI output
@@ -2791,14 +2814,20 @@ if (!fileExists(path))
     return FALSE;
 
 boolean got = FALSE;
+int bestOverlap = 0, nWin = 0;
 struct errCatch *errCatch = errCatchNew();
 if (errCatchStart(errCatch))
     {
     struct bbiFile *bbi = bigBedFileOpen(path);
     struct lm *lm = lmInit(0);
-    struct bigBedInterval *iv = bigBedIntervalQuery(bbi, chrom, start, end, 1, lm);
-    if (iv != NULL && iv->rest != NULL)
+    struct bigBedInterval *iv, *list = bigBedIntervalQuery(bbi, chrom, start, end,
+                                                           PCLAI_MAX_WINDOWS, lm);
+    if (windows != NULL)
+        dyStringAppend(windows, "[");
+    for (iv = list; iv != NULL; iv = iv->next)
         {
+        if (iv->rest == NULL)
+            continue;
         /* rest is name, score, strand, thickStart, thickEnd, itemRgb, window,
          * pca, centroid - pca is the eighth.  The GRCh38-projected files carry
          * an extra "haplotype" column before window and put pca ninth; these
@@ -2806,39 +2835,57 @@ if (errCatchStart(errCatch))
         char *row[16];
         char *rest = cloneString(iv->rest);
         int n = chopByChar(rest, '\t', row, ArraySize(row));
-        if (n >= 8)
+        double x = 0, y = 0, cx = 0, cy = 0;
+        if (n < 8 || sscanf(row[7], "(%lf,%lf)", &x, &y) != 2)
             {
-            double x = 0, y = 0;
-            if (sscanf(row[7], "(%lf,%lf)", &x, &y) == 2)
-                {
-                *retX = x;
-                *retY = y;
-                *retConf = atoi(row[1]);
-                /* "R,G,B" - kept as the file wrote it, and checked so that
-                 * nothing but digits and commas reaches a style attribute. */
-                retRgb[0] = '\0';
-                if (countChars(row[5], ',') == 2)
-                    {
-                    char *p;
-                    boolean clean = TRUE;
-                    for (p = row[5]; *p != '\0'; ++p)
-                        if (!isdigit((unsigned char)*p) && *p != ',')
-                            clean = FALSE;
-                    if (clean)
-                        safef(retRgb, rgbSize, "%s", row[5]);
-                    }
-                got = TRUE;
-                }
+            freez(&rest);
+            continue;
+            }
+        boolean hasCentroid = (n >= 9 && sscanf(row[8], "(%lf,%lf)", &cx, &cy) == 2);
+        boolean rgbOk = pgPclaiRgbOk(row[5]);
+        int s = max((int)iv->start, start), e = min((int)iv->end, end);
+        if (e - s > bestOverlap)
+            {
+            bestOverlap = e - s;
+            *retX = x;
+            *retY = y;
+            *retConf = atoi(row[1]);
+            retRgb[0] = '\0';
+            if (rgbOk)
+                safef(retRgb, rgbSize, "%s", row[5]);
+            got = TRUE;
+            }
+        if (windows != NULL && e > s)
+            {
+            /* The window id is the authors' "chr2_w0001"; keep only the
+             * characters such an id has before it reaches a page. */
+            char *w = row[6], *p;
+            for (p = w; *p != '\0'; ++p)
+                if (!isalnum((unsigned char)*p) && *p != '_')
+                    *p = '_';
+            dyStringPrintf(windows, "%s{\"s\":%d,\"e\":%d,\"w\":\"%s\",\"x\":%g,\"y\":%g,"
+                           "\"conf\":%d", nWin ? "," : "", s, e, w, x, y, atoi(row[1]));
+            if (hasCentroid)
+                dyStringPrintf(windows, ",\"cx\":%g,\"cy\":%g", cx, cy);
+            if (rgbOk)
+                dyStringPrintf(windows, ",\"rgb\":\"%s\"", row[5]);
+            dyStringAppend(windows, "}");
+            nWin++;
             }
         freez(&rest);
         }
+    if (windows != NULL)
+        dyStringAppend(windows, "]");
     lmCleanup(&lm);
     bbiFileClose(&bbi);
     }
 errCatchEnd(errCatch);
 if (errCatch->gotError)
+    {
     fprintf(stderr, "hgPangenome: pcLAI read failed for %s %s: %s\n", path, chrom,
             trimSpaces(errCatch->message->string));
+    got = FALSE;
+    }
 errCatchFree(&errCatch);
 return got;
 }
@@ -2866,7 +2913,8 @@ return ok;
 
 static void doPclai()
 /* Ancestry coordinates for a list of haplotypes, each read at its own
- * surjected interval, plus the reference cloud they are read against.
+ * surjected interval, plus the reference cloud they are read against.  With
+ * "windows": true, each point also lists every window its interval crosses.
  *
  * The payload is a list rather than one shared locus because that is the whole
  * point of using the assembly-coordinate files - see the note above. */
@@ -2880,6 +2928,7 @@ if (isEmpty(payload))
 
 struct dyString *out = dyStringNew(4096);
 dyStringAppend(out, "{\"status\":\"ok\",\"points\":[");
+boolean wantWindows = FALSE;
 int found = 0, asked = 0;
 int maxHaps = atoi(cfgOr("pangenome.pclaiMaxHaplotypes", "100"));
 char *panelDir = NULL;                  /* the first contrib dir that resolved */
@@ -2890,6 +2939,9 @@ if (errCatchStart(errCatch))
     {
     struct jsonElement *root = jsonParse(payload);
     struct jsonElement *spotsEl = jsonFindNamedField(root, "", "spots");
+    /* PanLift asks for every window in each region, not just its point. */
+    struct jsonElement *winEl = jsonFindNamedField(root, "", "windows");
+    wantWindows = (winEl != NULL && winEl->type == jsonBoolean && winEl->val.jeBoolean);
     if (spotsEl == NULL)
         parseError = "payload is missing 'spots'";
     else
@@ -2929,8 +2981,9 @@ if (errCatchStart(errCatch))
             int conf = 0;
             char rgb[32];
             rgb[0] = '\0';
-            if (pgPclaiPoint(dir, chrom, start, end, &x, &y, &conf,
-                             rgb, sizeof(rgb)))
+            struct dyString *win = wantWindows ? dyStringNew(512) : NULL;
+            if (pgPclaiRead(dir, chrom, start, end, &x, &y, &conf,
+                            rgb, sizeof(rgb), win))
                 {
                 dyStringPrintf(out,
                     "%s{\"hap\":\"%s\",\"x\":%g,\"y\":%g,\"conf\":%d",
@@ -2939,9 +2992,12 @@ if (errCatchStart(errCatch))
                     dyStringPrintf(out, ",\"id\":\"%s\"", jsonStringEscape(id));
                 if (rgb[0] != '\0')
                     dyStringPrintf(out, ",\"rgb\":\"%s\"", rgb);
+                if (win != NULL)
+                    dyStringPrintf(out, ",\"windows\":%s", win->string);
                 dyStringAppend(out, "}");
                 found++;
                 }
+            dyStringFree(&win);
             freez(&dir);
             }
         }
@@ -3508,10 +3564,19 @@ if (sameOk(cgiOptionalString("page"), "convert"))
     cartWebStart(cart, NULL, "PanLift");
     if (issueBotWarning)
         botDelayMessage(getenv("REMOTE_ADDR"), botDelayMillis);
+    /* gbModern.css for the ancestry plot's details panel, which is the results
+     * page's; everything in it is scoped to .gbApp, so the form is untouched. */
+    webIncludeResourceFile("gbModern.css");
     webIncludeResourceFile("hgPangenome.css");
     drawConvertPage();
     injectConfig();
+    /* Ancestry at each converted region: the same switch as the results page's
+     * plot, since it is the same data and the same plot. */
+    boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
+    jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
+    if (pclai)
+        jsIncludeFile("hgPangenomePclai.js", NULL);
     jsIncludeFile("hgPangenomeConvert.js", NULL);
     cartWebEnd();
     return;

@@ -702,6 +702,251 @@ function contigProblem(contig) {
                           }).join(", ") + ".");
 }
 
+// ---- Ancestry at each region (pcLAI) --------------------------------------
+//
+// Each converted region is read in its own assembly's pcLAI, as the results
+// page reads each hit, and shown three ways: a line of text with the ancestry
+// under every region, a strip of its windows where the ancestry changes inside
+// it, and - with two or more targets - a summary and the results page's plot.
+//
+// pcLAI calls ancestry per window of about 1000 SNPs (roughly 100 kb).  Each
+// window carries a continuous position (PC1, PC2), the authors' colour for it,
+// and a discretized call: the centroid of one of the four ancestry clusters
+// the release uses.  The clusters have no names in the files, so a call is
+// named from the reference panel - by the 1000 Genomes populations whose
+// haplotypes lie nearest its centroid - and the nearest populations are given
+// alongside, so the name can be checked.  It is ancestry at this region, not
+// the person's ancestry, and the wording says "here" for that reason.
+
+// The 1000 Genomes super-populations of the panel's 21 populations.
+var ANC_SUPERPOP = {
+    "Esan in Nigeria": "African", "Mende in Sierra Leone": "African",
+    "Yoruba in Ibadan, Nigeria": "African", "Gambian in Western Division - Mandinka": "African",
+    "Luhya in Webuye, Kenya": "African",
+    "Iberian Populations in Spain": "European", "Toscani in Italia": "European",
+    "British from England and Scotland": "European", "Finnish in Finland": "European",
+    "Punjabi in Lahore, Pakistan": "South Asian", "Sri Lankan Tamil in the UK": "South Asian",
+    "Indian Telugu in the UK": "South Asian", "Gujarati Indians in Houston, Texas, USA": "South Asian",
+    "Bengali in Bangladesh": "South Asian",
+    "Peruvian in Lima, Peru": "American", "Mexican Ancestry in Los Angeles, California, USA": "American",
+    "Kinh in Ho Chi Minh City, Vietnam": "East Asian", "Japanese in Tokyo, Japan": "East Asian",
+    "Chinese Dai in Xishuangbanna": "East Asian", "Han Chinese in Beijing, China": "East Asian",
+    "Han Chinese South, China": "East Asian"
+};
+var ANC_NEAREST = 60;          // reference haplotypes that name a cluster
+var ancSeq = 0;                // which conversion an answer belongs to
+var ancNames = Object.create(null);
+
+function ancOn() {
+    return typeof pangenomePclai !== "undefined" && !!pangenomePclai;
+}
+
+// The name of the cluster whose centroid is (cx, cy): the super-population of
+// most of the reference haplotypes nearest it, and the populations among them.
+function ancClusterName(panel, cx, cy) {
+    var key = cx + "," + cy;
+    if (ancNames[key]) return ancNames[key];
+    var labels = (panel && panel.labels) || [], pts = (panel && panel.points) || [];
+    var near = pts.map(function (p) {
+        return { d: (p[0] - cx) * (p[0] - cx) + (p[1] - cy) * (p[1] - cy), pop: labels[p[2]] };
+    }).sort(function (a, b) { return a.d - b.d; }).slice(0, ANC_NEAREST);
+    var bySuper = Object.create(null), byPop = Object.create(null);
+    near.forEach(function (n) {
+        var sp = ANC_SUPERPOP[n.pop] || n.pop;
+        bySuper[sp] = (bySuper[sp] || 0) + 1;
+        byPop[n.pop] = (byPop[n.pop] || 0) + 1;
+    });
+    var supers = Object.keys(bySuper).sort(function (a, b) { return bySuper[b] - bySuper[a]; });
+    var pops = Object.keys(byPop).sort(function (a, b) { return byPop[b] - byPop[a]; })
+        .slice(0, 4).map(function (p) {
+            return p + " " + Math.round(100 * byPop[p] / near.length) + "%";
+        });
+    var out = { name: supers.length ? supers[0] : "unnamed", near: pops.join(", ") };
+    ancNames[key] = out;
+    return out;
+}
+
+// One region's windows, summed by cluster over the bases each covers.
+function ancSummary(point, panel) {
+    var wins = (point && point.windows) || [];
+    var parts = [], byName = Object.create(null), total = 0, minConf = 1000;
+    wins.forEach(function (w) {
+        var len = w.e - w.s;
+        if (len <= 0) return;
+        var c = (w.cx != null) ? ancClusterName(panel, w.cx, w.cy) : { name: "unnamed", near: "" };
+        w.cluster = c;
+        if (!byName[c.name]) {
+            byName[c.name] = { name: c.name, near: c.near, bases: 0, rgb: w.rgb };
+            parts.push(byName[c.name]);
+        }
+        byName[c.name].bases += len;
+        total += len;
+        if (w.conf < minConf) minConf = w.conf;
+    });
+    parts.sort(function (a, b) { return b.bases - a.bases; });
+    parts.forEach(function (p) { p.pct = total ? 100 * p.bases / total : 0; });
+    return { parts: parts, windows: wins, total: total, minConf: minConf };
+}
+
+function ancSwatch(rgb) {
+    var sw = el("span", { class: "pgcAncSw" });
+    if (rgb && /^\d+,\d+,\d+$/.test(rgb)) sw.style.background = "rgb(" + rgb + ")";
+    return sw;
+}
+
+// "European ancestry here", or "Mixed here: European 70% · African 30%".
+function ancText(sum) {
+    if (sum.parts.length === 1) return sum.parts[0].name + " ancestry here";
+    return "Mixed here: " + sum.parts.map(function (p) {
+        return p.name + " " + Math.round(p.pct) + "%";
+    }).join(" · ");
+}
+
+function ancTitle(sum, point) {
+    var first = sum.windows[0], last = sum.windows[sum.windows.length - 1];
+    var lines = [];
+    lines.push("pcLAI " + (sum.windows.length === 1 ? "window " + first.w
+               : sum.windows.length + " windows, " + first.w + " to " + last.w));
+    lines.push("PC1 " + point.x.toFixed(3) + ", PC2 " + point.y.toFixed(3) +
+               (sum.windows.length > 1 ? " (the window covering most of the region)" : ""));
+    sum.parts.forEach(function (p) {
+        lines.push(p.name + ": nearest reference haplotypes " + p.near);
+    });
+    lines.push("Confidence " + (sum.minConf === 1000 ? "1000" : "at least " + sum.minConf) + "/1000");
+    return lines.join("\n");
+}
+
+// The windows of a region whose ancestry changes inside it, each as wide as
+// the share of the region it covers.  Gaps - a dropped window, a centromere -
+// stay blank.
+function ancStrip(sum, start, end) {
+    var strip = el("div", { class: "pgcAncStrip", role: "img",
+        "aria-label": "Ancestry along the region: " + ancText(sum) });
+    var span = Math.max(1, end - start);
+    sum.windows.forEach(function (w) {
+        if (w.e <= w.s) return;
+        var cell = el("span", { class: "pgcAncCell",
+            title: w.w + "  " + (w.s + 1).toLocaleString() + "-" + w.e.toLocaleString() +
+                   "\n" + (w.cluster ? w.cluster.name : "") +
+                   "  PC1 " + w.x.toFixed(3) + ", PC2 " + w.y.toFixed(3) +
+                   "\nConfidence " + w.conf + "/1000" });
+        cell.style.left = (100 * (w.s - start) / span).toFixed(2) + "%";
+        cell.style.width = Math.max(0.4, 100 * (w.e - w.s) / span).toFixed(2) + "%";
+        if (w.rgb && /^\d+,\d+,\d+$/.test(w.rgb)) cell.style.background = "rgb(" + w.rgb + ")";
+        strip.appendChild(cell);
+    });
+    return strip;
+}
+
+// Why a region has no ancestry to show, from what it is.
+function ancNone(db) {
+    if (db === "hg38") return "No ancestry: GRCh38 is a mosaic of several people";
+    if (db === "hs1") return "No ancestry in CHM13's own coordinates";
+    return "No ancestry for this assembly";
+}
+
+// Fill one slot: the line of text, and the strip where the ancestry changes.
+function ancFill(slot, point, panel, start, end) {
+    clear(slot);
+    if (!point || !point.windows || !point.windows.length) {
+        slot.appendChild(el("span", { class: "pgMuted",
+            text: "No ancestry call here: no pcLAI window covers this region" }));
+        return null;
+    }
+    var sum = ancSummary(point, panel);
+    if (!sum.parts.length) return null;
+    var line = el("span", { class: "pgcAncLine", title: ancTitle(sum, point) });
+    sum.parts.forEach(function (p) { line.appendChild(ancSwatch(p.rgb)); });
+    line.appendChild(el("span", { text: ancText(sum) }));
+    if (sum.minConf < 900)
+        line.appendChild(el("span", { class: "pgMuted", text: " (low confidence)" }));
+    slot.appendChild(line);
+    if (sum.parts.length > 1) slot.appendChild(ancStrip(sum, start, end));
+    return sum;
+}
+
+// Read every region's ancestry in one request and fill the slots
+// renderResults() left.  `asks` is one {slot, hap, db, contig, start, end,
+// role, label, url} per region, the source first.
+function ancRead(asks) {
+    var seq = ++ancSeq;
+    var spots = [];
+    asks.forEach(function (a, i) {
+        a.id = "a" + i;
+        if (a.db && /^GC[AF]_/.test(a.db)) {
+            spots.push({ id: a.id, hap: a.hap, acc: a.db, contig: a.contig,
+                         start: a.start, end: a.end });
+        } else {
+            clear(a.slot);
+            a.slot.appendChild(el("span", { class: "pgMuted", text: ancNone(a.db) }));
+        }
+    });
+    if (!spots.length) return;
+    asks.forEach(function (a) {
+        if (a.db && /^GC[AF]_/.test(a.db))
+            a.slot.appendChild(el("span", { class: "pgMuted", text: "Reading ancestry…" }));
+    });
+    postCmd("pclai", { windows: true, spots: spots }).then(function (resp) {
+        if (seq !== ancSeq) return;                    // a newer conversion owns the page
+        if (!resp || resp.status !== "ok") throw new Error((resp && resp.error) || "no answer");
+        var byId = Object.create(null);
+        (resp.points || []).forEach(function (p) { byId[p.id] = p; });
+        asks.forEach(function (a) {
+            if (a.db && /^GC[AF]_/.test(a.db))
+                a.sum = ancFill(a.slot, byId[a.id] || null, resp.panel, a.start, a.end);
+        });
+        ancSummaryLine(asks, resp);
+    }).catch(function (err) {
+        if (seq !== ancSeq) return;
+        asks.forEach(function (a) {
+            if (a.db && /^GC[AF]_/.test(a.db)) {
+                clear(a.slot);
+                a.slot.appendChild(el("span", { class: "pgMuted",
+                    text: "Could not read the ancestry here: " + err.message }));
+            }
+        });
+    });
+}
+
+// With two or more targets: how their ancestry here adds up, and the plot.
+function ancSummaryLine(asks, resp) {
+    var box = $("pgcAncSummary");
+    if (!box) return;
+    var targets = asks.filter(function (a) { return a.role === "target" && a.sum; });
+    if (targets.length < 2) return;
+    var count = Object.create(null), order = [];
+    targets.forEach(function (a) {
+        var k = a.sum.parts.length === 1 ? a.sum.parts[0].name : "mixed";
+        if (!(k in count)) { count[k] = 0; order.push(k); }
+        count[k]++;
+    });
+    order.sort(function (x, y) { return count[y] - count[x]; });
+    clear(box);
+    box.appendChild(el("span", { text: "Ancestry at this region: " + order.map(function (k) {
+        return count[k] + " " + k;
+    }).join(" · ") }));
+    if (typeof pgpInit !== "function") return;
+    // The results page's plot, given the answer already in hand: one point per
+    // region, the source ringed.
+    var btn = el("button", { type: "button", class: "gbPill", id: "pgrPclaiBtn",
+                             text: "Show ancestry plot" });
+    box.appendChild(btn);
+    var plotted = asks.filter(function (a) { return a.sum; });
+    var spots = plotted.map(function (a) {
+        return { id: a.id, hap: a.hap, acc: a.db, contig: a.contig, start: a.start, end: a.end,
+                 coverage: null, placement: 0, placements: 1, url: a.url,
+                 info: [["Assembly", a.db], ["Region", fmtPos(a.contig, a.start, a.end)],
+                        ["Ancestry here", ancText(a.sum)],
+                        ["Role", a.role === "source" ? "the source of this conversion"
+                                                     : "a target of this conversion"]] };
+    });
+    plotted.forEach(function (a) {
+        if (a.role === "source") pgpPicked[a.hap] = true;
+    });
+    pgpInit(spots, { data: resp,
+                     legend: { hit: "a region, in pcLAI's own colour", pick: "the source" } });
+}
+
 // ---- Results ----------------------------------------------------------------
 
 // Build a Genome Browser link for one returned interval, or null if we have no
@@ -733,10 +978,32 @@ function renderResults(srcLabel, targets, intervals) {
         el("span", { text: "Converted from " }),
         el("code", { text: srcLabel })
     ]));
+    // What the ancestry readout fills in once it has an answer: a slot under
+    // the source, one under each region, a summary line and the plot.
+    var anc = ancOn() && lastSource ? [] : null;
+    if (anc) {
+        var srcHap = currentSourceHap();
+        var srcSlot = el("div", { class: "pgcAnc pgcAncSrc" });
+        box.appendChild(srcSlot);
+        var srcParts = String(lastSource.src || "").split("#");
+        anc.push({ slot: srcSlot, role: "source", hap: srcParts.slice(0, 2).join("#"),
+                   db: assemblyForHap(srcHap), contig: srcParts.slice(2).join("#"),
+                   start: lastSource.start, end: lastSource.end,
+                   url: (browserLinkFor({ haplotype: lastSource.src, start: lastSource.start,
+                                          end: lastSource.end }) || {}).url });
+    }
     if (wideRegionWarning)
         box.appendChild(el("div", { class: "pgErrBox pgcWide", text:
             "This region is large; translation of wide intervals is known to " +
             "drop some positions, so treat the result as incomplete." }));
+    // The summary and the plot go after the warning, so it stays beside the
+    // region it is about, and before the cards they summarise.
+    if (anc) {
+        box.appendChild(el("div", { class: "pgcAncSummary gbApp", id: "pgcAncSummary" }));
+        var plotHost = el("div", { class: "pgrPanel gbApp", id: "pgrPclaiPlot" });
+        plotHost.style.display = "none";
+        box.appendChild(plotHost);
+    }
 
     // Group the intervals by target haplotype so each requested target gets an
     // answer - including the honest empty one.
@@ -802,12 +1069,22 @@ function renderResults(srcLabel, targets, intervals) {
                 if (iv.strand === "-")
                     row.appendChild(el("span", { class: "pgMuted",
                         text: "  reverse strand" }));
+                if (anc) {
+                    var slot = el("div", { class: "pgcAnc" });
+                    row.appendChild(slot);
+                    var ivParts = String(iv.haplotype || "").split("#");
+                    var ivHap = ivParts.slice(0, 2).join("#");
+                    anc.push({ slot: slot, role: "target", hap: ivHap,
+                               db: assemblyForHap(ivHap), contig: ivParts.slice(2).join("#"),
+                               start: iv.start, end: iv.end, url: link ? link.url : null });
+                }
                 body.appendChild(row);
             });
         }
         card.appendChild(body);
         box.appendChild(card);
     });
+    if (anc) ancRead(anc);
 }
 
 // Offer to carry the source's own gene tracks over to this target.  The chain
@@ -1128,6 +1405,10 @@ if (typeof module !== "undefined" && module.exports)
         renderResults: renderResults,
         groupBlocks: groupBlocks,
         blocksAsIntervals: blocksAsIntervals,
+        ancClusterName: ancClusterName,
+        ancSummary: ancSummary,
+        ancText: ancText,
+        ancNone: ancNone,
         init: init
     };
 

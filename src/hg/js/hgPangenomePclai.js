@@ -43,6 +43,10 @@ var pgpEscBound = false;
 // the ellipse and the dispersion together, so the figure always describes
 // exactly what is drawn - and both say what they excluded rather than dropping
 // it quietly.
+// What the two marks of our own are called in the legend.  The results page's
+// points are hits it can tick; PanLift's are the targets of a conversion and
+// its source, and it says so through pgpInit's options.
+var pgpLegend = { hit: "a hit, in pcLAI's own colour", pick: "ticked in the table" };
 var pgpMinCov = null;       // coverage floor, % - null until the config is read
 var pgpBestOnly = true;     // only the best placement of each query
 
@@ -644,7 +648,7 @@ function pgpDraw() {
     o.push('<circle cx="' + (lx + 4) + '" cy="' + (hy - 3.5) + '" r="5" fill="#d8c0f0" ' +
            'stroke="#1e2833" stroke-width="1.6"/>');
     o.push('<text x="' + (lx + 15) + '" y="' + hy + '" font-size="10" fill="#1e2833">' +
-           "a hit, in pcLAI's own colour</text>");
+           pgpEsc(pgpLegend.hit) + "</text>");
     o.push('<circle cx="' + (lx + 7) + '" cy="' + (hy + 38) + '" r="11" ' +
            'fill="#d8c0f0" fill-opacity="0.85" stroke="#1e2833" stroke-width="1.6"/>');
     o.push('<text x="' + (lx + 7) + '" y="' + (hy + 41.6) + '" font-size="9.5" ' +
@@ -655,7 +659,7 @@ function pgpDraw() {
            'stroke="#1664c0" stroke-width="2.6"/>');
     o.push('<circle cx="' + (lx + 4) + '" cy="' + (hy + 12.5) + '" r="5" fill="#d8c0f0" ' +
            'stroke="#1e2833" stroke-width="1.6"/>');
-    o.push('<text x="' + (lx + 19) + '" y="' + (hy + 16) + '" font-size="10" fill="#1e2833">ticked in the table</text>');
+    o.push('<text x="' + (lx + 19) + '" y="' + (hy + 16) + '" font-size="10" fill="#1e2833">' + pgpEsc(pgpLegend.pick) + '</text>');
     o.push('<text x="' + lx + '" y="' + (hy + 64) + '" font-size="9.6" fill="#5b6572">' +
            'Click a mark for details.</text>');
     o.push('</svg>');
@@ -690,9 +694,13 @@ function pgpDraw() {
 // kept in sync with the DOM.
 function pgpControlsHtml(shown, total, dropped) {
     var o = ['<div id="pgpControls" class="pgpControls">'];
-    o.push('<label class="pgpCtl">Plot hits covering at least ' +
-           '<input id="pgpCovFloor" type="number" min="0" max="100" step="5" ' +
-           'value="' + pgpMinCov + '"> % of the query</label>');
+    // Only where the points have a coverage to filter on: PanLift's targets
+    // are regions, not hits, and have none.
+    if ((pgpSpots || []).some(function (s) { return s.coverage != null; })) {
+        o.push('<label class="pgpCtl">Plot hits covering at least ' +
+               '<input id="pgpCovFloor" type="number" min="0" max="100" step="5" ' +
+               'value="' + pgpMinCov + '"> % of the query</label>');
+    }
     if (pgpHasPlacements()) {
         // A query that maps to several loci gets one set of haplotypes per
         // locus.  Their ancestry is read at different places in the genome, so
@@ -802,6 +810,10 @@ function pgpDetailHtml() {
                 ? '<a class="gbPill" href="#" data-pgp-hap="">\u2039 The ' +
                   pgpSelGroup.length + ' here</a>' : "") +
                '</div>');
+    } else if (spot && spot.url) {
+        // A page with no table to delegate to gives the spot its own link.
+        o.push('<div class="pgrDetailActions"><a class="gbPill primary" href="' +
+               pgpEsc(spot.url) + '">View in Genome Browser</a></div>');
     }
     o.push('</div>');
     return o.join("");
@@ -836,11 +848,16 @@ function pgpOpen(spots) {
 // Called by the results page with one spot per plottable hit.  Returns false
 // when there is nothing to plot, so the caller can leave the control and the
 // checkbox column out entirely.
-function pgpInit(spots) {
+function pgpInit(spots, opts) {
     if (!spots || !spots.length) { return false; }
     // Called again when the table gains placements; what was read for the
-    // old rows does not cover the new ones.
-    pgpData = null;
+    // old rows does not cover the new ones.  A caller that has already read
+    // them - PanLift, for its ancestry labels - hands its answer over instead.
+    pgpData = (opts && opts.data) || null;
+    if (opts && opts.legend) {
+        pgpLegend = { hit: opts.legend.hit || pgpLegend.hit,
+                      pick: opts.legend.pick || pgpLegend.pick };
+    }
     pgpSpots = spots;
     var btn = pgpEl("pgrPclaiBtn");
     if (btn) {

@@ -93,6 +93,43 @@ var pg = page.api;
 // intervals.  The page has to split those per target haplotype (each becomes
 // its own chain) and still be able to draw the ordinary result cards.
 
+// ---- ancestry at each region (pcLAI) ----------------------------------------
+// A panel shaped like the real one: two populations in two clusters.
+var ANC_PANEL = { labels: ['Yoruba in Ibadan, Nigeria', 'Toscani in Italia', 'Peruvian in Lima, Peru'],
+                  points: [] };
+for (var ai = 0; ai < 70; ai++) {
+    ANC_PANEL.points.push([-1.74 + ai * 0.001, 0.2, 0, 'Y' + ai]);
+    ANC_PANEL.points.push([0.44 + ai * 0.001, -1.31, 1, 'T' + ai]);
+}
+for (var aj = 0; aj < 10; aj++) ANC_PANEL.points.push([0.45, -1.3, 2, 'P' + aj]);
+function ancWin(s, e, cx, cy, conf, rgb) {
+    return { s: s, e: e, w: 'chr1_w' + s, x: cx, y: cy, cx: cx, cy: cy, conf: conf || 999, rgb: rgb };
+}
+
+t.suite('ancestry at each region');
+t.test('a cluster is named by the super-population nearest its centroid', function () {
+    var A = startPage().api;
+    var n = A.ancClusterName(ANC_PANEL, -1.743, 0.207);
+    t.eq(n.name, 'African', 'African');
+    t.contains(n.near, 'Yoruba in Ibadan, Nigeria 100%', 'nearest populations, with shares');
+    t.eq(A.ancClusterName(ANC_PANEL, 0.445, -1.314).name, 'European', 'European, Peruvians nearby notwithstanding');
+});
+t.test('one cluster reads as ancestry here; several as a mix by bases', function () {
+    var A = startPage().api;
+    var one = A.ancSummary({ windows: [ancWin(0, 100, -1.743, 0.207), ancWin(100, 300, -1.743, 0.207)] }, ANC_PANEL);
+    t.eq(A.ancText(one), 'African ancestry here', 'one');
+    var mix = A.ancSummary({ windows: [ancWin(0, 300, 0.445, -1.314), ancWin(300, 400, -1.743, 0.207, 850)] }, ANC_PANEL);
+    t.eq(A.ancText(mix), 'Mixed here: European 75% · African 25%', 'by bases, largest first');
+    t.eq(mix.minConf, 850, 'the lowest confidence is kept, for the note');
+    t.eq(mix.parts.length, 2, 'two parts, so a strip');
+});
+t.test('a region with no ancestry says why', function () {
+    var A = startPage().api;
+    t.contains(A.ancNone('hg38'), 'GRCh38 is a mosaic', 'GRCh38');
+    t.contains(A.ancNone('hs1'), "CHM13's own coordinates", 'CHM13');
+    t.contains(A.ancNone('https://x/hgTracks?db=hub_1_HG002'), 'No ancestry for this assembly', 'a hub');
+});
+
 t.suite('block-level liftover responses');
 
 t.test('blocks are split by target haplotype, lower-cased', function () {
