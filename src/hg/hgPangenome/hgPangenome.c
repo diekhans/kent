@@ -112,6 +112,9 @@
  *   pangenome.annotationDefault  the one chosen when the page opens; default
  *                            "GRCh38#0", "none" for none.  A results URL's
  *                            refAnnot= overrides it.
+ *   pangenome.annotationHideOwn  "on" (default) hides the haplotype's own tracks
+ *                            when a reference's annotations are brought, as
+ *                            PanLift's "hide the target's default tracks" does.
  *   pangenome.apiToken       shared secret sent to the middleware as the
  *                            X-Pangenome-Token header; if empty, no auth header
  *                            is sent (middleware runs auth-off for testing)
@@ -2467,14 +2470,18 @@ if (!pgLiftInterval(path, ref, start, end, &refPath, &refStart, &refEnd, &err))
     }
 
 /* A conversion from the reference onto the haplotype, as PanLift would send
- * it: doQuickLift() pads the interval, fetches the blocks and builds the rest. */
+ * it: doQuickLift() pads the interval, fetches the blocks and builds the rest.
+ * The haplotype's own tracks are hidden, so the page opens on the reference's
+ * annotations and the user's sequence rather than two gene sets on top of
+ * each other; the user can turn them back on in the browser. */
+boolean hideOwn = sameString(cfgOr("pangenome.annotationHideOwn", "on"), "on");
 struct dyString *ql = dyStringNew(512);
 dyStringPrintf(ql, "{\"srcDb\":\"%s\",\"tgtDb\":\"%s\",\"src\":\"%s\","
                    "\"srcHap\":\"%s\",\"srcStart\":%ld,\"srcEnd\":%ld,"
-                   "\"tgt\":\"%s\",\"position\":\"%s\",\"hideTracks\":\"off\"}",
+                   "\"tgt\":\"%s\",\"position\":\"%s\",\"hideTracks\":\"%s\"}",
                jsonStringEscape(refDb), jsonStringEscape(db), jsonStringEscape(refPath),
                jsonStringEscape(pgRefLabel(ref)), refStart, refEnd,
-               jsonStringEscape(hap), jsonStringEscape(position));
+               jsonStringEscape(hap), jsonStringEscape(position), hideOwn ? "on" : "off");
 doQuickLift(ql->string, FALSE);
 dyStringFree(&ql);
 }
