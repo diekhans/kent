@@ -424,6 +424,11 @@ var hubHandoff = startPage({ db: 'hub_25071_hs1',
                              config: { presetTarget: 'HG01234#2' } });
 var exampleHandoff = startPage({ db: 'hub_25071_hs1', position: '',
                                  config: { presetTarget: 'HG01234#2' } });
+// The SV page hands over several targets at once, comma separated, and may
+// include the source itself, which is dropped.
+var svHandoff = startPage({ db: 'hub_25071_hs1',
+                            position: 'chr10:42477211-42540362',
+                            config: { presetTarget: 'HG01234#2,GRCh38#0,CHM13#0' } });
 
 setTimeout(function () {
     t.suite('page setup');
@@ -474,6 +479,17 @@ setTimeout(function () {
         var payload = decodeURIComponent(String(reqs[0].opts.body));
         t.contains(payload, '42477210', 'chr10 start, 0-based');
         t.notOk(/145458454|145458455/.test(payload), 'not the example region on chr9');
+    });
+
+    t.test('several targets handed over are all chosen, the source left out', function () {
+        var reqs = svHandoff.calls.filter(function (c) {
+            return String((c.opts && c.opts.body) || '').indexOf('cmd=liftover') >= 0;
+        });
+        t.eq(reqs.length, 1, 'auto-submitted once');
+        var payload = decodeURIComponent(String(reqs[0] && reqs[0].opts.body));
+        t.contains(payload, 'HG01234#2', 'first target');
+        t.contains(payload, 'GRCh38#0', 'second target');
+        t.notOk(/"tgts?":[^\]]*CHM13#0/i.test(payload), 'not the source');
     });
 
     t.test('an example position is never auto-converted', function () {

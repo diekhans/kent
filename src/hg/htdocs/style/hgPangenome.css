@@ -494,3 +494,64 @@
 .pgpGroupList a:hover { color:var(--accentHover); text-decoration:underline; }
 .pgpSwatch { display:inline-block; width:10px; height:10px; border:1px solid var(--btnLine);
     vertical-align:-1px; margin-right:5px; }
+
+/* ---- the SV page (hgPangenomeSv.js) ----
+ * PanLift's palette: one accent for "carries it", quiet neutrals for the rest.
+ * A haplotype's state is in its chip's fill and border, so the list reads at a
+ * glance and does not depend on colour alone (the tabs name each state). */
+.pgsApp { max-width: 1100px; }
+.pgsTitle { margin: 4px 0 2px; }
+.pgsLead { font-size: 1.05em; margin: 0 0 10px; }
+.pgsFacts { border-collapse: collapse; margin: 0 0 6px; font-size: 0.92em; }
+.pgsFacts th { text-align: left; font-weight: normal; color: #4a5360; padding: 2px 16px 2px 0;
+    vertical-align: top; white-space: nowrap; }
+.pgsFacts td { padding: 2px 0; }
+.pgsSiteNote { margin: 2px 0 0; max-width: 60em; }
+.pgsH3 { margin: 18px 0 8px; }
+.pgsTools { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 24px; }
+.pgsTabs { display: flex; flex-wrap: wrap; gap: 6px; }
+.pgsTab { font: inherit; font-size: 0.9em; padding: 3px 10px; border: 1px solid #b9bfc7;
+    border-radius: 14px; background: #fff; color: #1e2833; cursor: pointer; }
+.pgsTab:hover { background: #f0f3f7; }
+.pgsTab:focus-visible { outline: 2px solid #003a72; outline-offset: 1px; }
+.pgsTab.on { background: #003a72; border-color: #003a72; color: #fff; }
+.pgsTabN { font-variant-numeric: tabular-nums; opacity: 0.8; }
+.pgsAnnot { font-size: 0.9em; cursor: pointer; }
+.pgsStatus { margin: 8px 0 0; font-size: 0.9em; }
+.pgsHint { margin: 8px 0 6px; }
+.pgsPopTable { border-collapse: collapse; width: 100%; font-size: 0.9em; }
+.pgsPopTable th { text-align: left; font-weight: bold; color: #2c3440; padding: 4px 10px 4px 0;
+    border-bottom: 1px solid #c8ccd2; }
+.pgsPopTable td { padding: 5px 10px 5px 0; border-bottom: 1px solid #eef0f2; vertical-align: top; }
+.pgsPopName { width: 17em; }
+.pgsNum { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.pgsBar { display: inline-block; width: 70px; height: 9px; margin-top: 4px; background: #eef0f2;
+    border-radius: 2px; overflow: hidden; }
+.pgsBarFill { display: block; height: 100%; background: #003a72; }
+.pgsHaps { display: flex; flex-wrap: wrap; gap: 4px 6px; }
+.pgsHap { display: inline-flex; align-items: center; gap: 4px; padding: 1px 7px 1px 4px;
+    border: 1px solid #c8ccd2; border-radius: 3px; background: #fff; white-space: nowrap; }
+.pgsHap input { margin: 0; }
+.pgsHap a { text-decoration: none; }
+.pgsHap a:hover { text-decoration: underline; }
+.pgsHap-c { background: #dbe7f6; border-color: #7d9cc4; }
+.pgsHap-o { background: #fbf1dc; border-color: #d9b46a; }
+.pgsHap-n { border-style: dashed; color: #6b7480; }
+.pgsHap.on { box-shadow: inset 0 0 0 1px #003a72; }
+.pgsNone { margin: 6px 0 0; }
+.pgsCompare { margin: 16px 0 6px; padding: 10px 12px; border: 1px solid #c8ccd2; border-radius: 4px;
+    background: #f7f8fa; }
+.pgsCompareHead { font-size: 0.92em; }
+.pgsChip-c { background: #dbe7f6; }
+.pgsChip-r { background: #fff; }
+.pgsChip-o { background: #fbf1dc; border-color: #d9b46a; }
+.pgsCompare a.pgsGo { display: inline-block; margin-left: 6px; padding: 3px 12px; border-radius: 3px;
+    background: #003a72; color: #fff !important; text-decoration: none; font-size: 0.9em; }
+.pgsCompare a.pgsGo:hover { background: #0f2f57; text-decoration: none; }
+.pgsCompare a.pgsGo.dis { background: #a3aab3; cursor: default; }
+@media (max-width: 700px) {
+    .pgsPopTable tr { display: grid; grid-template-columns: 1fr auto auto; }
+    .pgsPopTable th:last-child { display: none; }
+    .pgsHaps { grid-column: 1 / -1; }
+    .pgsPopName { width: auto; }
+}

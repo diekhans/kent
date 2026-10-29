@@ -644,16 +644,20 @@ function showAllHaplotypes() {
 }
 
 // Pre-select a sensible target so the page is one click from an answer.  Skips
-// it if the default happens to be the source haplotype.
+// any that is the source haplotype.
 function preselectDefaultTarget() {
     // A destination chosen in hgConvert wins over the configured default: the
     // user already said where they wanted to go.
-    var want = String(CFG.presetTarget || CFG.defaultTarget || "").toLowerCase();
-    if (!want) return;
+    // The SV page sends several, comma separated; past the limit the rest are
+    // left for the user to pick.
     var src = String(currentSourceHap() || "").toLowerCase();
-    if (want === src) return;
+    var want = String(CFG.presetTarget || CFG.defaultTarget || "").toLowerCase()
+        .split(",").map(function (w) { return w.trim(); })
+        .filter(function (w) { return w && w !== src; })
+        .slice(0, CFG.maxLiftTargets || MAX_TARGETS);
+    if (!want.length) return;
     targetOptions($("pgcTargets")).forEach(function (o) {
-        if (String(o.value || o.textContent).toLowerCase() === want)
+        if (want.indexOf(String(o.value || o.textContent).toLowerCase()) >= 0)
             o.selected = true;
     });
 }

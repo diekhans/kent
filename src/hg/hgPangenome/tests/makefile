@@ -32,6 +32,7 @@ Individual layers:\n\
   ./proxyTests.sh       CGI proxy tests against a mock middleware (Layer 2)\n\
   node renderTests.js   contract/rendering tests (Layer 3)\n\
   node resultsTests.js  results page: cells, row order, download\n\
+  node svTests.js       SV page: region, starting PanLift choice, groups\n\
 \n\
 To test a specific CGI binary:  PG_CGI=/path/to/hgPangenome ./proxyTests.sh\n"
 
