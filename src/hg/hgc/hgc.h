@@ -482,6 +482,11 @@ void doVcfDetailsExt(struct trackDb *tdb, char *item, struct featureBits **pFbLi
 /* Show details of an alignment from an uncompressed VCF file. */
 
 void doBarChartDetails(struct trackDb *tdb, char *item);
+
+void pangenomeCarriersSection(struct trackDb *tdb, char *chrom, int start, int end,
+                              char *name);
+/* If this track names a pangenomeCarriers file, say which haplotypes carry the
+ * clicked SV and what the rest have at its site.  In pangenomeCarriersClick.c. */
 /* Details of barChart item */
 
 void doMyVariantsDetails(struct customTrack *ct, char *itemIdString);

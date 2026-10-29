@@ -592,6 +592,11 @@ for (bb = bbList; bb != NULL; bb = bb->next)
             jsInline(dyStringCannibalize(&ds));
             }
         }
+    /* Which haplotypes of the pangenome carry it, for an SV track that names a
+     * carriers file.  Not on a lifted copy: the file is in the source's
+     * coordinates. */
+    if (!quickLiftFile)
+        pangenomeCarriersSection(tdb, chrom, bed->chromStart, bed->chromEnd, bed->name);
     if (isCustomTrack(tdb->track))
 	{
 	time_t timep = bbiUpdateTime(bbi);
