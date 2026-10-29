@@ -9,9 +9,19 @@ genotype - one allele per haplotype - so the carriers can be read off it.  This
 writes the same SVs, positioned and named by that script's own functions so a
 row here matches a track item exactly, with two more fields:
 
+    siteStart, siteEnd
+              the graph site this SV is one allele of: the VCF record's REF
+              span on the reference, 0-based half-open
     carriers  hex bitmap: the haplotypes whose allele is this SV
     missing   hex bitmap: the haplotypes with no call at this site
-              (the rest carry the reference allele)
+              (the rest carry another allele: the reference's, a change
+              under 50 bp, or another SV at the same site)
+
+The site matters because the track places an SV where its REF and ALT stop
+agreeing from the left, which can be far from where the haplotypes actually
+differ: chr1:730,868 INS-13.6k:11 is drawn at the start of a 10 kb site whose
+13.6 kb insertion sits near 737,000 in every carrier.  Anything that goes and
+looks at the SV on a haplotype has to ask for the whole site.
 
 Bit i (most significant first) is the i-th haplotype in the .haps file written
 beside the output, in VCF sample order: a haploid sample (CHM13, GRCh38) gives
@@ -20,7 +30,8 @@ SAMPLE#0, a diploid one SAMPLE#1 then SAMPLE#2 for its two alleles in GT order.
 The track script drops rows that come out byte-identical from different VCF
 records (vg deconstruct splits some snarls that way).  For counts that is
 harmless; for carriers each copy may name different haplotypes, so here
-identical rows are merged and their carriers combined.
+identical rows are merged: their carriers combined, and their sites widened to
+cover both.
 
 Usage:
     makeSvCarriers.py in.vcf.gz out.bed [--chrom chr1] [--lrsv DIR]
@@ -59,7 +70,7 @@ def main():
                             bufsize=1 << 20)
     haps = None            # haplotype names, in bit order
     hapCols = None         # for each sample column: its haplotype indexes
-    rows = {}              # the 17 track fields -> [carrier bits, missing bits]
+    rows = {}              # the 17 track fields -> [carriers, missing, siteStart, siteEnd]
     order = []             # row keys in file order
     seenChrom = False
     nRecords = 0
@@ -96,6 +107,7 @@ def main():
             continue
 
         pos = int(head[1])
+        siteStart, siteEnd = pos - 1, pos - 1 + len(ref)
         rowId = head[2]
         info = track.parseInfo(head[7])
         n = len(alts)
@@ -161,10 +173,13 @@ def main():
                 if a == i + 1:
                     carriers |= 1 << (len(haps) - 1 - hi)
             if key in rows:
-                rows[key][0] |= carriers
-                rows[key][1] &= missing
+                row = rows[key]
+                row[0] |= carriers
+                row[1] &= missing
+                row[2] = min(row[2], siteStart)
+                row[3] = max(row[3], siteEnd)
             else:
-                rows[key] = [carriers, missing]
+                rows[key] = [carriers, missing, siteStart, siteEnd]
                 order.append(key)
     proc.stdout.close()
     proc.terminate()
@@ -172,8 +187,8 @@ def main():
     width = (len(haps) + 3) // 4
     with open(args.out, 'w') as out:
         for key in order:
-            c, m = rows[key]
-            out.write('%s\t%0*x\t%0*x\n' % (key, width, c, width, m))
+            c, m, s0, s1 = rows[key]
+            out.write('%s\t%d\t%d\t%0*x\t%0*x\n' % (key, s0, s1, width, c, width, m))
     with open(args.out + '.haps', 'w') as fh:
         fh.write('\n'.join(haps) + '\n')
     print('%s: %d records read, %d SVs written, %d haplotypes'

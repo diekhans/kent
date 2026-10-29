@@ -18,6 +18,8 @@ table svCarriers
     float alleleFreq;       "Allele Frequency (AF)"
     uint nSamples;          "Samples with Data (NS)"
     uint snarlLevel;        "Snarl Level|Nesting level in the pangenome snarl decomposition tree (0 = top level)"
+    uint siteStart;         "Site start|Start of the graph site (the VCF record's REF) this SV is one allele of"
+    uint siteEnd;           "Site end|End of that site; the SV lies somewhere between siteStart and siteEnd"
     string carriers;        "Carriers|Hex bitmap of the haplotypes carrying this SV, in the order of the .haps file"
     string missing;         "No call|Hex bitmap of the haplotypes with no call at this site"
     )
