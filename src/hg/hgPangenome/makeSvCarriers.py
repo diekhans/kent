@@ -26,6 +26,10 @@ looks at the SV on a haplotype has to ask for the whole site.
 Bit i (most significant first) is the i-th haplotype in the .haps file written
 beside the output, in VCF sample order: a haploid sample (CHM13, GRCh38) gives
 SAMPLE#0, a diploid one SAMPLE#1 then SAMPLE#2 for its two alleles in GT order.
+Each .haps line is the haplotype, then its population as the HPRC describes it
+- 1000 Genomes code and descriptor, from the sample metadata makeSampleMap.py
+reads - tab separated; both are empty where the HPRC gives none.  The details
+page of an SV (hgc's pangenomeCarriers section) groups the carriers by it.
 
 The track script drops rows that come out byte-identical from different VCF
 records (vg deconstruct splits some snarls that way).  For counts that is
@@ -34,7 +38,10 @@ identical rows are merged: their carriers combined, and their sites widened to
 cover both.
 
 Usage:
-    makeSvCarriers.py in.vcf.gz out.bed [--chrom chr1] [--lrsv DIR]
+    makeSvCarriers.py in.vcf.gz out.bed [--chrom chr1] [--lrsv DIR] [--haps-only]
+
+--haps-only reads only the VCF's header and rewrites out.bed.haps, for when the
+sample metadata changes and the carriers do not.
 
 The VCF is streamed once, through zcat; --chrom stops after that chromosome,
 which for chr1 (the first in the file) reads only the start of it.  Run it
@@ -43,12 +50,35 @@ web server for.  Only the python3 standard library is used.
 """
 
 import argparse
+import csv
 import os
 import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_LRSV = os.path.join(HERE, '..', 'makeDb', 'scripts', 'lrSv')
+DEFAULT_METADATA = os.path.join(HERE, 'hprc_release2_sample_metadata.csv')
+
+
+def readPopulations(path):
+    """sample -> (code, descriptor), as makeSampleMap.py reads them for the page."""
+    sys.path.insert(0, HERE)
+    from makeSampleMap import clean     # the same repairs as the page's table
+    pops = {}
+    with open(path, encoding='utf-8', newline='') as fh:
+        for r in csv.DictReader(fh):
+            code = clean(r.get('population_abbreviation'))
+            desc = clean(r.get('population_descriptor'))
+            if code and code != 'N/A' and desc and desc != 'N/A':
+                pops[(r.get('sample_id') or '').strip()] = (code, desc)
+    return pops
+
+
+def writeHaps(path, haps, populations):
+    with open(path, 'w', encoding='utf-8') as fh:
+        for h in haps:
+            code, desc = populations.get(h.split('#')[0], ('', ''))
+            fh.write('%s\t%s\t%s\n' % (h, code, desc))
 
 
 def main():
@@ -58,7 +88,12 @@ def main():
     ap.add_argument('--chrom', help='only this chromosome (stops reading after it)')
     ap.add_argument('--lrsv', default=DEFAULT_LRSV,
                     help='directory of the track script, whose rules are reused')
+    ap.add_argument('--metadata', default=DEFAULT_METADATA,
+                    help='HPRC sample metadata CSV, for each haplotype\'s population')
+    ap.add_argument('--haps-only', action='store_true',
+                    help='only rewrite the .haps file, from the VCF header')
     args = ap.parse_args()
+    populations = readPopulations(args.metadata)
 
     # The track's own rules, so a row here is a track item.
     sys.path.insert(0, os.path.abspath(args.lrsv))
@@ -89,6 +124,8 @@ def main():
                 else:
                     hapCols.append([len(haps), len(haps) + 1])
                     haps.extend([s + '#1', s + '#2'])
+            if args.haps_only:
+                break
             continue
         # Only the first nine columns are needed to decide whether a record
         # holds an SV at all; most do not, so the genotypes stay unsplit.
@@ -183,14 +220,17 @@ def main():
                 order.append(key)
     proc.stdout.close()
     proc.terminate()
+    if args.haps_only:
+        writeHaps(args.out + '.haps', haps, populations)
+        print('wrote %s.haps: %d haplotypes' % (args.out, len(haps)), file=sys.stderr)
+        return
 
     width = (len(haps) + 3) // 4
     with open(args.out, 'w') as out:
         for key in order:
             c, m, s0, s1 = rows[key]
             out.write('%s\t%d\t%d\t%0*x\t%0*x\n' % (key, s0, s1, width, c, width, m))
-    with open(args.out + '.haps', 'w') as fh:
-        fh.write('\n'.join(haps) + '\n')
+    writeHaps(args.out + '.haps', haps, populations)
     print('%s: %d records read, %d SVs written, %d haplotypes'
           % (args.chrom or 'all', nRecords, len(order), len(haps)), file=sys.stderr)
 
