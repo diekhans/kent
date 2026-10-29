@@ -39,7 +39,7 @@ JQUERY_FILES=${JQUERY_FILES_UNTOUCHED} ${JQUERY_FILES_MODIFIED}
 # snake_case (dictated by the mapping middleware contract), which conflicts with
 # the repo-wide camelcase jshint rule, so these are deployed without jshint,
 # like the untouched third-party files.
-PANGENOME_JS_FILES=hgPangenome.js hgPangenomeMock.js hgPangenomeAssemblies.js hgPangenomeConvert.js hgPangenomeResults.js hgPangenomePclai.js hgPangenomeSamples.js hgPangenomeSv.js
+PANGENOME_JS_FILES=hgPangenome.js hgPangenomeMock.js hgPangenomeAssemblies.js hgPangenomeConvert.js hgPangenomeResults.js hgPangenomePclai.js hgPangenomeSamples.js hgPangenomeSvOpen.js
 
 # SYMLINKED files are include in CGIs via a version or timestamped symlink
 #           to force client side updates

@@ -40,14 +40,13 @@
  *                 its haplotype to a reference (GRCh38, CHM13) through the
  *                 graph, then QuickLift the tracks the user has on in that
  *                 reference onto the haplotype.  Also inside the cart shell.
- *   cmd=svOpen    the same for the SV page: translate an SV's graph site from the
+ *   cmd=svOpen    the same for an SV: translate its graph site from the
  *                 reference to one haplotype and open it there, with or without
  *                 the reference's tracks.  Inside the cart shell.
- * and three pages, selected by "page": none for the mapping form, "results" for
- * a mapping job's table, "convert" for PanLift, and "sv" for one structural
- * variant of the HPRC v2.1 SV track and every haplotype by what it has there
- * (page=sv&db=hg38&chrom=chr1&start=730868&end=730869&sv=INS-13.6k:11, as the
- * track's url setting writes it).
+ * and four pages, selected by "page": none for the mapping form, "results" for
+ * a mapping job's table, "convert" for PanLift, and "svOpen", the step from a
+ * haplotype named on an SV's details page (hgc's pangenomeCarriers section)
+ * to that haplotype in the browser.
  * The map/poll modes emit raw application/json (the middleware's answer, or a
  * synthesized {"status":"error",...}) and never touch the cart, so they are
  * cheap and DB-free.  Nothing about BLAT is used or changed.
@@ -123,13 +122,8 @@
  *   pangenome.annotationHideOwn  "on" (default) hides the haplotype's own tracks
  *                            when a reference's annotations are brought, as
  *                            PanLift's "hide the target's default tracks" does.
- *   pangenome.svCarriers     the SV page's carriers files, as "db=path" pairs,
- *                            e.g. "hg38=/path/grch38.svCarriers.bb,hs1=...";
- *                            each needs its .haps file beside it (both written
- *                            by makeSvCarriers.py).  Unset, the page says
- *                            carriers are not available.
- *   pangenome.svFlank        bp either side of an SV's graph site that Open
- *                            and Compare show; default 1000
+ *   pangenome.svFlank        bp either side of an SV's graph site shown when a
+ *                            haplotype is opened there; default 1000
  *   pangenome.apiToken       shared secret sent to the middleware as the
  *                            X-Pangenome-Token header; if empty, no auth header
  *                            is sent (middleware runs auth-off for testing)
@@ -2501,42 +2495,14 @@ doQuickLift(ql->string, FALSE);
 dyStringFree(&ql);
 }
 
-/* ---- One structural variant and the haplotypes that carry it --------------
+/* ---- One haplotype at a structural variant's site --------------------------
  *
- * The browser's "HPRC v2.1 233 SVs" track says how many haplotypes carry each
- * SV; the graph's VCF, which it was made from, says which.  makeSvCarriers.py
- * writes the track's rows again with that added - two bitmaps over the
- * haplotypes in its .haps file - and the track links each item here.  The page
- * lists every haplotype by what it has at the SV's site, and opens any of them
- * at that site with the reference's tracks carried across, the way the results
- * page opens a hit. */
-
-/* Fields of a carriers row after chrom, start and end, as bigBed hands them
- * over in iv->rest.  The first fourteen are the track's own. */
-enum pgSvField { svfName = 0, svfType = 6, svfLen = 7, svfInsLen = 8, svfAc = 9,
-                 svfAn = 10, svfAf = 11, svfNs = 12, svfLevel = 13, svfSiteStart = 14,
-                 svfSiteEnd = 15, svfCarriers = 16, svfMissing = 17, svfFieldCount = 18 };
-
-static char *pgSvCarriersFile(char *db)
-/* The carriers bigBed for this assembly, from pangenome.svCarriers - "db=path"
- * pairs, comma separated - or NULL if it has none. */
-{
-char *spec = cloneString(cfgOr("pangenome.svCarriers", ""));
-char *words[16];
-int n = chopByChar(spec, ',', words, ArraySize(words));
-int i;
-for (i = 0; i < n; i++)
-    {
-    char *pair = trimSpaces(words[i]);
-    char *eq = strchr(pair, '=');
-    if (eq == NULL)
-        continue;
-    *eq = '\0';
-    if (sameString(trimSpaces(pair), db))
-        return trimSpaces(eq + 1);
-    }
-return NULL;
-}
+ * The details page of an item on the HPRC v2.1 SV track lists the haplotypes
+ * that carry it (hgc/pangenomeCarriersClick.c), and each name links here: the
+ * SV's graph site, translated from the reference to that haplotype through the
+ * graph, opened in the browser with the reference's tracks carried across -
+ * the way the results page opens a hit.  page=svOpen is the step between the
+ * two, and cmd=svOpen does the work. */
 
 static char *pgRefHapForDb(char *db)
 /* The graph's name for a reference assembly ("hg38" -> "GRCh38#0"), from the
@@ -2547,207 +2513,6 @@ for (rp = pgAnnotRefs(); rp != NULL; rp = rp->next)
     if (sameString((char *)rp->val, db))
         return rp->name;
 return NULL;
-}
-
-static boolean pgHexBit(char *hex, int width, int bit)
-/* Bit `bit` of a hex number written in `width` digits, counting from the least
- * significant. */
-{
-int digit = width - 1 - bit / 4;
-if (digit < 0 || hex[digit] == '\0')
-    return FALSE;
-char c = hex[digit];
-int v = isdigit((unsigned char)c) ? c - '0' : tolower((unsigned char)c) - 'a' + 10;
-return (v >> (bit % 4)) & 1;
-}
-
-static boolean pgSvRowHas(char **row, int field, int hapCount, int hap)
-/* Does this row's bitmap set the bit of haplotype `hap`, the haps file's
- * hap-th line?  The first haplotype is the most significant bit. */
-{
-char *hex = row[field];
-int width = strlen(hex);
-if (width != (hapCount + 3) / 4)
-    return FALSE;
-return pgHexBit(hex, width, hapCount - 1 - hap);
-}
-
-static void drawSvPage()
-/* The SV page: what the SV is, and every haplotype by what it has there.  The
- * item is named the way the track's url setting names it - assembly, chrom,
- * start, end and item name - and looked up in the carriers file by all five. */
-{
-/* By its own name: an assembly served from a curated hub, hs1 among them,
- * reaches us renamed hub_<id>_hs1 once the cart shell has connected it. */
-char *db = trackHubSkipHubName(cgiUsualString("db", ""));
-char *chrom = cgiUsualString("chrom", "");
-char *name = cgiUsualString("sv", "");
-int start = cgiOptionalInt("start", -1);
-int end = cgiOptionalInt("end", -1);
-printf("<div id='pgsApp' class='pgsApp'>\n");
-if (!pgValidDb(db) || !pgSafeToken(chrom) || start < 0 || end <= start ||
-    strlen(name) > 128)
-    {
-    printf("<p class='pgWarn'>This link does not name a structural variant. "
-           "Open one from the <b>HPRC v2.1 233 SVs</b> track: click an item and "
-           "follow its link to the haplotypes that carry it.</p></div>\n");
-    return;
-    }
-char *bb = pgSvCarriersFile(db);
-char *refHap = pgRefHapForDb(db);
-if (bb == NULL || refHap == NULL)
-    {
-    printf("<p class='pgWarn'>Carriers are not available for %s on this server.</p>"
-           "</div>\n", htmlEncode(db));
-    return;
-    }
-/* The haplotype order of the bitmaps, written beside the bigBed. */
-char hapsPath[PATH_LEN];
-safef(hapsPath, sizeof(hapsPath), "%s", bb);
-if (endsWith(hapsPath, ".bb"))
-    hapsPath[strlen(hapsPath) - 3] = '\0';
-safecat(hapsPath, sizeof(hapsPath), ".haps");
-struct slName *haps = NULL;
-struct lm *lm = lmInit(0);
-struct bigBedInterval *list = NULL, *iv;
-char *found[svfFieldCount];
-boolean have = FALSE;
-struct errCatch *errCatch = errCatchNew();
-if (errCatchStart(errCatch))
-    {
-    haps = slNameLoadReal(hapsPath);
-    struct bbiFile *bbi = bigBedFileOpen(bb);
-    list = bigBedIntervalQuery(bbi, chrom, start, end, 0, lm);
-    for (iv = list; iv != NULL && !have; iv = iv->next)
-        {
-        if ((int)iv->start != start || (int)iv->end != end || iv->rest == NULL)
-            continue;
-        char *rest = lmCloneString(lm, iv->rest);
-        if (chopByChar(rest, '\t', found, svfFieldCount) == svfFieldCount &&
-            (isEmpty(name) || sameString(found[svfName], name)))
-            have = TRUE;
-        }
-    /* The others at the same graph site: alleles of the same VCF record, which
-     * the track lists as separate items.  Their carriers are the haplotypes
-     * that have a different SV here rather than none. */
-    if (have)
-        list = bigBedIntervalQuery(bbi, chrom, atoi(found[svfSiteStart]),
-                                   atoi(found[svfSiteEnd]) + 1, 0, lm);
-    bigBedFileClose(&bbi);
-    }
-errCatchEnd(errCatch);
-if (errCatch->gotError)
-    {
-    fprintf(stderr, "hgPangenome: could not read %s: %s\n", bb,
-            trimSpaces(errCatch->message->string));
-    printf("<p class='pgWarn'>The carriers file could not be read.</p></div>\n");
-    errCatchFree(&errCatch);
-    return;
-    }
-errCatchFree(&errCatch);
-if (!have)
-    {
-    printf("<p class='pgWarn'>No SV named %s at %s:%d-%d is in the carriers file. "
-           "If the track was updated since the file was built, the file needs "
-           "rebuilding with makeSvCarriers.py.</p></div>\n",
-           htmlEncode(name), htmlEncode(chrom), start + 1, end);
-    return;
-    }
-printf("</div>\n");
-
-int hapCount = slCount(haps);
-/* Bitmaps of the other SVs at this site, OR-ed: one more pass over the rows,
- * each tested haplotype by haplotype below. */
-struct svSibling { struct svSibling *next; char **row; int start, end; };
-struct svSibling *sibs = NULL;
-for (iv = list; iv != NULL; iv = iv->next)
-    {
-    if (iv->rest == NULL)
-        continue;
-    char **row;
-    lmAllocArray(lm, row, svfFieldCount);
-    char *rest = lmCloneString(lm, iv->rest);
-    if (chopByChar(rest, '\t', row, svfFieldCount) != svfFieldCount)
-        continue;
-    if (!sameString(row[svfSiteStart], found[svfSiteStart]) ||
-        !sameString(row[svfSiteEnd], found[svfSiteEnd]))
-        continue;
-    if ((int)iv->start == start && (int)iv->end == end &&
-        sameString(row[svfName], found[svfName]))
-        continue;
-    struct svSibling *sib;
-    lmAllocVar(lm, sib);
-    sib->row = row;
-    sib->start = iv->start;
-    sib->end = iv->end;
-    slAddHead(&sibs, sib);
-    }
-slReverse(&sibs);
-
-struct jsonWrite *jw = jsonWriteNew();
-jsonWriteObjectStart(jw, NULL);
-jsonWriteString(jw, "db", db);
-jsonWriteString(jw, "refHap", refHap);
-jsonWriteString(jw, "refLabel", pgRefLabel(refHap));
-jsonWriteString(jw, "chrom", chrom);
-jsonWriteNumber(jw, "start", start);
-jsonWriteNumber(jw, "end", end);
-jsonWriteString(jw, "name", found[svfName]);
-jsonWriteString(jw, "svType", found[svfType]);
-jsonWriteNumber(jw, "svLen", atol(found[svfLen]));
-jsonWriteNumber(jw, "insLen", atol(found[svfInsLen]));
-jsonWriteNumber(jw, "ac", atol(found[svfAc]));
-jsonWriteNumber(jw, "an", atol(found[svfAn]));
-jsonWriteDouble(jw, "af", atof(found[svfAf]));
-jsonWriteNumber(jw, "level", atol(found[svfLevel]));
-jsonWriteNumber(jw, "siteStart", atol(found[svfSiteStart]));
-jsonWriteNumber(jw, "siteEnd", atol(found[svfSiteEnd]));
-/* Each haplotype and what it has here: c carries this SV, o another SV at this
- * site, r neither (the reference's allele, or a change under 50 bp), n no call. */
-jsonWriteListStart(jw, "haps");
-struct slName *h;
-int i;
-for (h = haps, i = 0; h != NULL; h = h->next, i++)
-    {
-    char *state = "r";
-    if (pgSvRowHas(found, svfCarriers, hapCount, i))
-        state = "c";
-    else if (pgSvRowHas(found, svfMissing, hapCount, i))
-        state = "n";
-    else
-        {
-        struct svSibling *sib;
-        for (sib = sibs; sib != NULL; sib = sib->next)
-            if (pgSvRowHas(sib->row, svfCarriers, hapCount, i))
-                {
-                state = "o";
-                break;
-                }
-        }
-    jsonWriteListStart(jw, NULL);
-    jsonWriteString(jw, NULL, h->name);
-    jsonWriteString(jw, NULL, state);
-    jsonWriteListEnd(jw);
-    }
-jsonWriteListEnd(jw);
-jsonWriteListStart(jw, "others");
-struct svSibling *sib;
-for (sib = sibs; sib != NULL; sib = sib->next)
-    {
-    jsonWriteObjectStart(jw, NULL);
-    jsonWriteString(jw, "name", sib->row[svfName]);
-    jsonWriteNumber(jw, "start", sib->start);
-    jsonWriteNumber(jw, "end", sib->end);
-    jsonWriteNumber(jw, "ac", atol(sib->row[svfAc]));
-    jsonWriteObjectEnd(jw);
-    }
-jsonWriteListEnd(jw);
-jsonWriteNumber(jw, "flank", atol(cfgOr("pangenome.svFlank", "1000")));
-jsonWriteBoolean(jw, "quickLift", quickLiftEnabled(cart));
-jsonWriteObjectEnd(jw);
-jsInlineF("var pangenomeSv = %s;\n", jw->dy->string);
-jsonWriteFree(&jw);
-lmCleanup(&lm);
 }
 
 static void doSvOpen()
@@ -3792,7 +3557,7 @@ if (sameOk(cgiOptionalString("cmd"), "refAnnot"))
     doRefAnnot();
     return;
     }
-/* One haplotype at an SV's site, for the SV page. */
+/* One haplotype at an SV's site, for page=svOpen. */
 if (sameOk(cgiOptionalString("cmd"), "svOpen"))
     {
     doSvOpen();
@@ -3942,19 +3707,34 @@ if (sameOk(cgiOptionalString("page"), "results"))
     return;
     }
 
-/* One structural variant and every haplotype by what it has there, reached
- * from an item on the HPRC v2.1 SV track. */
-if (sameOk(cgiOptionalString("page"), "sv"))
+/* The step between an SV's details page and the browser: says what it is
+ * opening, asks for it (cmd=svOpen) and goes there.  Everything it needs is in
+ * the link, and checked again by cmd=svOpen. */
+if (sameOk(cgiOptionalString("page"), "svOpen"))
     {
-    cartWebStart(cart, NULL, "Pangenome SV");
+    cartWebStart(cart, NULL, "Opening a haplotype at an SV");
     if (issueBotWarning)
         botDelayMessage(getenv("REMOTE_ADDR"), botDelayMillis);
     webIncludeResourceFile("hgPangenome.css");
-    drawSvPage();
+    printf("<div id='pgsOpen' class='pgsOpen'></div>\n");
     injectConfig();
+    struct jsonWrite *jw = jsonWriteNew();
+    jsonWriteObjectStart(jw, NULL);
+    /* As the cart gives it, hs1 is hub_<id>_hs1; the graph knows it as hs1. */
+    jsonWriteString(jw, "db", trackHubSkipHubName(cgiUsualString("db", "")));
+    jsonWriteString(jw, "chrom", cgiUsualString("chrom", ""));
+    jsonWriteNumber(jw, "start", cgiOptionalInt("start", -1));
+    jsonWriteNumber(jw, "end", cgiOptionalInt("end", -1));
+    jsonWriteString(jw, "hap", cgiUsualString("hap", ""));
+    jsonWriteString(jw, "sv", cgiUsualString("sv", ""));
+    char *refHap = pgRefHapForDb(trackHubSkipHubName(cgiUsualString("db", "")));
+    jsonWriteString(jw, "refLabel", refHap ? pgRefLabel(refHap) : "");
+    jsonWriteBoolean(jw, "quickLift", quickLiftEnabled(cart));
+    jsonWriteObjectEnd(jw);
+    jsInlineF("var pangenomeSvOpen = %s;\n", jw->dy->string);
+    jsonWriteFree(&jw);
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
-    jsIncludeFile("hgPangenomeSamples.js", NULL);
-    jsIncludeFile("hgPangenomeSv.js", NULL);
+    jsIncludeFile("hgPangenomeSvOpen.js", NULL);
     cartWebEnd();
     return;
     }

@@ -62,12 +62,6 @@ echo "# Coordinate conversion page (canned responses)             #"
 echo "############################################################"
 runJs convertTests.js
 
-echo
-echo "############################################################"
-echo "# SV page: region, starting choice, groups                  #"
-echo "############################################################"
-runJs svTests.js
-
 # --- Layer 4 hook (needs the live middleware) ---
 # [ -f e2eTests.sh ] && { ./e2eTests.sh || fail=1; }
 
