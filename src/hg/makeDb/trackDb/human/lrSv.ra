@@ -400,8 +400,6 @@ noScoreFilter on
     filterByRange.snarlLevel on
     filterLabel.snarlLevel Snarl Level
     skipEmptyFields on
-    url ../cgi-bin/hgPangenome?page=sv&db=$D&chrom=$S&start=${&end=$}&sv=$$
-    urlLabel Haplotypes carrying this SV:
 
     # hprc2JasmineSv commented out: the Jasmine-merged HPRC v2 multi-caller
     # set is a test/comparison callset (the Hall lab is not happy with it) and
