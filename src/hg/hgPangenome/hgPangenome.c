@@ -2577,7 +2577,9 @@ static void drawSvPage()
  * item is named the way the track's url setting names it - assembly, chrom,
  * start, end and item name - and looked up in the carriers file by all five. */
 {
-char *db = cgiUsualString("db", "");
+/* By its own name: an assembly served from a curated hub, hs1 among them,
+ * reaches us renamed hub_<id>_hs1 once the cart shell has connected it. */
+char *db = trackHubSkipHubName(cgiUsualString("db", ""));
 char *chrom = cgiUsualString("chrom", "");
 char *name = cgiUsualString("sv", "");
 int start = cgiOptionalInt("start", -1);
@@ -2770,6 +2772,8 @@ if (root == NULL)
     return;
     }
 char *db = jsonOptionalStringField(root, "db", NULL);
+if (db != NULL)
+    db = trackHubSkipHubName(db);
 char *chrom = jsonOptionalStringField(root, "chrom", NULL);
 char *hap = jsonOptionalStringField(root, "hap", NULL);
 char *hapDb = jsonOptionalStringField(root, "hapDb", NULL);
