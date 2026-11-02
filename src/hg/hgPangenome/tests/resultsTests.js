@@ -152,9 +152,20 @@ t.test('a hit reads "2 of 3", not a placement', function () {
 
 t.test('the locus cell: waiting, the words, or nothing', function () {
     t.contains(R.pgrLocusCell(row()), 'pgrUnplaced', 'not read yet');
-    t.eq(R.pgrLocusCell(row({ locus: 'exon <b>X</b>' })), 'exon &lt;b&gt;X&lt;/b&gt;', 'escaped');
+    t.eq(R.pgrLocusCell(row({ locus: 'exon <b>X</b>' })), 'exon\u00a0&lt;b&gt;X&lt;/b&gt;', 'escaped');
+    t.eq(R.pgrLocusCell(row({ locus: 'exon LCT-MCM6' })), 'exon\u00a0LCT\u2011MCM6',
+         'a short one stays on one line');
+    t.eq(R.pgrLocusCell(row({ locus: 'intergenic GTF2H2C-ENSG00000293689' })),
+         'intergenic GTF2H2C\u2011ENSG00000293689', 'a long one may wrap at the space only');
     t.eq(R.pgrLocusCell(row({ locus: '' })), '', 'nothing near');
     t.eq(R.pgrLocusCell(row({ contig: null })), '', 'no position, no locus');
+});
+
+t.test('a hub assembly is named without its hub_ prefix', function () {
+    t.eq(R.pgrAssemblyLabel('hub_4837794_HG002v1.1.MAT'), 'HG002v1.1.MAT', 'bare');
+    t.eq(R.pgrAssemblyLabel('https://x/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.PAT&hubUrl=y'),
+         'HG002v1.1.PAT', 'from a link too');
+    t.eq(R.pgrAssemblyLabel('GCA_018466835.2'), 'GCA_018466835.2', 'others unchanged');
 });
 
 t.suite('download table');

@@ -1414,6 +1414,9 @@ function pgcPageTable(table, order) {
         if (v === -1 || v === 25 || v === 50 || v === 100) len = v;
     } catch (e) { /* the default */ }
     var dt = jq(table).DataTable({
+        // Widths from the content, not pinned to what the first draw measured:
+        // the loci, the coverage bars and the ancestry arrive after it.
+        autoWidth: false,
         paging: true,
         pageLength: len,
         lengthMenu: [[25, 50, 100, -1], [25, 50, 100, "All"]],

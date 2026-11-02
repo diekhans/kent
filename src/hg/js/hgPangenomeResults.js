@@ -226,8 +226,9 @@ function pgrAssemblyName(db) {
 function pgrAssemblyLabel(db) {
     if (!db) { return ""; }
     var m = /[?&]db=([^&]+)/.exec(db);
-    if (m) { return decodeURIComponent(m[1]); }
-    return db;
+    // A hub's assembly as the cart knows it, "hub_4837794_HG002v1.1.MAT", is
+    // HG002v1.1.MAT to anyone reading the table.
+    return (m ? decodeURIComponent(m[1]) : db).replace(/^hub_[0-9]+_/, "");
 }
 
 // Identity and coverage come back as percentages (0-100), not fractions.
@@ -1695,6 +1696,9 @@ function pgrDraw(queries, allRows, note) {
     }
 
     var dt = jQuery("#pgrTable").DataTable({
+        // Widths from the content, not pinned to what the first draw measured:
+        // the loci, the coverage bars and the ancestry arrive after it.
+        autoWidth: false,
         data: allRows.slice().sort(pgrRowOrder(pgrQueryNames)),
         columns: cols,
         // Pages, as everyone knows them from every other long list: the size
@@ -1797,7 +1801,12 @@ function pgrLocusCell(r) {
     if (r.locus === undefined) {
         return (r.contig == null || r.locusFailed) ? "" : '<span class="pgrUnplaced">&#8230;</span>';
     }
-    return pgrEsc(r.locus || "");
+    // A long one may wrap after "intergenic", but never between the two gene
+    // names, and a short one ("exon LCT-MCM6") not at all.  Non-breaking
+    // characters, on screen only, so a search for "LCT-MCM6" still finds it.
+    var t = (r.locus || "").replace(/-/g, "\u2011");
+    if (t.length <= 20) { t = t.replace(/ /g, "\u00a0"); }
+    return pgrEsc(t);
 }
 
 var pgrLocusBusy = false;
