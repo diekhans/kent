@@ -97,7 +97,12 @@ function pgpEsc(s) {
 // Each haplotype is read in its own assembly's coordinates, at the interval the
 // surjection put the query on, so the request is a list of places rather than
 // one locus with a list of names.  POSTed because fifty of them outgrow a URL.
-function pgpFetch(spots) {
+// The server reads at most 100 spots a request (pangenome.pclaiMaxHaplotypes)
+// and quietly leaves out the rest, so a table of every hit is asked about in
+// pieces, one after another, and the answers put together.
+var PGP_PER_REQUEST = 100;
+
+function pgpFetchOne(spots) {
     var body = "cmd=pclai&payload=" +
                encodeURIComponent(JSON.stringify({spots: spots}));
     return fetch(window.location.pathname, {
@@ -109,6 +114,24 @@ function pgpFetch(spots) {
         if (!r.ok) { throw new Error("HTTP " + r.status); }
         return r.json();
     });
+}
+
+function pgpFetch(spots) {
+    var chunks = [];
+    for (var i = 0; i < spots.length; i += PGP_PER_REQUEST) {
+        chunks.push(spots.slice(i, i + PGP_PER_REQUEST));
+    }
+    var merged = null;
+    return chunks.reduce(function (prev, chunk) {
+        return prev.then(function () {
+            return pgpFetchOne(chunk).then(function (r) {
+                if (!merged || !r || r.status !== "ok") { merged = merged || r; return; }
+                merged.points = (merged.points || []).concat(r.points || []);
+                merged.asked = (merged.asked || 0) + (r.asked || 0);
+                merged.found = (merged.found || 0) + (r.found || 0);
+            });
+        });
+    }, Promise.resolve()).then(function () { return merged; });
 }
 
 // ---- the plot ---------------------------------------------------------------
@@ -484,7 +507,7 @@ function pgpDraw() {
         // ancestry data: say which filter did it and leave the controls up.
         host.innerHTML = pgpControlsHtml(0, all.length, dropped) +
             "<p>No hit clears these filters. Lower the coverage floor, or " +
-            "include every placement, to see more.</p>";
+            "include every hit, to see more.</p>";
         pgpBindControls();
         return;
     }
@@ -707,7 +730,7 @@ function pgpControlsHtml(shown, total, dropped) {
         // plotting them together averages positions that have nothing to do
         // with each other - the best placement alone is the default.
         o.push('<label class="pgpCtl"><input id="pgpBestOnly" type="checkbox"' +
-               (pgpBestOnly ? ' checked' : '') + '> Best placement only</label>');
+               (pgpBestOnly ? ' checked' : '') + '> Best hit only</label>');
     }
     if (dropped > 0) {
         o.push('<span class="pgpCtlNote">' + shown + ' of ' + total + ' shown, ' +

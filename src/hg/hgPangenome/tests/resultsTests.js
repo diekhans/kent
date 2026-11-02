@@ -135,23 +135,46 @@ t.test('a query not in the list sorts after those that are', function () {
     t.eq(rows[0].query, 'A', 'known first');
 });
 
+t.suite('sample and haplotype, hit');
+t.test('a PanSN name is shown as its sample and haplotype number', function () {
+    t.eq(R.pgrSampleOf('HG00097#2'), 'HG00097', 'sample');
+    t.eq(R.pgrPhaseOf('HG00097#2'), '2', 'haplotype');
+    t.eq(R.pgrSampleOf('GRCh38#0'), 'GRCh38', 'a reference is its own sample');
+    t.eq(R.pgrPhaseOf('GRCh38#0'), '0', 'haplotype 0');
+    t.eq(R.pgrPhaseOf('odd'), '', 'no number to show');
+    R.window.pangenomeSamples = { hg00097: ['GBR', 'British from England and Scotland'] };
+    t.eq(R.pgrPopOf('HG00097#2'), 'British from England and Scotland (GBR)', 'population, as PanLift words it');
+    t.eq(R.pgrPopOf('GRCh38#0'), '', 'a reference has none');
+});
+t.test('a hit reads "2 of 3", not a placement', function () {
+    t.eq(R.pgrHitText(row({ placement: 1, placements: 3 })), '2 of 3', 'one-based');
+});
+
+t.test('the locus cell: waiting, the words, or nothing', function () {
+    t.contains(R.pgrLocusCell(row()), 'pgrUnplaced', 'not read yet');
+    t.eq(R.pgrLocusCell(row({ locus: 'exon <b>X</b>' })), 'exon &lt;b&gt;X&lt;/b&gt;', 'escaped');
+    t.eq(R.pgrLocusCell(row({ locus: '' })), '', 'nothing near');
+    t.eq(R.pgrLocusCell(row({ contig: null })), '', 'no position, no locus');
+});
+
 t.suite('download table');
-t.test('one header and one line per row, 20 columns, positions 1-based', function () {
-    var tsv = R.pgrRowsToTsv([row(), row({ contig: null })]);
+t.test('one header and one line per row, 21 columns, positions 1-based', function () {
+    var tsv = R.pgrRowsToTsv([row({ locus: 'exon SMN1' }), row({ contig: null })]);
     var lines = tsv.trim().split('\n');
     t.eq(lines.length, 3, 'header + 2');
-    lines.forEach(function (l, i) { t.eq(l.split('\t').length, 20, 'columns on line ' + i); });
+    lines.forEach(function (l, i) { t.eq(l.split('\t').length, 21, 'columns on line ' + i); });
     var f = lines[1].split('\t');
     t.eq(f[6], '1000', 'start is 1-based');
     t.eq(f[7], '1999', 'end');
     t.eq(f[8], '1000', 'span');
-    t.eq(f[12], '1', 'qStart is 1-based');
+    t.eq(f[9], 'exon SMN1', 'locus');
+    t.eq(f[13], '1', 'qStart is 1-based');
     t.eq(lines[2].split('\t')[4], '', 'an unplaced row has no contig');
 });
 t.test('a tab or newline in a query name cannot break the columns', function () {
     var l = R.pgrRowsToTsv([row({ query: 'a\tb\nc' })]).trim().split('\n');
     t.eq(l.length, 2, 'still one data line');
-    t.eq(l[1].split('\t').length, 20, 'still 20 columns');
+    t.eq(l[1].split('\t').length, 21, 'still 21 columns');
 });
 t.test('the query FASTA wraps at 60 bases', function () {
     var fa = R.pgrFasta([{ name: 'x', seq: new Array(131).join('a') }]);
@@ -179,23 +202,6 @@ t.test('a record without one leaves it unset, not zero', function () {
 });
 
 t.suite('one haplotype on its own');
-t.test('typed names resolve to the PanSN spelling, or to nothing', function () {
-    t.eq(R.pgrHapResolve('hg00097#1'), 'HG00097#1', 'lower case');
-    t.eq(R.pgrHapResolve('  HG00097 1 '), 'HG00097#1', 'space for #');
-    t.eq(R.pgrHapResolve('HG00097.2'), 'HG00097#2', 'dot for #');
-    t.eq(R.pgrHapResolve('chm13#0'), 'CHM13#0', 'CHM13 keeps its case');
-    t.eq(R.pgrHapResolve('grch38#0'), 'GRCh38#0', 'and GRCh38');
-    t.eq(R.pgrHapResolve('HG00097'), null, 'a sample alone is not a haplotype');
-    t.eq(R.pgrHapResolve('XX0#1'), null, 'unknown');
-    t.eq(R.pgrHapResolve(''), null, 'empty');
-});
-t.test('the picker lists every haplotype, references first', function () {
-    var n = R.pgrHapNames();
-    t.eq(n.length, Object.keys(R.window.pangenomeAssemblies).length, 'all of them');
-    t.eq(n[0], 'CHM13#0', 'CHM13 first');
-    t.eq(n[1], 'GRCh38#0', 'then GRCh38');
-    t.ok(n.indexOf('HG00097#1') > 1, 'samples upper-cased');
-});
 t.test('every placement of every query is a place to fill, from the rows alone', function () {
     R.pgrMapping = null;
     R.pgrRows = [row({ query: 'a', placements: 3 }), row({ query: 'a', placement: 2, placements: 3 }),
@@ -237,57 +243,61 @@ t.test('a row placed on request gets no number and no plot box', function () {
     t.contains(R2.pgrPickCell(row()), 'pgrPick', 'a table row keeps its box');
 });
 
-t.suite('the other placements');
-function setPlaces(R, list, rows, queries) {
-    R.pgrPlaceList = list.map(function (x) { return { query: x[0], index: x[1] }; });
+t.suite('every hit');
+function setRows(R, rows) {
     R.pgrRows = rows;
-    R.pgrQueryCount = queries;
     R.pgrQueryNames = ['a', 'b'];
-    R.pgrAllPlaces = false; R.pgrMoreBusy = false; R.pgrMoreErr = null;
 }
 t.test('the table numbers its own rows first, those aligned on request after, with no gaps', function () {
-    setPlaces(R, [['a', 0], ['a', 1]], [
+    setRows(R, [
         row({ query: 'a', placement: 1, placements: 2, identity: 99, hap: 'X#1' }),
         row({ query: 'a', placement: 0, placements: 2, identity: 98, hap: 'Y#1', extra: true }),
-        row({ query: 'a', placement: 0, placements: 2, identity: 97, hap: 'Z#1' })], 1);
+        row({ query: 'a', placement: 0, placements: 2, identity: 97, hap: 'Z#1' })]);
     R.pgrRerank();
     t.eq(R.pgrRows.map(function (r) { return r.hap + ':' + r.rank; }).join(' '),
-         'Z#1:0 X#1:1 Y#1:2', 'best placement first, the extra last');
+         'Z#1:0 X#1:1 Y#1:2', 'best hit first, the extra last');
 });
-t.test('one sequence with other places: say how many, and that only the best is shown', function () {
-    setPlaces(R, [['a', 0], ['a', 1], ['a', 2]], [row({ query: 'a', placements: 3, mapq: 60 })], 1);
-    var h = R.pgrMoreHtml();
-    t.contains(h, 'also aligns to 2 other places', 'count');
-    t.contains(h, 'shows only the best one', 'what the table is');
-    t.contains(h, 'data-pgr="more"', 'the button');
+t.test('hits are counted among the places with rows, per query', function () {
+    setRows(R, [row({ query: 'a', placement: 0, placements: 3 }),
+                row({ query: 'a', placement: 2, placements: 3, hap: 'X#1' }),
+                row({ query: 'b', placement: 0, placements: 1 })]);
+    R.pgrRerank();
+    var by = {};
+    R.pgrRows.forEach(function (r) { by[r.query + r.placement] = R.pgrHitText(r); });
+    t.eq(by.a0, '1 of 2', 'the first');
+    t.eq(by.a2, '2 of 2', 'the third place is the second with rows');
+    t.eq(by.b0, '1 of 1', 'another query counts its own');
+    setRows(R, []);
 });
-t.test('a low MAPQ at the best placement says the others may be just as likely', function () {
-    setPlaces(R, [['a', 0], ['a', 1]], [row({ query: 'a', placements: 2, mapq: 0 })], 1);
-    var h = R.pgrMoreHtml();
-    t.contains(h, 'other place.', 'singular');
-    t.contains(h, 'could not tell it apart', 'why it matters');
-    t.contains(h, 'MAPQ 0', 'the figure');
+t.test('the coverage floor hides rows under it and cannot go below the install floor', function () {
+    R.pgrMinShown = null;
+    t.ok(R.pgrShown(row({ coverage: 50 })), 'at the default floor');
+    t.notOk(R.pgrShown(row({ coverage: 49.9 })), 'under it');
+    t.ok(R.pgrShown(row({ coverage: null })), 'a row with no figure is not hidden by it');
+    t.notOk(R.pgrShown(row({ extra: true })), 'rows aligned on request wait for their haplotype');
+    R.pgrSetCovFloor('90');
+    t.notOk(R.pgrShown(row({ coverage: 89 })), 'raised to 90');
+    R.pgrSetCovFloor('10');
+    t.eq(R.pgrMinShown, 50, 'clamped to the install floor');
+    R.pgrSetCovFloor('x');
+    t.eq(R.pgrMinShown, 50, 'not a number: the floor');
+    R.pgrMinShown = null;
 });
-t.test('several sequences: how many have other places, and how many in all', function () {
-    setPlaces(R, [['a', 0], ['a', 1], ['a', 2], ['b', 0]],
-              [row({ query: 'a', placements: 3, mapq: 3 }), row({ query: 'b', mapq: 60 })], 2);
-    var h = R.pgrMoreHtml();
-    t.contains(h, '1 of your sequences also aligns to other places (2 in all)', 'counts');
-    t.contains(h, 'For 1 of them the mapper could not tell', 'low MAPQ named');
+t.test('with no fetch floor, 50% is still the default and can be lowered', function () {
+    var L = loadResults({ pangenomePclai: false, pangenomeMinCoverage: 0 });
+    L.pgrRows = [row({ query: 'a', coverage: 100 }), row({ query: 'a', coverage: 30, hap: 'X#1' }),
+                 row({ query: 'b', coverage: 42, hap: 'Y#1' }), row({ query: 'b', coverage: 20, hap: 'Z#1' })];
+    L.pgrNumberHits();
+    var shown = function () { return L.pgrRows.filter(L.pgrShown).map(function (r) { return r.hap; }).join(' '); };
+    t.eq(L.pgrCovFloor(), 50, 'default 50');
+    t.eq(shown(), 'HG00097#2 Y#1 Z#1', "a's 30% fragment hidden; b never reaches 50, so all of b stays");
+    L.pgrSetCovFloor('10');
+    t.eq(L.pgrCovFloor(), 10, 'lowered to 10');
+    t.eq(shown(), 'HG00097#2 X#1 Y#1 Z#1', 'everything');
 });
-t.test('no other places: nothing to offer', function () {
-    setPlaces(R, [['a', 0]], [row({ query: 'a' })], 1);
-    t.eq(R.pgrMoreHtml(), '', 'empty');
-});
-t.test('once shown, the bar offers the best only; while loading, it says so', function () {
-    setPlaces(R, [['a', 0], ['a', 1]], [row({ query: 'a', placements: 2 })], 1);
-    R.pgrAllPlaces = true;
-    t.contains(R.pgrMoreHtml(), 'data-pgr="bestonly"', 'best only');
-    R.pgrAllPlaces = false; R.pgrMoreBusy = true;
-    t.contains(R.pgrMoreHtml(), 'gbSpinner', 'spinner');
-    R.pgrMoreBusy = false; R.pgrMoreErr = 'gone <b>';
-    t.contains(R.pgrMoreHtml(), 'Could not load them: gone &lt;b&gt;', 'an error, escaped');
-    setPlaces(R, [], [], 0); R.pgrPlaceList = null;
+t.test('the strip offers the floor as a number box', function () {
+    t.contains(R.pgrCovControl(), 'id="pgrMinCov"', 'box');
+    t.contains(R.pgrCovControl(), 'min="50"', 'its minimum is the install floor');
 });
 
 t.suite('reference annotations');

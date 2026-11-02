@@ -36,6 +36,12 @@ function pgrSurjectCount() {
     return (typeof pangenomeSurjectTop === "number") ? pangenomeSurjectTop : 10;
 }
 
+// The most one batch call may place: enough for every haplotype in the graph,
+// asked for only when the reader pages past the first pgrSurjectCount().
+function pgrSurjectMax() {
+    return (typeof pangenomeSurjectMax === "number") ? pangenomeSurjectMax : 500;
+}
+
 
 // The ancestry plot is optional; with it off nothing below it runs and the
 // table has no checkbox column.
@@ -77,14 +83,13 @@ function pgrPclaiSpotOf(r) {
                             pgrFmt(r.inserted || 0) + " inserted, " +
                             pgrFmt(r.deleted || 0) + " deleted"]);
     }
-    // Which locus this hit belongs to, when the query mapped to more than one.
+    // Which hit this is, when the query aligned to more than one place.
     // Without it two rows for one haplotype are indistinguishable in the plot.
-    if (r.placements > 1) {
-        info.push(["Placement", (r.placement + 1) + " of " + r.placements +
-                                (r.placement === 0 ? " (the best)" : "")]);
+    if (r.hits > 1) {
+        info.push(["Hit", pgrHitText(r)]);
     }
     if (r.isCarrier || r.isRepresentative) {
-        info.push(["Role", r.isRepresentative ? "the placement's representative"
+        info.push(["Role", r.isRepresentative ? "the hit's representative"
                                               : "carries the query"]);
     }
     return {hap: r.hap, acc: r.db, contig: r.contig, start: r.start, end: r.end,
@@ -109,8 +114,8 @@ function pgrIdentityOf(row) {
 
 // The table's order, as hgBlat's results are sorted: by query and then by
 // quality.  Each query's rows together, in the order the queries were given;
-// then each of its placements in turn, the best first; and within one, best
-// identity first.  For one query placed once, this is just the last.
+// then each of its hits in turn, the best first; and within one, best
+// identity first.  For one query with one hit, this is just the last.
 function pgrRowOrder(queryNames) {
     var order = Object.create(null);
     (queryNames || []).forEach(function (n, i) { if (!(n in order)) { order[n] = i; } });
@@ -119,6 +124,9 @@ function pgrRowOrder(queryNames) {
         var qa = rankOf(a.query), qb = rankOf(b.query);
         if (qa !== qb) { return qa - qb; }
         if (a.placement !== b.placement) { return a.placement - b.placement; }
+        // The rows still waiting for a position go after those that have one,
+        // so the first page is the haplotypes already placed.
+        if (!a.pending !== !b.pending) { return a.pending ? 1 : -1; }
         return pgrByIdentity(a, b);
     };
 }
@@ -158,6 +166,27 @@ function pgrHapKey(name) {
 
 function pgrHapShort(name) {
     return String(name == null ? "" : name).split("#").slice(0, 2).join("#");
+}
+
+// The table shows a haplotype as its sample and which of the sample's
+// haplotypes it is, in two columns: "HG00097#1" is a PanSN identifier, not
+// something a reader should have to take apart.
+function pgrSampleOf(hap) {
+    return String(hap == null ? "" : hap).split("#")[0];
+}
+
+// The sample's population as the HPRC describes it, "British from England
+// and Scotland (GBR)", from hgPangenomeSamples.js; PanLift shows the same.
+function pgrPopOf(hap) {
+    var table = window.pangenomeSamples || {};
+    var key = pgrSampleOf(hap).toLowerCase();
+    var p = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
+    return p ? p[1] + " (" + p[0] + ")" : "";
+}
+
+function pgrPhaseOf(hap) {
+    var parts = String(hap == null ? "" : hap).split("#");
+    return parts.length > 1 ? parts[1] : "";
 }
 
 // A surjection target is PanSN, but the contig may carry a subpath offset -
@@ -424,13 +453,6 @@ function pgrApplySurjection(row, resp) {
 
 // Records are keyed by "requested", the haplotype name as it was asked for.
 // "haplotype" is the fragment it landed on and is for coordinates only.
-var pgrTruncated = 0;
-function pgrTruncNote() {
-    if (!pgrTruncated) { return null; }
-    return "This is the best " + pgrFmt(pgrSurjectCount()) + " of " +
-           pgrFmt(pgrTruncated) + " haplotypes that carry the sequence, by " +
-           "coverage.";
-}
 
 
 // ---- the table -------------------------------------------------------------
@@ -460,6 +482,7 @@ function pgrIdColor(id) {
 
 // A row with no position: there is nothing to open, so say why instead.
 function pgrUnplacedText(r) {
+    if (r.pending) { return "finding position&#8230;"; }
     if (r.placeStatus === "no_anchors") { return "not present"; }
     if (r.placeStatus === "surjection_failed") { return "no alignment"; }
     return "not placed";
@@ -517,6 +540,16 @@ function pgrMapqOf(r) {
     return (r.surjMapq == null) ? r.mapq : r.surjMapq;
 }
 
+// "2 of 3": which of the places the query aligned to in the graph this row is.
+// The mapper numbers them best first, but when it cannot tell them apart (a low
+// MAPQ) the order means nothing, so the number is only a name.  Counted among
+// the places the table has rows for (pgrNumberHits), so a place where no
+// haplotype cleared the coverage floor is not a "3" with no rows.
+function pgrHitText(r) {
+    return (r.hit == null || r.hit < 0) ? (r.placement + 1) + " of " + r.placements
+                                         : (r.hit + 1) + " of " + r.hits;
+}
+
 // MAPQ is shown as the number, so a reader who knows it can weigh it; a low one
 // is marked, with the explanation on the mouse-over, since it is the one value
 // in a row that says the position itself may be wrong.
@@ -559,7 +592,12 @@ function pgrArm(row, opening) {
         db: row.db, contig: row.contig, name: row.query, job_id: pgrJobId(),
         cigar: row.cigar, start: row.start, strand: row.strand,
         // Opening the browser: drop what was lifted onto the last haplotype.
-        dropLifts: opening ? "on" : "off"
+        dropLifts: opening ? "on" : "off",
+        // Every other hit of this sequence on this haplotype, drawn in the
+        // same track as hgBlat draws all of a query's hits.
+        others: opening ? pgrOtherHits(row).map(function (r) {
+            return { contig: r.contig, start: r.start, strand: r.strand, cigar: r.cigar };
+        }) : []
     };
     var body = { cmd: "alignTrack", payload: JSON.stringify(payload) };
     var hgsid = pgrCfg().hgsid;
@@ -575,6 +613,63 @@ function pgrArm(row, opening) {
         }
         return resp;
     });
+}
+
+// The other placed rows of this row's query on this row's haplotype.
+function pgrOtherHits(row) {
+    var key = pgrHapKey(row.hap);
+    return pgrRows.filter(function (r) {
+        return r !== row && r.query === row.query && pgrHapKey(r.hap) === key &&
+               r.contig != null && r.cigar && r.db === row.db && !r.pending &&
+               !(r.placement === row.placement && r.start === row.start);
+    });
+}
+
+// Before a haplotype is opened, a position for it at every hit: the table
+// holds the best few at each, so the haplotype may be missing at another.
+// Each missing one is one surjection, the request "All hits on this
+// haplotype" makes; a place where it has no path stays missing.
+function pgrHapEverywhere(row) {
+    var hap = row.hap;
+    var missing = pgrPlaces().filter(function (p) {
+        return p.query === row.query && !pgrHasRow(hap, p.query, p.index);
+    });
+    if (!missing.length) { return Promise.resolve(); }
+    return pgrMappingReady().then(function (results) {
+        var res = results.filter(function (x) { return x.name === row.query; })[0];
+        return pgrPool(missing.map(function (p) {
+            return function () {
+                var aln = res && (res.alignments || [])[p.index];
+                if (!aln) { return Promise.resolve(null); }
+                return pgrSurjectOne(res.name, p.index, hap).then(function (resp) {
+                    return (resp && resp.surjection) ? pgrRowForHap(res, aln, p.index, hap, resp) : null;
+                });
+            };
+        }), 3);
+    }).then(function (rows) {
+        (rows || []).forEach(function (r) { if (r) { pgrAddHapRow(r); } });
+        pgrNumberHits();
+        pgrCacheWrite(pgrJobId());
+    }).catch(function () { /* open with what there is */ });
+}
+
+// A row aligned on request: it replaces the row that was waiting for its page,
+// or joins the table's rows kept apart for "All hits on this haplotype".
+function pgrAddHapRow(r) {
+    if (pgrHasRow(r.hap, r.query, r.placement)) { return; }
+    var key = pgrHapKey(r.hap);
+    var waiting = pgrRows.filter(function (x) {
+        return x.pending && x.query === r.query && x.placement === r.placement &&
+               pgrHapKey(x.hap) === key;
+    })[0];
+    if (waiting) {
+        r.extra = false;
+        r.rank = waiting.rank;
+        pgrRows[waiting.rank] = r;
+        return;
+    }
+    r.rank = pgrRows.length;
+    pgrRows.push(r);
 }
 
 // ---- a reference's annotations on the haplotype ---------------------------
@@ -699,7 +794,8 @@ function pgrAct(row, what, link) {
     // A new tab has to be opened in the click itself or the popup blocker takes
     // it, so it is opened now and pointed at the answer when it arrives.
     var tab = (what === "newtab") ? window.open("", "_blank") : null;
-    pgrArm(row, what !== "details").then(function (resp) {
+    var ready = (what === "details") ? Promise.resolve() : pgrHapEverywhere(row);
+    ready.then(function () { return pgrArm(row, what !== "details"); }).then(function (resp) {
         if (what === "details") { return resp.details; }
         if (!ref) { return resp.url; }
         if (busy) { link.innerHTML = "adding " + pgrEsc(ref.label) + " annotations&#8230;"; }
@@ -758,26 +854,32 @@ function pgrCacheWrite(job) {
         window.sessionStorage.setItem(pgrCacheKey(job), JSON.stringify({
             // Only what the table is drawn from.  The mapping response itself is
             // far larger, and is fetched again in the rare case it is needed.
-            rows: pgrRows,
+            rows: pgrRows.map(function (r) {
+                if (!r.locusFailed) { return r; }
+                var copy = Object.assign({}, r);
+                delete copy.locusFailed;
+                return copy;
+            }),
             queries: pgrQueryCount,
             queryNames: pgrQueryNames,
             note: pgrNote,
             focus: pgrFocus,
             places: pgrPlaceList,
             loaded: pgrLoaded,
-            allPlaces: pgrAllPlaces
+            minShown: pgrMinShown,
+            full: pgrFull
         }));
     } catch (e) { /* no memory to spare; the page will just rebuild it */ }
 }
 
-// ---- the other placements --------------------------------------------------
+// ---- every hit -------------------------------------------------------------
 //
-// Every job asks for as many placements as the install allows, but the table
-// opens on each sequence's best one: for most sequences the rest are weaker
-// repeats.  A bar above the table says how many others there are - more
-// urgently when the best one's MAPQ says the mapper could not tell them apart -
-// and fetches them when asked.  Once fetched they are kept, and the bar
-// switches between all placements and the best only without asking again.
+// Every job asks for as many placements as the install allows, and the table
+// shows all of them.  When the mapper cannot tell two copies apart they are
+// equally likely, and a sequence that is found in several places is often the
+// very thing the reader came to see.  What keeps pseudogene fragments and the
+// like out is coverage - a haplotype is listed at a hit only when enough of the
+// query aligned there - and not a count of hits.
 
 function pgrPlaceKey(query, index) {
     return query + "\u0000" + index;
@@ -787,17 +889,117 @@ function pgrPlaceKey(query, index) {
 // fails, as the table always has.
 function pgrBatchRows(res, aln, index) {
     var placements = (res.alignments || []).length;
-    return pgrSurjectAll(res.name, index, pgrSurjectCount(), pgrMinCoverage())
+    var fallBack = function (why) {
+        pgrBatchErrs.push(why || "no answer");
+        return pgrRowsFromMapping(res, aln, index, placements);
+    };
+    // Tried twice: the first batch call on a fresh job is the slow one, and an
+    // occasional one fails where the same call a moment later does not.
+    var ask = function () {
+        return pgrSurjectAll(res.name, index, pgrSurjectCount(), pgrMinCoverage());
+    };
+    return ask()
+        .then(function (batch) { return (batch && batch.haplotypes) ? batch : ask(); },
+              function () { return ask(); })
         .then(function (batch) {
             if (batch && batch.haplotypes) {
-                if (batch.truncated) {
-                    pgrTruncated = Math.max(pgrTruncated, batch.candidates || 0);
-                }
-                return pgrRowsFromBatch(res, aln, index, placements, batch);
+                var rows = pgrRowsFromBatch(res, aln, index, placements, batch);
+                return batch.truncated ? rows.concat(pgrPendingRows(res, aln, index, rows))
+                                       : rows;
             }
-            return pgrRowsFromMapping(res, aln, index, placements);
+            return fallBack(batch && (batch.error || batch.status));
         })
-        .catch(function () { return pgrRowsFromMapping(res, aln, index, placements); });
+        .catch(function (err) { return fallBack(err && err.message); });
+}
+
+// Why batch calls fell back to the graded list, for the note that says so.
+var pgrBatchErrs = [];
+
+// ---- pages -----------------------------------------------------------------
+//
+// The table pages the way any long list on the web does.  It lists every
+// haplotype that carries a hit from the start - the mapping graded them all -
+// but places only the best pgrSurjectCount() by coverage straight away, as one
+// batch call per hit.  The rest are "pending": listed with their coverage and
+// identity, and placed when a page that shows one is drawn, by one more batch
+// call for the whole hit.  Most readers never leave the first page, and those
+// who do wait a few seconds once.
+
+// The haplotypes the batch call did not place, from the mapping's graded list.
+function pgrPendingRows(res, aln, index, placed) {
+    var have = Object.create(null);
+    placed.forEach(function (r) { have[pgrHapKey(r.hap)] = true; });
+    return pgrRowsFromMapping(res, aln, index, (res.alignments || []).length)
+        .filter(function (r) {
+            return !have[pgrHapKey(r.hap)] &&
+                   !(r.coverage != null && r.coverage < pgrMinCoverage());
+        })
+        .map(function (r) { r.pending = true; return r; });
+}
+
+var pgrFull = {};           // hits whose every haplotype has been placed
+var pgrFullBusy = {};
+
+// Place every pending row of the hits on the page now drawn.
+function pgrFillPage(dt) {
+    if (pgrFocus) { return; }
+    var want = Object.create(null);
+    dt.rows({ page: "current", search: "applied" }).data().toArray().forEach(function (r) {
+        if (r.pending) { want[pgrPlaceKey(r.query, r.placement)] = { query: r.query, index: r.placement }; }
+    });
+    Object.keys(want).forEach(function (k) { pgrPlaceAll(want[k]); });
+}
+
+function pgrPlaceAll(p) {
+    var key = pgrPlaceKey(p.query, p.index);
+    if (pgrFull[key] || pgrFullBusy[key]) { return; }
+    pgrFullBusy[key] = true;
+    pgrMappingReady().then(function (results) {
+        var res = results.filter(function (x) { return x.name === p.query; })[0];
+        var aln = res && (res.alignments || [])[p.index];
+        if (!aln) { throw new Error("the mapping no longer has this hit"); }
+        return pgrSurjectAll(res.name, p.index, pgrSurjectMax(), pgrMinCoverage())
+            .then(function (batch) {
+                if (!batch || !batch.haplotypes) {
+                    throw new Error((batch && (batch.error || batch.status)) || "no answer");
+                }
+                return pgrRowsFromBatch(res, aln, p.index, (res.alignments || []).length, batch);
+            });
+    }).then(function (rows) {
+        var have = Object.create(null);
+        rows.forEach(function (r) { have[pgrHapKey(r.hap)] = true; });
+        pgrRows = pgrRows.filter(function (r) {
+            if (r.query !== p.query || r.placement !== p.index) { return true; }
+            return r.extra && !have[pgrHapKey(r.hap)];
+        }).concat(rows);
+        pgrFull[key] = true;
+        pgrRerank();
+    }).catch(function (err) {
+        // Said once, at the top; the rows stay listed with what they had.
+        pgrRows.forEach(function (r) {
+            if (r.pending && r.query === p.query && r.placement === p.index) {
+                r.pending = false;
+                r.placeFailed = true;
+            }
+        });
+        pgrFull[key] = true;
+        pgrFail("Could not place the rest of the haplotypes: " + err.message + ".");
+    }).then(function () {
+        pgrFullBusy[key] = false;
+        pgrCacheWrite(pgrJobId());
+        pgrRedrawKeep();
+    });
+}
+
+// Draw the table again from pgrRows on the page, sort and filter it was on.
+function pgrRedrawKeep() {
+    var dt = pgrDt;
+    var st = dt ? { page: dt.page(), len: dt.page.len(), order: dt.order(), search: dt.search() } : null;
+    pgrDraw(pgrQueryCount, pgrRows, pgrNote);
+    if (st && pgrDt) {
+        pgrDt.page.len(st.len).order(st.order).search(st.search).draw(false);
+        pgrDt.page(st.page).draw(false);
+    }
 }
 
 // Put the rows in table order and number them: the table's own first, so the
@@ -809,145 +1011,78 @@ function pgrRerank() {
     var extra = pgrRows.filter(function (r) { return r.extra; }).sort(order);
     pgrRows = main.concat(extra);
     pgrRows.forEach(function (r, i) { r.rank = i; });
+    pgrNumberHits();
 }
 
-function pgrOtherPlaces() {
-    return pgrPlaces().filter(function (p) { return p.index > 0; });
-}
-
-// The best placement's MAPQ for each query that has others, from its rows.
-function pgrLowMapqQueries() {
-    var low = Object.create(null);
+// Each query's hits, numbered 1..n in the mapper's order among the places that
+// have rows.  The mapper's own index stays in "placement": it is what the
+// server is asked about.
+function pgrNumberHits() {
+    var places = Object.create(null);
     pgrRows.forEach(function (r) {
-        if (r.placement === 0 && !r.extra && r.placements > 1 && r.mapq != null &&
-            Number(r.mapq) < 10) { low[r.query] = Number(r.mapq); }
+        var q = places[r.query] = places[r.query] || [];
+        if (q.indexOf(r.placement) < 0) { q.push(r.placement); }
     });
-    return low;
-}
-
-function pgrMoreHtml() {
-    var others = pgrOtherPlaces();
-    if (!others.length) { return ""; }
-    if (pgrMoreBusy) {
-        return '<span class="gbSpinner"></span><span>Aligning your sequence to the ' +
-               "other places it was found&#8230;</span>";
-    }
-    if (pgrAllPlaces) {
-        return "<span>Showing every place your " +
-               (pgrQueryCount > 1 ? "sequences" : "sequence") + " aligned. " +
-               "Placement 1 is the best of each.</span>" +
-               '<button type="button" class="gbPill" data-pgr="bestonly">' +
-               "Best placement only</button>";
-    }
-    var low = pgrLowMapqQueries();
-    var nLow = Object.keys(low).length;
-    var msg;
-    if (pgrQueryCount > 1) {
-        var qs = Object.create(null);
-        others.forEach(function (p) { qs[p.query] = true; });
-        var nq = Object.keys(qs).length;
-        msg = pgrFmt(nq) + " of your sequences also " + (nq === 1 ? "aligns" : "align") +
-              " to other places (" + pgrFmt(others.length) + " in all). The table " +
-              "shows only the best place for each.";
-        if (nLow) {
-            msg += " For " + pgrFmt(nLow) + " of them the mapper could not tell the " +
-                   "places apart (low MAPQ), so the others may be just as likely.";
+    Object.keys(places).forEach(function (q) { places[q].sort(function (a, b) { return a - b; }); });
+    pgrQueryBest = Object.create(null);
+    pgrRows.forEach(function (r) {
+        r.hit = places[r.query].indexOf(r.placement);
+        r.hits = places[r.query].length;
+        if (r.coverage != null && !(pgrQueryBest[r.query] >= r.coverage)) {
+            pgrQueryBest[r.query] = r.coverage;
         }
-    } else {
-        var n = others.length;
-        msg = "Your sequence also aligns to " + pgrFmt(n) + " other " +
-              (n === 1 ? "place" : "places") + ". ";
-        msg += nLow ?
-            "The mapper could not tell " + (n === 1 ? "it" : "them") + " apart from the " +
-            "best one (MAPQ " + low[Object.keys(low)[0]] + "), so " +
-            (n === 1 ? "it may be" : "they may be") + " just as likely." :
-            "The table shows only the best one.";
-    }
-    if (pgrMoreErr) {
-        msg += " Could not load them: " + pgrEsc(pgrMoreErr) + ".";
-    }
-    return "<span>" + msg + "</span>" +
-           '<button type="button" class="gbPill" data-pgr="more">Show other placements</button>';
-}
-
-// The bar is hidden while the table is narrowed to one haplotype: that view
-// already shows every placement, and says so in its own bar.
-function pgrMoreShow() {
-    var bar = document.getElementById("pgrMoreBar");
-    if (!bar) { return; }
-    var html = pgrFocus ? "" : pgrMoreHtml();
-    bar.hidden = !html;
-    bar.innerHTML = html;
-    var low = !pgrAllPlaces && Object.keys(pgrLowMapqQueries()).length > 0;
-    bar.className = "pgrBar" + (low ? " warn" : "");
-}
-
-// The Placement column only means something when more than one placement can
-// be on screen.
-function pgrPlaceColShow() {
-    if (!pgrDt) { return; }
-    var col = pgrDt.column(".placeCol");
-    if (col && col.length) { col.visible(!!(pgrFocus || pgrAllPlaces)); }
-}
-
-function pgrShowMore() {
-    var todo = pgrOtherPlaces().filter(function (p) {
-        return !pgrLoaded[pgrPlaceKey(p.query, p.index)];
-    });
-    if (!todo.length) {
-        pgrAllPlaces = true;
-        pgrCacheWrite(pgrJobId());
-        pgrRedraw();
-        return;
-    }
-    pgrMoreBusy = true;
-    pgrMoreErr = null;
-    pgrMoreShow();
-    pgrMappingReady().then(function (results) {
-        var byName = Object.create(null);
-        results.forEach(function (res) { byName[res.name] = res; });
-        return pgrPool(todo.map(function (p) {
-            return function () {
-                var res = byName[p.query], aln = res && (res.alignments || [])[p.index];
-                if (!aln) { return Promise.resolve(null); }
-                return pgrBatchRows(res, aln, p.index).then(function (rows) { p.rows = rows; });
-            };
-        }), 3);
-    }).then(function () {
-        todo.forEach(function (p) {
-            if (!p.rows) { return; }
-            pgrLoaded[pgrPlaceKey(p.query, p.index)] = true;
-            // A haplotype placed on request here now has its table row.
-            var have = Object.create(null);
-            p.rows.forEach(function (r) { have[pgrHapKey(r.hap)] = true; });
-            pgrRows = pgrRows.filter(function (r) {
-                return !(r.extra && r.query === p.query && r.placement === p.index &&
-                         have[pgrHapKey(r.hap)]);
-            }).concat(p.rows);
-        });
-        pgrRerank();
-        pgrNote = pgrTruncNote() || pgrNote;
-        pgrMoreBusy = false;
-        pgrAllPlaces = true;
-        pgrCacheWrite(pgrJobId());
-        pgrRedraw();
-    }).catch(function (err) {
-        pgrMoreBusy = false;
-        pgrMoreErr = err.message || "the mapping is no longer available";
-        pgrMoreShow();
     });
 }
 
-function pgrBestOnly() {
-    pgrAllPlaces = false;
+// The coverage a row needs to be shown.  The batch call already left out
+// everything under the install's floor (pgrMinCoverage, usually none); the
+// table then hides what covers less than pgrShowCoverage() of the query - pieces
+// of pseudogenes and other fragments - and the reader can move that from the
+// strip, down to the floor or up to 100.
+var pgrMinShown = null;
+
+function pgrShowCoverage() {
+    var v = (typeof pangenomeShowCoverage === "number") ? pangenomeShowCoverage : 50;
+    return Math.max(pgrMinCoverage(), v);
+}
+
+function pgrCovFloor() {
+    return pgrMinShown == null ? pgrShowCoverage() : pgrMinShown;
+}
+
+function pgrCovControl() {
+    return '<div class="gbStat"><span class="k" title="Show a haplotype at a hit only when ' +
+           "at least this much of your sequence aligned to it there. This keeps short " +
+           "fragments, such as pieces of pseudogenes, out of the table. A sequence none " +
+           'of whose hits reach it is shown in full.">Min. coverage</span>' +
+           '<span class="v"><input id="pgrMinCov" class="pgrMinCov" type="number" min="' +
+           pgrMinCoverage() + '" max="100" step="5" value="' + pgrCovFloor() + '">%</span></div>';
+}
+
+function pgrSetCovFloor(v) {
+    v = parseFloat(v);
+    pgrMinShown = isNaN(v) ? pgrShowCoverage() : Math.max(pgrMinCoverage(), Math.min(100, v));
+    var input = document.getElementById("pgrMinCov");
+    if (input) { input.value = pgrMinShown; }
+    if (pgrDt) { pgrDt.draw(); }
     pgrCacheWrite(pgrJobId());
-    pgrRedraw();
 }
 
-// The whole table again: the rows were renumbered, or the plot needs the new
-// placements.
-function pgrRedraw() {
-    pgrDraw(pgrQueryCount, pgrRows, pgrNote);
+// The best coverage each query reached anywhere, so a query that only ever
+// matched partly is not filtered out of the table altogether.
+var pgrQueryBest = Object.create(null);
+
+function pgrUnderFloor(r) {
+    var floor = pgrCovFloor();
+    var best = pgrQueryBest[r.query];
+    return r.coverage != null && r.coverage < floor && !(best != null && best < floor);
+}
+
+// Is this row shown?  One haplotype's rows when the table is narrowed to it;
+// otherwise the table's own rows that clear the coverage floor.
+function pgrShown(r) {
+    if (pgrFocus) { return pgrHapKey(r.hap) === pgrHapKey(pgrFocus); }
+    return !r.extra && !pgrUnderFloor(r);
 }
 
 // ---- one haplotype on its own ----------------------------------------------
@@ -968,35 +1103,6 @@ var pgrFocusBusy = false;
 var pgrDt = null;
 var pgrPlaceList = null;    // every (query, placement), from the mapping
 var pgrLoaded = {};         // the placements whose batch call has been made
-var pgrAllPlaces = false;   // showing every placement, not just each best
-var pgrMoreBusy = false;
-var pgrMoreErr = null;
-
-// The picker's names, from the haplotype->assembly table that is already on
-// the page.  Its keys are lower-cased; the server wants them as PanSN spells
-// them, which is upper case for every sample.
-function pgrHapDisplay(key) {
-    if (key === "chm13#0") { return "CHM13#0"; }
-    if (key === "grch38#0") { return "GRCh38#0"; }
-    return String(key).toUpperCase();
-}
-
-function pgrHapNames() {
-    var table = window.pangenomeAssemblies || {};
-    var refs = ["chm13#0", "grch38#0"];
-    return refs.filter(function (k) { return k in table; })
-        .concat(Object.keys(table).filter(function (k) { return refs.indexOf(k) < 0; }).sort())
-        .map(pgrHapDisplay);
-}
-
-// What was typed, as a haplotype the page knows, or null.  Case and spaces do
-// not matter, and "HG00097.1" or "HG00097 1" is read as "HG00097#1".
-function pgrHapResolve(text) {
-    var key = String(text == null ? "" : text).trim().toLowerCase()
-        .replace(/^([a-z]+\d+)[\s._#-]+(\d)$/, "$1#$2");
-    var table = window.pangenomeAssemblies || {};
-    return Object.prototype.hasOwnProperty.call(table, key) ? pgrHapDisplay(key) : null;
-}
 
 // Every (query, placement) the haplotype should have a row for.  From the
 // mapping when the page has it; otherwise from the rows, which name every
@@ -1025,7 +1131,8 @@ function pgrPlaces() {
 function pgrHasRow(hap, query, index) {
     var key = pgrHapKey(hap);
     return pgrRows.some(function (r) {
-        return r.query === query && r.placement === index && pgrHapKey(r.hap) === key;
+        return !r.pending && r.query === query && r.placement === index &&
+               pgrHapKey(r.hap) === key;
     });
 }
 
@@ -1102,10 +1209,9 @@ function pgrFocusOn(hap) {
     }).then(function (rows) {
         rows.forEach(function (r) {
             if (!r) { failed++; return; }
-            if (pgrHasRow(r.hap, r.query, r.placement)) { return; }   // asked twice
-            r.rank = pgrRows.length;
-            pgrRows.push(r);
+            pgrAddHapRow(r);
         });
+        pgrNumberHits();
     }).catch(function () {
         failed = missing.length;
     }).then(function () {
@@ -1158,8 +1264,6 @@ function pgrFocusShow(failed) {
                 '<button type="button" class="gbPill" data-pgr="unfocus">Show all haplotypes</button>';
         }
     }
-    pgrPlaceColShow();
-    pgrMoreShow();
     // The detail panel's button says "all hits" or "all haplotypes" by focus;
     // a selected row that the narrowed table no longer shows is let go.
     var sel = (pgrSelRank !== null) ? pgrRows[pgrSelRank] : null;
@@ -1171,46 +1275,6 @@ function pgrFocusShow(failed) {
     }
     if (sel) { document.getElementById("pgrDetail").innerHTML = pgrDetailHtml(sel); }
     if (!pgrFocusBusy) { pgrCacheWrite(pgrJobId()); }
-}
-
-// The "Find a Haplotype" box under the strip: a name field with the page's
-// haplotypes as suggestions.
-function pgrShowHapBox() {
-    var box = document.getElementById("pgrHapBox");
-    if (!box.hidden) { box.hidden = true; return; }
-    box.hidden = false;
-    if (!box.innerHTML) {
-        box.innerHTML =
-            '<span class="gbShareMsg">Show one haplotype at every place your sequence ' +
-            "aligned, even if it is not in the table:</span>" +
-            '<input type="text" id="pgrHapInput" class="pgrHapInput" list="pgrHapList" ' +
-            'placeholder="e.g. HG00097#1" autocomplete="off" spellcheck="false">' +
-            '<datalist id="pgrHapList">' + pgrHapNames().map(function (n) {
-                return '<option value="' + pgrEsc(n) + '">'; }).join("") + "</datalist>" +
-            '<button type="button" class="gbPill primary" id="pgrHapGo">Show</button>' +
-            '<button type="button" class="gbPill" id="pgrHapClose">Close</button>' +
-            '<span class="pgrHapErr" id="pgrHapErr"></span>';
-        var input = document.getElementById("pgrHapInput");
-        var go = function () {
-            var hap = pgrHapResolve(input.value);
-            var err = document.getElementById("pgrHapErr");
-            if (!hap) {
-                err.textContent = input.value.trim() ?
-                    "No haplotype called “" + input.value.trim() + "”. " +
-                    "Pick one from the list, e.g. HG00097#1." : "Type a haplotype name.";
-                return;
-            }
-            err.textContent = "";
-            input.value = hap;
-            pgrFocusOn(hap);
-        };
-        document.getElementById("pgrHapGo").onclick = go;
-        input.addEventListener("keydown", function (e) {
-            if (e.key === "Enter") { e.preventDefault(); go(); }
-        });
-        document.getElementById("pgrHapClose").onclick = function () { box.hidden = true; };
-    }
-    document.getElementById("pgrHapInput").focus();
 }
 
 // ---- page ------------------------------------------------------------------
@@ -1258,9 +1322,9 @@ function pgrSummaryStrip(queries, rows, multiPlace) {
         var r0 = rows[0] || {};
         stats = pgrStat("Query", pgrEsc(r0.query || "")) + div +
                 pgrStat("Length", pgrFmt(r0.queryLength || 0) + " bp");
-        if (multiPlace) { stats += div + pgrStat("Placements", pgrFmt(r0.placements)); }
+        if (multiPlace) { stats += div + pgrStat("Hits", pgrFmt(r0.hits)); }
     }
-    stats += div + pgrStat("Haplotypes", pgrFmt(rows.length));
+    stats += div + pgrStat("Haplotypes", pgrFmt(rows.length)) + div + pgrCovControl();
     var annot = pgrAnnotControl();
     if (annot) { stats += div + annot; }
     var page = pgrPage();
@@ -1270,9 +1334,6 @@ function pgrSummaryStrip(queries, rows, multiPlace) {
                 'title="Show the sequence you searched with, in FASTA format">' +
                 "Show Query Sequence</button>";
     }
-    acts += '<button type="button" class="gbPill" id="pgrHapBtn" title="Show one haplotype ' +
-            "at every place your sequence aligned, including one that is not in the " +
-            'table">Find a Haplotype</button>';
     acts += '<button type="button" class="gbPill" id="pgrTsvBtn" title="Download the rows ' +
             "below, in their current order and filter, as a tab-separated file that opens " +
             'in Excel">Download Table</button>';
@@ -1316,9 +1377,8 @@ function pgrDetailHtml(r) {
         tiles.push(pgrTile("Q span", pgrFmt(r.qStart + 1) + "-" + pgrFmt(r.qEnd),
                            "Range of your sequence that aligned (1-based)."));
     }
-    if (r.placements > 1) {
-        tiles.push(pgrTile("Placement", (r.placement + 1) + " of " + r.placements +
-                           (r.placement === 0 ? " (best)" : ""),
+    if (r.hits > 1) {
+        tiles.push(pgrTile("Hit", pgrHitText(r),
                            "Which of the places in the graph this sequence aligned to."));
     }
     var where = r.contig == null ? pgrUnplacedText(r) :
@@ -1377,15 +1437,15 @@ function pgrRowsToTsv(rows) {
     var clean = function (v) {
         return String(v === undefined || v === null ? "" : v).replace(/[\t\r\n]/g, " ");
     };
-    var head = ["query", "placement", "haplotype", "assembly", "contig", "strand", "start",
-                "end", "span", "identity", "coverage", "mapq", "qStart", "qEnd", "qSize",
-                "matches", "mismatches", "inserted", "deleted", "cigar"];
+    var head = ["query", "hit", "haplotype", "assembly", "contig", "strand", "start",
+                "end", "span", "locus", "identity", "coverage", "mapq", "qStart", "qEnd",
+                "qSize", "matches", "mismatches", "inserted", "deleted", "cigar"];
     var lines = [head.join("\t")];
     rows.forEach(function (r) {
         var placed = r.contig != null, id = pgrIdentityOf(r);
-        lines.push([r.query, r.placement + 1, r.hap, pgrAssemblyLabel(r.db),
+        lines.push([r.query, (r.hit == null || r.hit < 0) ? r.placement + 1 : r.hit + 1, r.hap, pgrAssemblyLabel(r.db),
             placed ? r.contig : "", placed ? r.strand : "", placed ? r.start + 1 : "",
-            placed ? r.end : "", placed ? r.end - r.start : "",
+            placed ? r.end : "", placed ? r.end - r.start : "", r.locus || "",
             id == null ? "" : id.toFixed(2), r.coverage == null ? "" : r.coverage.toFixed(2),
             pgrMapqOf(r), r.qStart == null ? "" : r.qStart + 1,
             r.qEnd == null ? "" : r.qEnd, r.queryLength, r.matches, r.mismatches,
@@ -1444,8 +1504,8 @@ function pgrDraw(queries, allRows, note) {
     // strip counts, the notes describe and the plot is given.
     var rows = allRows.filter(function (r) { return !r.extra; });
     var multiQuery = queries > 1;
-    var multiPlace = rows.some(function (r) { return r.placements > 1; });
-    var placed = rows.filter(function (r) { return r.contig != null; }).length;
+    var multiPlace = rows.some(function (r) { return r.hits > 1; });
+    var placed = rows.filter(function (r) { return r.contig != null || r.pending; }).length;
     var page = pgrPage();
 
     // Page actions go in the gold title bar beside the title, as on hgBlat's
@@ -1470,7 +1530,9 @@ function pgrDraw(queries, allRows, note) {
     if (placed < rows.length) {
         // Only when the batch call failed and the graded list stood in for it.
         notes.push(pgrFmt(rows.length - placed) + " could not be placed, and show " +
-                   "only how well they match.");
+                   "only how well they match" + (pgrBatchErrs.length ?
+                   " (" + pgrEsc(pgrBatchErrs.filter(function (e, i, all) {
+                       return all.indexOf(e) === i; }).join("; ")) + ")" : "") + ".");
     }
     if (pgrPclaiReady()) {
         var noPlot = rows.filter(function (r) { return r.contig != null && !pgrPclaiSpot(r); })
@@ -1485,32 +1547,58 @@ function pgrDraw(queries, allRows, note) {
                        " not in the ancestry plot.");
         }
     }
+    if (multiPlace) {
+        var multi = Object.create(null);
+        rows.forEach(function (r) { if (r.hits > 1) { multi[r.query] = r.hits; } });
+        var names = Object.keys(multi);
+        notes.push((multiQuery ?
+                    pgrFmt(names.length) + " of your sequences aligned to more than one place " +
+                    "in the pangenome graph." :
+                    "Your sequence aligned to " + pgrFmt(multi[names[0]]) + " places in the " +
+                    "pangenome graph.") +
+                   " Every one is listed; the Hit column says which, numbered best first.");
+    }
+    // The mapper is asked for at most this many places a sequence; a repeat
+    // such as an Alu has thousands, and the table should not look complete.
+    var maxHits = pgrCfg().maxMultimaps;
+    if (maxHits > 1 && rows.some(function (r) { return r.hits >= maxHits; })) {
+        notes.push("The mapper reports at most " + pgrFmt(maxHits) + " places for a sequence, " +
+                   "and " + (multiQuery ? "some of yours reached" : "yours reached") +
+                   " that: a repeated sequence, such as an Alu, may be found in many more.");
+    }
     if (rows.some(function (r) { var q = pgrMapqOf(r); return q != null && q < 10; })) {
         notes.push("A low MAPQ, marked in red, means the mapper could not tell which copy " +
                    "of a duplicated region the sequence came from; those positions may " +
                    "belong to another copy.");
     }
 
+    // hgBlat's columns, with the two it has no need for - which sample, and
+    // which of its haplotypes - in front.
     var th = ["<th>#</th>"];
     if (pgrPclaiReady()) { th.push('<th title="Tick to pick a haplotype out in the ancestry plot">Plot</th>'); }
+    th.push("<th>Sample</th>",
+            '<th title="Which of the sample\'s two haplotypes; 0 for a reference">Haplotype</th>',
+            '<th title="The sample\'s population, as the HPRC describes it">Population</th>');
     if (multiQuery) { th.push("<th>Query</th>"); }
-    if (multiPlace) { th.push("<th>Placement</th>"); }
-    th.push("<th>Open in Genome Browser</th>", "<th>Show</th>", "<th>Haplotype</th>",
-            "<th>Assembly</th>", "<th>Query coverage</th>", "<th>Identity</th>",
+    if (multiPlace) {
+        th.push('<th title="Which of the places your sequence aligned to in the pangenome ' +
+                'graph, numbered best first">Hit</th>');
+    }
+    th.push("<th>Open in Genome Browser</th>", "<th>Show</th>",
+            "<th>Assembly</th>", "<th>Query coverage</th>",
+            '<th title="The gene this hit falls in, or the genes it lies between, from the ' +
+            'assembly\'s own gene annotation">Locus</th>', "<th>Identity</th>",
             "<th>MAPQ</th>", "<th>Strand</th>", "<th>Span</th>");
 
     var el = document.getElementById("pgrResults");
     el.innerHTML =
         '<div class="gbCard">' +
-        pgrSummaryStrip(queries, rows.filter(function (r) {
-            return pgrAllPlaces || r.placement === 0; }), multiPlace) +
+        pgrSummaryStrip(queries, rows, multiPlace) +
         '<div id="pgrSeqBox" class="gbShareBox" style="display:none"></div>' +
-        '<div id="pgrHapBox" class="gbShareBox" hidden></div>' +
         (pgrPclaiReady() ? '<div id="pgrPclaiPlot" class="pgrPanel" style="display:none"></div>' : "") +
         '<div id="pgrDetail" class="pgrDetail">' + pgrHintHtml() + "</div>" +
         (notes.length ? '<div class="pgrNotes">' + notes.map(function (n) {
             return '<div class="pgrNote">' + n + "</div>"; }).join("") + "</div>" : "") +
-        '<div id="pgrMoreBar" class="pgrBar" hidden></div>' +
         '<div id="pgrFocusBar" class="pgrBar on" hidden></div>' +
         '<table id="pgrTable" class="display"><thead><tr>' + th.join("") +
         "</tr></thead></table></div>";
@@ -1523,6 +1611,23 @@ function pgrDraw(queries, allRows, note) {
         cols.push({ data: null, orderable: false, className: "pickCol",
                     render: function (d, type, r) { return type === "display" ? pgrPickCell(r) : ""; } });
     }
+    // Sorting by sample keeps a sample's two haplotypes together.
+    cols.push({ data: null, className: "sampleCol",
+        render: function (d, type, r) {
+            var s = pgrSampleOf(r.hap);
+            if (type === "display") { return pgrEsc(s); }
+            return type === "sort" ? s + "\u0000" + pgrPhaseOf(r.hap) : s;
+        } });
+    cols.push({ data: null, className: "phaseCol",
+        render: function (d, type, r) {
+            var p = pgrPhaseOf(r.hap);
+            return type === "display" ? pgrEsc(p) : p;
+        } });
+    cols.push({ data: null, className: "popCol",
+        render: function (d, type, r) {
+            var p = pgrPopOf(r.hap);
+            return type === "display" ? pgrEsc(p) : p;
+        } });
     // Every column that shows text renders it escaped.  DataTables inserts a
     // column's data as HTML when it has no renderer, and a query name is the
     // user's own FASTA header - so a name that is markup would become markup in
@@ -1533,7 +1638,7 @@ function pgrDraw(queries, allRows, note) {
     }
     if (multiPlace) {
         cols.push({ data: "placement", className: "placeCol",
-                    render: function (d, type) { return type === "display" ? d + 1 : d; } });
+                    render: function (d, type, r) { return type === "display" ? pgrHitText(r) : d; } });
     }
     // Sorts by contig in natural order (numbers zero-padded), then by start, as
     // hgBlat's position column does; unplaced rows sort last.
@@ -1547,8 +1652,6 @@ function pgrDraw(queries, allRows, note) {
         } });
     cols.push({ data: null, orderable: false, className: "actionsCol",
         render: function (d, type, r) { return type === "display" ? pgrActionsCell(r) : ""; } });
-    cols.push({ data: "hap", className: "hapCol",
-        render: function (d, type) { return type === "display" ? pgrEsc(d) : d; } });
     cols.push({ data: null, className: "asmCol",
         render: function (d, type, r) {
             var a = pgrAssemblyLabel(r.db);
@@ -1557,6 +1660,10 @@ function pgrDraw(queries, allRows, note) {
     cols.push({ data: null, className: "covCol",
         render: function (d, type, r) {
             return type === "display" ? pgrCoverageCell(r) : (r.coverage == null ? -1 : r.coverage);
+        } });
+    cols.push({ data: null, className: "locusCol",
+        render: function (d, type, r) {
+            return type === "display" ? pgrLocusCell(r) : (r.locus || "");
         } });
     cols.push({ data: null, className: "identCol",
         render: function (d, type, r) {
@@ -1577,27 +1684,34 @@ function pgrDraw(queries, allRows, note) {
             return type === "display" ? pgrFmt(n) : n;
         } });
 
-    // Which rows are shown: one haplotype's when the table is narrowed to it,
-    // and otherwise the table's own rows - each sequence's best placement, or
-    // every placement once the others are asked for.  Registered once,
-    // for this table only - DataTables' search hooks are global.
+    // Which rows are shown, by pgrShown().  Registered once, for this table
+    // only - DataTables' search hooks are global.
     if (!pgrDraw.filterOn) {
         pgrDraw.filterOn = true;
         jQuery.fn.dataTable.ext.search.push(function (settings, data, index) {
             if (settings.nTable.id !== "pgrTable") { return true; }
-            var r = settings.aoData[index]._aData;
-            if (pgrFocus) { return pgrHapKey(r.hap) === pgrHapKey(pgrFocus); }
-            return !r.extra && (pgrAllPlaces || r.placement === 0);
+            return pgrShown(settings.aoData[index]._aData);
         });
     }
 
     var dt = jQuery("#pgrTable").DataTable({
         data: allRows.slice().sort(pgrRowOrder(pgrQueryNames)),
         columns: cols,
-        paging: false,
-        info: false,
+        // Pages, as everyone knows them from every other long list: the size
+        // and the place in the list above the table and below it.
+        paging: true,
+        pageLength: pgrPageLen(),
+        lengthMenu: [[25, 50, 100, -1], [25, 50, 100, "All"]],
+        pagingType: "simple_numbers",
+        dom: '<"pgrPageBar"lfip>rt<"pgrPageBar"ip>',
+        info: true,
         order: [],       // keep the order the rows came in: best identity first
-        language: { search: "", searchPlaceholder: "Filter by haplotype, assembly, contig…" }
+        language: { search: "", searchPlaceholder: "Filter by sample, population, contig…",
+                    lengthMenu: "Show _MENU_ rows",
+                    info: "Rows _START_-_END_ of _TOTAL_",
+                    infoEmpty: "No rows",
+                    infoFiltered: "(filtered from _MAX_)",
+                    paginate: { previous: "Previous", next: "Next" } }
     });
 
     // One handler for every action on the page, the plot's included: a tick in
@@ -1610,8 +1724,6 @@ function pgrDraw(queries, allRows, note) {
         }
         var cmd = t && t.getAttribute ? t.getAttribute("data-pgr") : null;
         if (cmd === "unfocus") { pgrFocusOff(); return; }
-        if (cmd === "more") { pgrShowMore(); return; }
-        if (cmd === "bestonly") { pgrBestOnly(); return; }
         var a = t && t.closest ? t.closest("a[data-rank]") : null;
         if (!a) { return; }
         ev.preventDefault();
@@ -1628,8 +1740,16 @@ function pgrDraw(queries, allRows, note) {
         var d = dt.row(this).data();
         if (d) { pgrSelect(dt, d.rank); }
     });
-    // The highlight survives sorting and filtering.
-    dt.on("draw", function () { if (pgrSelRank !== null) { pgrSelect(dt, pgrSelRank); } });
+    // The highlight survives sorting and filtering; a page that shows a row
+    // still waiting for its position has its hit placed.
+    dt.on("draw", function () {
+        if (pgrSelRank !== null) { pgrSelect(dt, pgrSelRank); }
+        pgrFillPage(dt);
+        pgrFillLoci(dt);
+    });
+    dt.on("length", function (e, settings, len) {
+        try { window.localStorage.setItem("hgPangenome.pageLen", String(len)); } catch (err) { /* this page only */ }
+    });
 
     document.getElementById("pgrTsvBtn").onclick = function () {
         var shown = dt.rows({ search: "applied", order: "applied" }).data().toArray();
@@ -1640,13 +1760,14 @@ function pgrDraw(queries, allRows, note) {
     if (document.getElementById("pgrSeqBtn")) {
         document.getElementById("pgrSeqBtn").onclick = pgrShowSeq;
     }
-    document.getElementById("pgrHapBtn").onclick = pgrShowHapBox;
     if (document.getElementById("pgrAnnotRef")) {
         document.getElementById("pgrAnnotRef").onchange = function () { pgrAnnotSet(this.value); };
     }
     pgrDt = dt;
-    pgrPlaceColShow();
-    pgrMoreShow();
+    pgrFillLoci(dt);
+    if (document.getElementById("pgrMinCov")) {
+        document.getElementById("pgrMinCov").onchange = function () { pgrSetCovFloor(this.value); };
+    }
     // Back from the browser on a table that was narrowed to one haplotype.
     if (pgrFocus) { pgrFocusOn(pgrFocus); }
 
@@ -1655,9 +1776,7 @@ function pgrDraw(queries, allRows, note) {
         // one spot per row rather than a locus they all share.  Every plottable
         // row goes, not a pre-trimmed best few: the plot does its own filtering
         // and the thresholds are adjustable there.
-        // The plot's own "Best placement only" follows the table's, and a plot
-        // that was open before the redraw is opened again on the new rows.
-        if (typeof pgpBestOnly !== "undefined") { pgpBestOnly = !pgrAllPlaces; }
+        // A plot that was open before the redraw is opened again on the new rows.
         pgpInit(rows.filter(pgrPclaiSpot).map(pgrPclaiSpotOf));
         if (plotWasOpen && document.getElementById("pgrPclaiBtn")) {
             document.getElementById("pgrPclaiBtn").click();
@@ -1666,6 +1785,75 @@ function pgrDraw(queries, allRows, note) {
     if (typeof window.convertTitleTagsToMouseovers === "function") {
         window.convertTitleTagsToMouseovers();
     }
+}
+
+// ---- the Locus column ------------------------------------------------------
+//
+// hgBlat's Locus column - "exon BRCA1", "intron STON2", "intergenic FOO-BAR" -
+// for each placed row, read by cmd=locus from the gene set of the row's own
+// assembly.  Asked for a page at a time, as the page is drawn.
+
+function pgrLocusCell(r) {
+    if (r.locus === undefined) {
+        return (r.contig == null || r.locusFailed) ? "" : '<span class="pgrUnplaced">&#8230;</span>';
+    }
+    return pgrEsc(r.locus || "");
+}
+
+var pgrLocusBusy = false;
+var pgrLocusOff = false;    // a lookup failed: do not keep asking on every draw
+
+function pgrFillLoci(dt) {
+    if (pgrLocusBusy || pgrLocusOff) { return; }
+    var want = dt.rows({ page: "current", search: "applied" }).data().toArray().filter(function (r) {
+        if (r.locus !== undefined || r.contig == null) { return false; }
+        // A hub assembly is opened elsewhere and its genes are not ours to read.
+        if (!r.db || /^https?:/.test(r.db)) { r.locus = ""; return false; }
+        return true;
+    });
+    if (!want.length) { return; }
+    // The server reads LOCUS_MAX_ITEMS a request; the redraw after the answer
+    // asks for the next ones, so a page of "All" fills in in turns.
+    want = want.slice(0, 200);
+    pgrLocusBusy = true;
+    var payload = { items: want.map(function (r) {
+        return { db: r.db, contig: r.contig, start: r.start, end: r.end };
+    }) };
+    fetch(pgrSelf, {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded",
+                   Accept: "application/json" },
+        body: pgrForm({ cmd: "locus", payload: JSON.stringify(payload) })
+    }).then(pgrCheck).then(function (resp) {
+        if (!resp || !resp.loci) { throw new Error((resp && resp.error) || "no answer"); }
+        want.forEach(function (r, i) { r.locus = resp.loci[i] || ""; });
+        pgrLocusBusy = false;
+        // Only an answer is remembered: a lookup cut short - the reader went
+        // on to the browser - is asked again next time rather than kept as
+        // "no gene here".
+        pgrCacheWrite(pgrJobId());
+        // Redrawn meanwhile - the rest of a hit placed, say: the new table's
+        // own draw found this lookup busy and asked for nothing, so carry on
+        // with it here.
+        if (pgrDt !== dt) {
+            if (pgrDt) { pgrDt.rows().invalidate("data"); pgrDt.draw(false); }
+            return;
+        }
+        dt.rows().invalidate("data");
+        dt.draw(false);
+    }).catch(function () {
+        pgrLocusBusy = false;
+        pgrLocusOff = true;
+        want.forEach(function (r) { r.locusFailed = true; });
+        if (pgrDt === dt) { dt.rows().invalidate("data"); dt.draw(false); }
+    });
+}
+
+// The rows per page: the reader's last choice, else 50.
+function pgrPageLen() {
+    var v = null;
+    try { v = parseInt(window.localStorage.getItem("hgPangenome.pageLen"), 10); } catch (e) { v = null; }
+    return (v === -1 || v === 25 || v === 50 || v === 100) ? v : 50;
 }
 
 // Everything the page says before or instead of a table: a card, with the
@@ -1689,13 +1877,15 @@ function pgrStart() {
     var cached = pgrCacheRead(job);
     if (cached) {
         pgrRows = cached.rows;
+        pgrNumberHits();
         pgrQueryCount = cached.queries;
         pgrQueryNames = cached.queryNames || [];
         pgrNote = cached.note || null;
         pgrFocus = cached.focus || null;
         pgrPlaceList = cached.places || null;
         pgrLoaded = cached.loaded || {};
-        pgrAllPlaces = !!cached.allPlaces;
+        pgrMinShown = (typeof cached.minShown === "number") ? cached.minShown : null;
+        pgrFull = cached.full || {};
         pgrDraw(cached.queries, cached.rows, pgrNote);
         return;
     }
@@ -1715,10 +1905,9 @@ function pgrStart() {
         pgrQueryNames = pgrMapping.map(function (res) { return res.name; });
         pgrQueryCount = pgrMapping.length;
         pgrPlaceList = pgrPlaces();
-        // One batch call per sequence, for its best placement only.  Each
+        // One batch call per hit of each sequence, every hit at once.  Each
         // returns the haplotypes that carry it, best coverage first, already
-        // surjected.  The other placements cost a batch call each and are mostly
-        // repeats a reader does not want, so they wait until asked for.
+        // surjected.
         var jobs = [];
         pgrMapping.forEach(function (res) {
             (res.alignments || []).forEach(function (aln, index) {
@@ -1730,27 +1919,16 @@ function pgrStart() {
                 '<a href="' + pgrSelf + '">New search</a>.');
             return null;
         }
-        var run = function (list) {
-            return pgrPool(list.map(function (j) {
-                return function () {
-                    return pgrBatchRows(j.res, j.aln, j.index).then(function (rows) {
-                        j.rows = rows;
-                        pgrLoaded[pgrPlaceKey(j.res.name, j.index)] = true;
-                    });
-                };
-            }), 3);
-        };
-        var best = jobs.filter(function (j) { return j.index === 0; });
-        return run(best).then(function () {
-            var any = best.some(function (j) { return j.rows && j.rows.length; });
-            if (any) { return best; }
-            // Nothing carries the best placement (a coverage floor can do
-            // that): show the rest straight away rather than an empty page.
-            pgrAllPlaces = true;
-            return run(jobs).then(function () { return jobs; });
-        }).then(function (done) {
+        return pgrPool(jobs.map(function (j) {
+            return function () {
+                return pgrBatchRows(j.res, j.aln, j.index).then(function (rows) {
+                    j.rows = rows;
+                    pgrLoaded[pgrPlaceKey(j.res.name, j.index)] = true;
+                });
+            };
+        }), 3).then(function () {
             var rows = [];
-            done.forEach(function (j) { rows = rows.concat(j.rows || []); });
+            jobs.forEach(function (j) { rows = rows.concat(j.rows || []); });
             finish(rows);
         });
 
@@ -1762,7 +1940,7 @@ function pgrStart() {
             }
             pgrRows = rows;
             pgrRerank();
-            pgrNote = pgrTruncNote();
+            pgrNote = null;
             pgrCacheWrite(job);
             pgrDraw(pgrQueryCount, pgrRows, pgrNote);
         }

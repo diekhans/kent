@@ -127,7 +127,8 @@ setTimeout(function () {
     });
     t.test('the right pane lists every candidate, the default chosen', function () {
         t.eq(boxes().join(','), 'CHM13#0,GRCh38#0:on,HG00097#2,HG01234#2', 'source excluded, GRCh38 ticked');
-        t.contains(el.pgcChosen.textContent, 'Chosen 1 of 3', 'and as a chip');
+        t.contains(el.pgcChosen.textContent, 'Chosen 1', 'and as a chip');
+        t.notOk(/ of 3/.test(el.pgcChosen.textContent), 'no limit stated');
     });
     t.test('a box chooses, a chip lets go, and the hidden list follows', function () {
         api.setChosen('HG00097#2', true);
@@ -155,13 +156,17 @@ setTimeout(function () {
         t.eq(api.selectedTargets().join(','), 'HG00097#2', 'still chosen');
         api.fillTargets('');
     });
-    t.test('at the limit, the other boxes are disabled', function () {
+    t.test('past the per-request size nothing is disabled: there is no limit', function () {
         api.setChosen('CHM13#0', true);
         api.setChosen('HG01234#2', true);
-        var dis = picker.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT' && n.disabled; })
-            .map(function (n) { return n.getAttribute('data-hap'); });
-        t.eq(dis.join(','), 'GRCh38#0', 'the one left over');
-        t.contains(el.pgcChosen.textContent, 'Chosen 3 of 3', 'full');
+        var dis = picker.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT' && n.disabled; });
+        t.eq(dis.length, 0, 'every box can still be ticked');
+        t.contains(el.pgcChosen.textContent, 'Chosen 3', 'count');
+    });
+    t.test('the pane offers every haplotype it shows in one click', function () {
+        var btn = picker.findAll(el.pgcHaps, function (n) { return n.getAttribute && n.getAttribute('data-all'); })[0];
+        t.ok(!!btn, 'a Choose all button');
+        t.contains(btn ? btn.textContent : '', 'Choose all', 'worded so');
     });
     t.test('with all populations shown, each name carries its code', function () {
         t.contains(el.pgcHaps.textContent, 'HG00097 hap2GBR', 'code beside the name');
@@ -198,9 +203,9 @@ t.test('a cluster is named by the super-population nearest its centroid', functi
 t.test('one cluster reads as ancestry in this region; several as a mix by bases', function () {
     var A = startPage().api;
     var one = A.ancSummary({ windows: [ancWin(0, 100, -1.743, 0.207), ancWin(100, 300, -1.743, 0.207)] }, ANC_PANEL);
-    t.eq(A.ancText(one), 'African ancestry in this region', 'one');
+    t.eq(A.ancText(one), 'African', 'one');
     var mix = A.ancSummary({ windows: [ancWin(0, 300, 0.445, -1.314), ancWin(300, 400, -1.743, 0.207, 850)] }, ANC_PANEL);
-    t.eq(A.ancText(mix), 'Mixed in this region: European 75% · African 25%', 'by bases, largest first');
+    t.eq(A.ancText(mix), 'Mixed: European 75% · African 25%', 'by bases, largest first');
     t.eq(mix.minConf, 850, 'the lowest confidence is kept, for the note');
     t.eq(mix.parts.length, 2, 'two parts, so a strip');
 });
@@ -404,6 +409,7 @@ function payloadOf(c) {
 }
 
 var tooMany = startPage();
+var c0 = tooMany;
 var atLimit = startPage();
 var badContig = startPage();
 var altSource = startPage();
@@ -708,22 +714,32 @@ setTimeout(function () {
              'an accession is passed through unchanged');
     });
 
-    t.suite('too many targets at once');
+    t.suite('more targets than one request carries');
 
-    t.test('the chosen line states the limit and how many are chosen', function () {
-        t.contains(page.el.pgcChosen.textContent, 'Chosen 1 of 3',
-                   'limit and running count visible before submitting');
+    t.test('the chosen line states how many are chosen, and no limit', function () {
+        t.contains(page.el.pgcChosen.textContent, 'Chosen 1', 'running count');
+        t.notOk(/ of \d/.test(page.el.pgcChosen.textContent), 'no cap to state');
     });
 
-    t.test('selecting more than the limit is refused before any request', function () {
+    t.test('a longer list goes as several requests, none over the per-request size', function () {
         var c = tooMany;
         c.el.pgcPos.value = 'CM094066.1:1-100';
         c.el.pgcTargets.children.forEach(function (o) { o.selected = true; });  // all 4
         c.el.pgcSubmit.dispatch('click');
-        t.eq(posts(c).length, 0, 'nothing sent to the server');
-        t.contains(c.el.pgcStatus.textContent, '3 is the most', 'states the cap');
-        t.contains(c.el.pgcStatus.textContent, 'Only haplotypes with this region',
-                   'suggests how to narrow it');
+        var sent = posts(c).filter(function (x) { return (x.opts.body || '').indexOf('cmd=liftover') >= 0; });
+        t.eq(sent.length, 2, 'two requests at once: 3 targets and 1');
+        var sizes = sent.map(function (x) {
+            var tgt = JSON.parse(decodeURIComponent(x.opts.body.split('payload=')[1])).tgt;
+            return Array.isArray(tgt) ? tgt.length : 1;
+        });
+        t.eq(sizes.join('+'), '3+1', 'split at the per-request size');
+        t.contains(c.el.pgcStatus.textContent, 'Translating', 'and the page says it is working');
+    });
+
+    t.test('a long region carries fewer targets per request', function () {
+        t.eq(c0.api.batchSize(100), 3, 'short: the per-request size');
+        t.eq(c0.api.batchSize(2000000), 2, '2 Mb under a 5 Mb budget: two');
+        t.eq(c0.api.batchSize(9000000), 1, 'never fewer than one');
     });
 
     t.test('at the limit it goes through', function () {
@@ -888,6 +904,18 @@ setTimeout(function () {
             setTimeout(function () {
                 t.suite('rendering translated intervals');
 
+                // The rows of the results table, and one cell's text, by class.
+                function rowsOf(page) {
+                    var out = [];
+                    page.findAll(page.el.pgcResults, function (n) { return n.tagName === 'TBODY'; })
+                        .forEach(function (tb) { out = out.concat(tb.children); });
+                    return out;
+                }
+                function cellText(tr, cls) {
+                    var td = (tr.children || []).filter(function (c) { return c.className === cls; })[0];
+                    return td ? td.textContent : null;
+                }
+
                 t.test('the options chosen in hgConvert are honoured here',
                        function () {
                     // they mean the same thing on both pages, so resetting them
@@ -914,7 +942,8 @@ setTimeout(function () {
                     var s = text(single);
                     t.contains(s, 'CHM13', 'target named');
                     t.contains(s, 'chr10:4338780-4338799', '1-based display');
-                                    t.contains(s, '% of bases', 'share of the region');
+                    t.contains(s, 'Bases', 'share of the region, as a column');
+                    t.contains(s, '83.3%', 'its figure');
                     var l = links(single);
                     t.eq(l.length, 1, 'one view link');
                     if (l.length) {
@@ -926,10 +955,13 @@ setTimeout(function () {
 
                 t.test('multiple pieces each get a row, honoring per-piece strand', function () {
                     var s = text(multi);
-                    t.contains(s, '2 regions', 'count in the header');
+                    var rows = rowsOf(multi);
+                    t.eq(rows.length, 2, 'a row for each piece');
                     t.contains(s, 'CM0987.1:20552-20575', 'first piece');
                     t.contains(s, 'CM0988.1:401-410', 'second piece');
-                    t.contains(s, 'reverse strand', 'reverse-strand piece flagged');
+                    t.eq(cellText(rows[1], 'strandCol'), '-', 'reverse-strand piece flagged');
+                    t.eq(cellText(rows[0], 'sampleCol'), 'HG01234', 'sample in its own column');
+                    t.eq(cellText(rows[0], 'phaseCol'), '2', 'and the haplotype number in another');
                 });
 
                 t.test('an empty result says the region does not exist there', function () {
@@ -941,7 +973,7 @@ setTimeout(function () {
 
                 t.test('every requested target gets an answer, including empty ones', function () {
                     var s = text(mixed);
-                    t.eq(mixed.el.pgcResults.children.length, 3, 'from-line plus one card each');
+                    t.eq(rowsOf(mixed).length, 2, 'one row for each target');
                     t.contains(s, 'CHM13', 'target with a hit');
                     t.contains(s, 'does not exist on GRCh38', 'target without one');
                 });

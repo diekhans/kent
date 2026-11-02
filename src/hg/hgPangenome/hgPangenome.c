@@ -40,6 +40,8 @@
  *                 its haplotype to a reference (GRCh38, CHM13) through the
  *                 graph, then QuickLift the tracks the user has on in that
  *                 reference onto the haplotype.  Also inside the cart shell.
+ *   cmd=locus     the gene each of a list of hits falls in, for the results
+ *                 table's Locus column: hgBlat's words, from CAT genes
  *   cmd=svOpen    the same for an SV: translate its graph site from the
  *                 reference to one haplotype and open it there, with or without
  *                 the reference's tracks.  Inside the cart shell.
@@ -102,7 +104,10 @@
  *                            Set either to 0 to switch that stage off.
  *   pangenome.wideRegionBp   warn that a conversion may be incomplete at or above
  *                            this many bp; default 100000
- *   pangenome.maxLiftTargets max target haplotypes in one conversion; default 10.
+ *   pangenome.maxLiftTargets max target haplotypes in one translation request;
+ *                            default 10.  Not a limit on the reader: PanLift
+ *                            sends a longer list as several requests, which
+ *                            the queue (maxConcurrent) takes in turn.
  *                            Each target is a separate traversal on the mapping
  *                            server, so this is enforced here as well as in the
  *                            page - a request naming all ~464 haplotypes can
@@ -124,6 +129,15 @@
  *                            PanLift's "hide the target's default tracks" does.
  *   pangenome.svFlank        bp either side of an SV's graph site shown when a
  *                            haplotype is opened there; default 1000
+ *   pangenome.maxConcurrent  requests this web server sends the graph server at
+ *                            once; the rest wait their turn; default 4, 0 = no queue
+ *   pangenome.queueWaitSecs  longest a request waits for its turn; default 120
+ *   pangenome.slotDir        where the queue's lock files live; default
+ *                            ../trash/hgPangenomeSlots
+ *   pangenome.maxSurjectTargets  most haplotypes one batch surjection may
+ *                            place; default 500, every haplotype in the graph
+ *   pangenome.resultsShowCoverage  coverage (%) the results table shows by
+ *                            default; the reader can move it; default 50
  *   pangenome.apiToken       shared secret sent to the middleware as the
  *                            X-Pangenome-Token header; if empty, no auth header
  *                            is sent (middleware runs auth-off for testing)
@@ -166,6 +180,7 @@
 #include "portable.h"
 #include "jksql.h"
 #include <fcntl.h>
+#include <sys/file.h>
 #include "trashDir.h"
 #include "pipeline.h"
 #include "hdb.h"
@@ -217,6 +232,7 @@ struct pgResp
     struct dyString *body;      /* response body (always non-NULL) */
     boolean transportErr;       /* true if curl itself failed (DNS, connect, timeout) */
     char *errMsg;               /* curl error string when transportErr */
+    boolean busy;               /* never sent: no turn came up in the queue */
     };
 
 static size_t pgAccum(void *ptr, size_t size, size_t nmemb, void *userData)
@@ -226,6 +242,69 @@ struct dyString *dy = userData;
 size_t n = size * nmemb;
 dyStringAppendN(dy, (char *)ptr, n);
 return n;
+}
+
+/* ---- A queue in front of the graph server -----------------------------------
+ *
+ * Every request that asks the graph server to do work - a translation, a
+ * surjection, a mapping submitted - first takes one of pangenome.maxConcurrent
+ * slots on this web server, and waits its turn when they are all taken: a slot
+ * is an flock()ed file, held for as long as the request is upstream and let go
+ * when it returns, or when the CGI exits however it exits.  So a burst - one
+ * reader converting to every haplotype, or ten readers at once - is served a
+ * few requests at a time in arrival order rather than all at once, and nobody
+ * has to be told there is a limit on what they may ask for.  Reads that cost
+ * the server nothing (polling a job, the haplotype list) do not queue. */
+
+static int pgSlotFd = -1;
+
+static boolean pgTakeSlot()
+/* Wait for a slot; FALSE if none came free in pangenome.queueWaitSecs.  A
+ * server where the slot files cannot be made is not gated, rather than
+ * refusing every request. */
+{
+int slots = atoi(cfgOr("pangenome.maxConcurrent", "4"));
+if (slots <= 0)
+    return TRUE;
+long waitMs = 1000L * atoi(cfgOr("pangenome.queueWaitSecs", "120"));
+char *dir = cfgOr("pangenome.slotDir", "../trash/hgPangenomeSlots");
+makeDirsOnPath(dir);
+long started = clock1000();
+for (;;)
+    {
+    int i;
+    for (i = 0; i < slots; ++i)
+        {
+        char path[PATH_LEN];
+        safef(path, sizeof(path), "%s/slot%d", dir, i);
+        int fd = open(path, O_RDWR | O_CREAT, 0666);
+        if (fd < 0)
+            return TRUE;
+        if (flock(fd, LOCK_EX | LOCK_NB) == 0)
+            {
+            pgSlotFd = fd;
+            long waited = clock1000() - started;
+            if (waited > 1000)
+                fprintf(stderr, "hgPangenome: waited %ld ms for one of %d slots\n", waited, slots);
+            return TRUE;
+            }
+        close(fd);
+        }
+    if (clock1000() - started > waitMs)
+        return FALSE;
+    sleep1000(200);
+    }
+}
+
+static void pgFreeSlot()
+/* Let the next request in. */
+{
+if (pgSlotFd >= 0)
+    {
+    flock(pgSlotFd, LOCK_UN);
+    close(pgSlotFd);
+    pgSlotFd = -1;
+    }
 }
 
 static struct pgResp pgHttp(char *url, char *postJson, int timeoutSecs, char *token)
@@ -238,10 +317,22 @@ r.code = 0;
 r.body = dyStringNew(4096);
 r.transportErr = FALSE;
 r.errMsg = NULL;
+r.busy = FALSE;
+
+/* Only work queues; a GET reads something already done. */
+if (postJson != NULL && !pgTakeSlot())
+    {
+    r.transportErr = TRUE;
+    r.busy = TRUE;
+    r.errMsg = cloneString("the pangenome server is busy with other requests; "
+                           "please try again in a minute");
+    return r;
+    }
 
 CURL *curl = curl_easy_init();
 if (curl == NULL)
     {
+    pgFreeSlot();
     r.transportErr = TRUE;
     r.errMsg = cloneString("cannot initialize curl");
     return r;
@@ -281,6 +372,7 @@ else
 
 curl_slist_free_all(hdrs);
 curl_easy_cleanup(curl);
+pgFreeSlot();
 return r;
 }
 
@@ -375,6 +467,14 @@ if (errCatch->gotError)
     fprintf(stderr, "hgPangenome: could not stash query sequences: %s\n",
             trimSpaces(errCatch->message->string));
 errCatchFree(&errCatch);
+}
+
+static int pgSurjectMax()
+/* The most haplotypes one batch surjection may place.  The results page asks
+ * for its first page's worth, and for every haplotype in the graph only when
+ * the reader pages past that - about four seconds for all of them. */
+{
+return atoi(cfgOr("pangenome.maxSurjectTargets", "500"));
 }
 
 static char *pgValidateSurjectAll(char *payload, int maxTargets)
@@ -739,8 +839,7 @@ else if (sameString(cmd, "surjectAll"))
         emitJsonError("missing 'payload'");
         return;
         }
-    char *bad = pgValidateSurjectAll(payload,
-                                     atoi(cfgOr("pangenome.maxSurjectTargets", "100")));
+    char *bad = pgValidateSurjectAll(payload, pgSurjectMax());
     if (bad != NULL)
         {
         emitJsonError("%s", bad);
@@ -786,7 +885,9 @@ else /* cmd == "liftover" */
     r = pgHttp(url, payload, timeout, token);
     }
 
-if (r.transportErr)
+if (r.busy)
+    emitJsonError("%s", r.errMsg);
+else if (r.transportErr)
     emitJsonError("could not reach mapping server: %s", r.errMsg ? r.errMsg : "unknown error");
 else if (r.code >= 400)
     {
@@ -1211,6 +1312,20 @@ while (b != NULL)
     struct pgBlock *p;
     for (p = runStart; ; p = p->next)
         {
+        aligned += p->tEnd - p->tStart;
+        /* Blocks that touch on both sides are one block.  The server can hand
+         * back a run of one-base blocks like that (16,674 of them beside one
+         * large insertion), and QuickLift reads the gap between two links as a
+         * deletion and fetches its zero bases, which the browser reports as an
+         * error. */
+        if (blockTail != NULL && p->tStart == blockTail->tEnd && p->qStart == blockTail->qEnd)
+            {
+            blockTail->tEnd = p->tEnd;
+            blockTail->qEnd = p->qEnd;
+            if (p == runEnd)
+                break;
+            continue;
+            }
         struct cBlock *cb;
         AllocVar(cb);
         cb->tStart = p->tStart;
@@ -1223,7 +1338,6 @@ while (b != NULL)
         else
             blockTail->next = cb;
         blockTail = cb;
-        aligned += p->tEnd - p->tStart;
         ++blockCount;
         if (p == runEnd)
             break;
@@ -1743,8 +1857,11 @@ dyStringFree(&body);
 static char why[512];
 if (r.transportErr)
     {
-    safef(why, sizeof(why), "could not reach the mapping server: %s",
-          r.errMsg ? r.errMsg : "unknown error");
+    if (r.busy)
+        safef(why, sizeof(why), "%s", r.errMsg);
+    else
+        safef(why, sizeof(why), "could not reach the mapping server: %s",
+              r.errMsg ? r.errMsg : "unknown error");
     *retError = why;
     return NULL;
     }
@@ -1799,8 +1916,11 @@ struct pgResp r = pgHttp(url, body->string,
 dyStringFree(&body);
 if (r.transportErr)
     {
-    safef(why, sizeof(why), "could not reach the mapping server: %s",
-          r.errMsg ? r.errMsg : "unknown error");
+    if (r.busy)
+        safef(why, sizeof(why), "%s", r.errMsg);
+    else
+        safef(why, sizeof(why), "could not reach the mapping server: %s",
+              r.errMsg ? r.errMsg : "unknown error");
     *retError = why;
     return FALSE;
     }
@@ -2637,7 +2757,7 @@ dyStringFree(&out);
  * That is the opposite of the chain we write for quickLift, where the bigBed
  * is opened through chromAliasFindAliases and so wants the display name. */
 
-static boolean pgWritePsl(char *path, char *qName, int qSize, char *cigar,
+static boolean pgWritePsl(char *path, boolean append, char *qName, int qSize, char *cigar,
                           char *tName, int tSize, int tStart, char strand,
                           int qStart, int *retTEnd, char **retError)
 /* One PSL line for the alignment.  M/=/X advance both sides, I the query, D/N
@@ -2728,7 +2848,7 @@ psl.blockSizes = blockSizes;
 psl.qStarts = qStarts;
 psl.tStarts = tStarts;
 
-FILE *f = mustOpen(path, "w");
+FILE *f = mustOpen(path, append ? "a" : "w");
 pslTabOut(&psl, f);
 carefulClose(&f);
 
@@ -3026,6 +3146,250 @@ errCatchFree(&errCatch);
 return got;
 }
 
+/* ---- Locus: the gene a hit falls in ------------------------------------------
+ *
+ * The results table's Locus column, worded as hgBlat's is: "exon BRCA1",
+ * "intron STON2", "intergenic FOO-BAR".  A native assembly answers from its
+ * locusName table, as BLAT does - GRCh38 has one.  The rest are worked out
+ * from CAT genes: every HPRC assembly carries the set the HPRC annotated it
+ * with, contrib/hprc2annot/catGenes.bb on its GenArk hub, and CHM13 has its
+ * own CAT/LiftOff set.  Both files keep the gene symbol and the gene type in
+ * the same columns. */
+
+#define LOCUS_MAX_ITEMS 200     /* one page of the table */
+#define LOCUS_MAX_GENES 3       /* "exon A-B-C" says enough */
+
+static char *pgCatGenesPath(char *acc)
+/* The CAT gene bigBed of one assembly, or NULL. */
+{
+if (!startsWith("GCA_", acc) && !startsWith("GCF_", acc))
+    {
+    char path[PATH_LEN];
+    safef(path, sizeof(path), "/gbdb/%s/catLiftOffGenesV1/catLiftOffGenesV1.bb", acc);
+    return fileExists(path) ? cloneString(path) : NULL;
+    }
+char *dir = pgPclaiDir(acc);
+if (dir == NULL)
+    return NULL;
+char path[PATH_LEN];
+safef(path, sizeof(path), "%s/catGenes.bb", dir);
+freez(&dir);
+return fileExists(path) ? cloneString(path) : NULL;
+}
+
+static void pgLocusAddGene(char **genes, int *count, char *name)
+/* Add a gene name once, up to LOCUS_MAX_GENES. */
+{
+int i;
+if (isEmpty(name))
+    return;
+for (i = 0; i < *count; ++i)
+    if (sameString(genes[i], name))
+        return;
+if (*count < LOCUS_MAX_GENES)
+    genes[(*count)++] = name;
+}
+
+static char *pgCatLocus(struct bbiFile *bbi, char *chrom, int start, int end, struct lm *lm)
+/* hgBlat's locus words for one interval, from a CAT bigGenePred, or NULL when
+ * the sequence has no genes near enough to name.
+ *
+ * A transcript's fields after chrom, start and end are name, score, strand,
+ * thickStart, thickEnd, itemRgb, blockCount, blockSizes, chromStarts, name2 -
+ * the gene symbol - and then cdsStartStat, cdsEndStat, exonFrames, type,
+ * geneName, geneName2, geneType.  A protein-coding gene wins over the lncRNAs
+ * that so often overlap it, as it would in the reader's own words. */
+{
+char *exonGenes[LOCUS_MAX_GENES], *geneGenes[LOCUS_MAX_GENES];
+int nExon = 0, nGene = 0;
+boolean codingOnly;
+struct bigBedInterval *iv, *list = bigBedIntervalQuery(bbi, chrom, start, end, 0, lm);
+for (codingOnly = TRUE; ; codingOnly = FALSE)
+    {
+    for (iv = list; iv != NULL; iv = iv->next)
+        {
+        char *row[20];
+        char *rest = lmCloneString(lm, iv->rest);
+        int n = chopByChar(rest, '\t', row, ArraySize(row));
+        if (n < 17)
+            continue;
+        if (codingOnly && !sameString(row[16], "protein_coding"))
+            continue;
+        char *gene = row[9];
+        pgLocusAddGene(geneGenes, &nGene, gene);
+        int blockCount = atoi(row[6]);
+        char *sizeWords[1024], *startWords[1024];
+        if (blockCount <= 0 || blockCount > ArraySize(sizeWords) ||
+            chopByChar(row[7], ',', sizeWords, ArraySize(sizeWords)) < blockCount ||
+            chopByChar(row[8], ',', startWords, ArraySize(startWords)) < blockCount)
+            continue;
+        int b;
+        for (b = 0; b < blockCount; ++b)
+            {
+            int bStart = iv->start + atoi(startWords[b]);
+            int bEnd = bStart + atoi(sizeWords[b]);
+            if (bStart < end && bEnd > start)
+                {
+                pgLocusAddGene(exonGenes, &nExon, gene);
+                break;
+                }
+            }
+        }
+    if (nGene > 0 || !codingOnly)
+        break;
+    }
+struct dyString *dy = dyStringNew(64);
+int i;
+if (nGene > 0)
+    {
+    dyStringAppend(dy, nExon > 0 ? "exon " : "intron ");
+    for (i = 0; i < (nExon > 0 ? nExon : nGene); ++i)
+        dyStringPrintf(dy, "%s%s", i ? "-" : "", nExon > 0 ? exonGenes[i] : geneGenes[i]);
+    return dyStringCannibalize(&dy);
+    }
+/* Between genes: the nearest on each side, looking further out until both
+ * are found or ten megabases either way have turned up nothing - gene deserts
+ * of five are not rare. */
+char *left = NULL, *right = NULL;
+int leftEnd = -1, rightStart = -1, reach;
+for (reach = 100000; reach <= 10000000 && (left == NULL || right == NULL); reach *= 10)
+    {
+    struct bigBedInterval *near = bigBedIntervalQuery(bbi, chrom, max(0, start - reach),
+                                                      end + reach, 0, lm);
+    for (iv = near; iv != NULL; iv = iv->next)
+        {
+        char *row[20];
+        char *rest = lmCloneString(lm, iv->rest);
+        if (chopByChar(rest, '\t', row, ArraySize(row)) < 17 ||
+            !sameString(row[16], "protein_coding"))
+            continue;
+        if ((int)iv->end <= start && (int)iv->end > leftEnd)
+            { leftEnd = iv->end; left = row[9]; }
+        if ((int)iv->start >= end && (rightStart < 0 || (int)iv->start < rightStart))
+            { rightStart = iv->start; right = row[9]; }
+        }
+    }
+if (left == NULL && right == NULL)
+    {
+    dyStringFree(&dy);
+    return NULL;
+    }
+dyStringPrintf(dy, "intergenic %s%s%s", left ? left : "", (left && right) ? "-" : "",
+               right ? right : "");
+return dyStringCannibalize(&dy);
+}
+
+static void doLocus()
+/* The locus words for each interval in the payload, in order:
+ *   {"items":[{"db":"GCA_...","contig":"CM094060.1","start":0,"end":10}, ...]}
+ * answers {"status":"ok","loci":["exon ATAD3B", null, ...]}, null where there
+ * is nothing to say - a hub assembly, or no genes near enough.  Files and
+ * connections are opened once per assembly in the request. */
+{
+char *payload = cgiOptionalString("payload");
+if (isEmpty(payload))
+    {
+    emitJsonError("missing payload");
+    return;
+    }
+struct dyString *out = dyStringNew(4096);
+dyStringAppend(out, "{\"status\":\"ok\",\"loci\":[");
+char *parseError = NULL;
+struct hash *bbiByDb = hashNew(6), *connByDb = hashNew(4);
+struct lm *lm = lmInit(0);
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    struct jsonElement *root = jsonParse(payload);
+    struct jsonElement *itemsEl = jsonFindNamedField(root, "", "items");
+    if (itemsEl == NULL)
+        parseError = "payload is missing 'items'";
+    else
+        {
+        struct slRef *ref;
+        int n = 0;
+        for (ref = jsonListVal(itemsEl, "items"); ref != NULL && n < LOCUS_MAX_ITEMS;
+             ref = ref->next, ++n)
+            {
+            struct jsonElement *item = ref->val;
+            char *db = jsonOptionalStringField(item, "db", NULL);
+            char *contig = jsonOptionalStringField(item, "contig", NULL);
+            struct jsonElement *sEl = jsonFindNamedField(item, "", "start");
+            struct jsonElement *eEl = jsonFindNamedField(item, "", "end");
+            char *locus = NULL;
+            if (pgSafeToken(db) && pgSafeToken(contig) && sEl != NULL && eEl != NULL &&
+                sEl->type == jsonNumber && eEl->type == jsonNumber &&
+                sEl->val.jeNumber >= 0 && eEl->val.jeNumber > sEl->val.jeNumber)
+                {
+                int start = sEl->val.jeNumber, end = eEl->val.jeNumber;
+                struct hashEl *conn = hashLookup(connByDb, db);
+                if (conn == NULL)
+                    {
+                    /* A connection only to a native assembly with the table. */
+                    struct sqlConnection *c = NULL;
+                    if (!startsWith("GCA_", db) && !startsWith("GCF_", db) && hDbExists(db))
+                        {
+                        c = hAllocConn(db);
+                        if (!sqlTableExists(c, "locusName"))
+                            hFreeConn(&c);
+                        }
+                    conn = hashAdd(connByDb, db, c);
+                    }
+                if (conn->val != NULL)
+                    locus = hLocusName(conn->val, contig, start, end);
+                else
+                    {
+                    struct hashEl *hel = hashLookup(bbiByDb, db);
+                    if (hel == NULL)
+                        {
+                        char *path = pgCatGenesPath(db);
+                        hel = hashAdd(bbiByDb, db, path ? bigBedFileOpen(path) : NULL);
+                        freez(&path);
+                        }
+                    if (hel->val != NULL)
+                        locus = pgCatLocus(hel->val, contig, start, end, lm);
+                    }
+                }
+            dyStringPrintf(out, "%s", n ? "," : "");
+            if (locus == NULL)
+                dyStringAppend(out, "null");
+            else
+                dyStringPrintf(out, "\"%s\"", jsonStringEscape(locus));
+            freez(&locus);
+            }
+        }
+    }
+errCatchEnd(errCatch);
+if (errCatch->gotError)
+    parseError = "could not read the gene annotations";
+errCatchFree(&errCatch);
+struct hashEl *hel, *helList = hashElListHash(bbiByDb);
+for (hel = helList; hel != NULL; hel = hel->next)
+    if (hel->val != NULL)
+        {
+        struct bbiFile *bbi = hel->val;
+        bigBedFileClose(&bbi);
+        }
+hashElFreeList(&helList);
+helList = hashElListHash(connByDb);
+for (hel = helList; hel != NULL; hel = hel->next)
+    if (hel->val != NULL)
+        {
+        struct sqlConnection *conn = hel->val;
+        hFreeConn(&conn);
+        }
+hashElFreeList(&helList);
+lmCleanup(&lm);
+if (parseError != NULL)
+    emitJsonError("%s", parseError);
+else
+    {
+    dyStringAppend(out, "]}");
+    emitJson(out->string);
+    }
+dyStringFree(&out);
+}
+
 static boolean pgPclaiChrom(char *hap, char *contig, char *buf, int bufSize)
 /* Build the sequence name pcLAI uses - full PanSN, SAMPLE#PHASE#CONTIG - from
  * the two-field haplotype and the contig a surjection named.  FALSE if either
@@ -3180,6 +3544,8 @@ emitJson(out->string);
 dyStringFree(&out);
 }
 
+#define PG_MAX_OTHER_HITS 50    /* more than any install asks the mapper for */
+
 static void doAlignTrack()
 /* Write the PSL/FASTA pair BLAT uses, and hand back a browser URL that draws
  * the read on the target.  Runs with the cart: "ss" has to be put there
@@ -3253,9 +3619,39 @@ carefulClose(&fa);
 
 int tStart = (int)startEl->val.jeNumber;
 int tEnd = tStart;
-if (!pgWritePsl(pslTn.forCgi, name, strlen(seq), cigar, viewChrom, tSize,
+if (!pgWritePsl(pslTn.forCgi, FALSE, name, strlen(seq), cigar, viewChrom, tSize,
                 tStart, (strand[0] == '-') ? '-' : '+', 0, &tEnd, &err))
     { emitJsonError("%s", err); return; }
+/* Every other place the sequence aligned on this haplotype goes in the same
+ * track, as hgBlat's results do: the browser opens on the hit that was
+ * clicked, and the others are there to be found.  Each is a contig, a start,
+ * a strand and a CIGAR, checked as the first one was; one that does not fit
+ * this assembly is left out rather than failing the lot. */
+struct jsonElement *othersEl = jsonFindNamedField(root, "", "others");
+if (othersEl != NULL && othersEl->type == jsonList)
+    {
+    struct slRef *ref;
+    int n = 0;
+    for (ref = othersEl->val.jeList; ref != NULL && n < PG_MAX_OTHER_HITS; ref = ref->next)
+        {
+        struct jsonElement *o = ref->val;
+        if (o->type != jsonObject)
+            continue;
+        char *oContig = jsonOptionalStringField(o, "contig", NULL);
+        char *oCigar = jsonOptionalStringField(o, "cigar", NULL);
+        char *oStrand = jsonOptionalStringField(o, "strand", "+");
+        struct jsonElement *oStart = jsonFindNamedField(o, "", "start");
+        int oSize = isEmpty(oContig) ? 0 : hashIntValDefault(sizes, oContig, 0);
+        if (oSize == 0 || isEmpty(oCigar) || oStart == NULL || oStart->type != jsonNumber ||
+            oStart->val.jeNumber < 0 || oStart->val.jeNumber >= oSize)
+            continue;
+        char *oErr = NULL;
+        if (pgWritePsl(pslTn.forCgi, TRUE, name, strlen(seq), oCigar, oContig, oSize,
+                       (int)oStart->val.jeNumber, (oStrand[0] == '-') ? '-' : '+', 0,
+                       NULL, &oErr))
+            ++n;
+        }
+    }
 
 struct dyString *url = dyStringNew(600);
 /* The browser clears "ss" whenever the database changes (web.c, "hgBlat results
@@ -3350,6 +3746,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           "  maxTargetNodes: %s,\n"
           "  wideRegionBp: %ld,\n"
           "  maxLiftTargets: %d,\n"
+          "  maxLiftTargetMb: %ld,\n"
           "  hgsid: \"%s\",\n"
           "  quickLiftEnabled: %s,\n"
           "  quickLift: %s,\n"
@@ -3378,6 +3775,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           cfgOr("pangenome.maxTargetNodes", "300"),
           atol(cfgOr("pangenome.wideRegionBp", "100000")),
           atoi(cfgOr("pangenome.maxLiftTargets", "10")),
+          atol(cfgOr("pangenome.maxLiftTargetMb", "5")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
           sameString(cfgOr("pangenome.quickLift", "on"), "on") ? "true" : "false",
@@ -3682,6 +4080,7 @@ if (sameOk(cgiOptionalString("page"), "results"))
      * be far larger than it was when each position cost a request of its own. */
     jsInlineF("var pangenomeSurjectTop = %s;\n",
               cfgOr("pangenome.resultsSurjectTop", "50"));
+    jsInlineF("var pangenomeSurjectMax = %d;\n", pgSurjectMax());
     /* Coverage floor for the batch surjection.  Left at zero: the service
      * returns its targets best coverage first and stops at max_targets, so the
      * floor only decides what is eligible, and a default of 50 quietly threw
@@ -3689,6 +4088,11 @@ if (sameOk(cgiOptionalString("page"), "results"))
      * came back with one row. */
     jsInlineF("var pangenomeMinCoverage = %s;\n",
               cfgOr("pangenome.resultsMinCoverage", "0"));
+    /* What the table shows by default, which the reader can lower to the floor
+     * above or raise: a loose cut that keeps pieces of pseudogenes and other
+     * short fragments out without hiding a second full copy. */
+    jsInlineF("var pangenomeShowCoverage = %s;\n",
+              cfgOr("pangenome.resultsShowCoverage", "50"));
     /* The ancestry plot is optional.  With pangenome.resultsPclai off, the flag
      * is false, the module is never loaded and the results page has no plot
      * control and no checkbox column - exactly as before the feature existed. */
@@ -3707,6 +4111,7 @@ if (sameOk(cgiOptionalString("page"), "results"))
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
     if (pclai)
         jsIncludeFile("hgPangenomePclai.js", NULL);
+    jsIncludeFile("hgPangenomeSamples.js", NULL);   /* the Population column */
     jsIncludeFile("hgPangenomeResults.js", NULL);
     cartWebEnd();
     return;
@@ -3760,6 +4165,8 @@ if (sameOk(cgiOptionalString("page"), "convert"))
      * plot, since it is the same data and the same plot. */
     boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
     jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
+    /* The results table pages and sorts as the mapping results page's does. */
+    jsIncludeDataTablesLibs();
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
     jsIncludeFile("hgPangenomeSamples.js", NULL);   /* generated sample->population table */
     if (pclai)
@@ -3836,6 +4243,11 @@ if (sameOk(cmd, "pclai"))
 if (sameOk(cmd, "contigs"))
     {
     doContigs();
+    return 0;
+    }
+if (sameOk(cmd, "locus"))
+    {
+    doLocus();
     return 0;
     }
 if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
