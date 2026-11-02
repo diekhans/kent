@@ -61,14 +61,19 @@ function open(o, withTracks) {
         if (!resp.ok) throw new Error("HTTP " + resp.status);
         return resp.json();
     }).then(function (resp) {
-        if (!resp || resp.status !== "ok" || !resp.url)
-            throw new Error((resp && resp.error) || "no answer");
+        if (!resp || resp.status !== "ok" || !resp.url) {
+            var e = new Error((resp && resp.error) || "no answer");
+            e.stage = resp && resp.stage;
+            throw e;
+        }
         // Replaced, not added: Back from the browser returns to the SV.
         window.location.replace(resp.url);
     }).catch(function (err) {
         var kids = [el("p", { class: "pgWarn", text: "Could not open " + what + ": " +
                                                      err.message + "." })];
-        if (withTracks) {
+        // Without the tracks only helps when it was the tracks that failed;
+        // a site with no counterpart on the haplotype has none either way.
+        if (withTracks && err.stage !== "translate") {
             var plain = el("a", { href: "#", text: "Open " + o.hap + " without them" });
             plain.addEventListener("click", function (e) { e.preventDefault(); open(o, false); });
             kids.push(el("p", null, [plain]));

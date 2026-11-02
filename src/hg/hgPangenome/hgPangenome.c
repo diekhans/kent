@@ -2591,7 +2591,12 @@ char *hapPath = NULL, *err = NULL;
 long hapStart = 0, hapEnd = 0;
 if (!pgLiftInterval(refPath, hap, start, end, &hapPath, &hapStart, &hapEnd, &err))
     {
-    emitJsonError("%s", err);
+    /* "stage" tells the page that leaving the tracks behind would not help:
+     * the site itself has nowhere to go. */
+    struct dyString *out = dyStringNew(300);
+    dyStringPrintf(out, "{\"status\":\"error\",\"stage\":\"translate\",\"error\":\"%s\"}",
+                   jsonStringEscape(err));
+    emitJson(out->string);
     return;
     }
 char position[512];

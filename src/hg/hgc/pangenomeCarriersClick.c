@@ -46,6 +46,8 @@ enum carrierField { cfName = 0, cfAc = 9, cfSiteStart = 14, cfSiteEnd = 15,
 enum carrierState { csCarrier, csOther, csNone, csNoCall, csStateCount };
 static char *stateLabel[csStateCount] = { "Carry this SV", "Another SV at this site",
                                           "No SV here", "Not covered" };
+/* The count column of each state's table. */
+static char *stateColumn[csStateCount] = { "Carriers", "Another SV", "No SV", "Not covered" };
 
 struct carrierHap
 /* One haplotype: its name, its population as the HPRC gives it, its state. */
@@ -87,6 +89,22 @@ lmAllocArray(lm, row, cfCount);
 if (rest == NULL || chopByChar(lmCloneString(lm, rest), '\t', row, cfCount) != cfCount)
     return NULL;
 return row;
+}
+
+static boolean sameItem(char **row, char **item, int itemCount)
+/* Is this carriers row the track item whose fields after chrom, start and end
+ * are item?  The carriers file repeats the track's fields ahead of its own.
+ * All of them, not the name alone: one site can hold several SVs of a name -
+ * insertions that round to the same length - told apart by their exact
+ * lengths. */
+{
+if (itemCount != cfSiteStart)
+    return FALSE;
+int i;
+for (i = 0; i < itemCount; i++)
+    if (differentString(row[i], item[i]))
+        return FALSE;
+return TRUE;
 }
 
 static struct carrierHap *readHaps(char *path, int *retCount)
@@ -194,11 +212,13 @@ printf("<a href='../cgi-bin/hgPangenome?page=svOpen&db=%s&chrom=%s&start=%d&end=
 
 static void printStateTable(struct carrierPop *pops, enum carrierState state, char *db,
                             char *chrom, int start, int end, char *svName)
-/* One table of the haplotypes in this state, a row a population. */
+/* One table of the haplotypes in this state, a row a population.  Its count is
+ * of this state, out of the population's haplotypes with a call - or out of all
+ * of them for those not covered, which have none. */
 {
 printf("<table class='bedExtraTbl'>\n");
-printf("<tr><th>Population</th><th style='width:7em'>Carriers</th>"
-       "<th style='width:60%%'>Haplotypes</th></tr>\n");
+printf("<tr><th>Population</th><th style='width:7em'>%s</th>"
+       "<th style='width:60%%'>Haplotypes</th></tr>\n", stateColumn[state]);
 struct carrierPop *pop;
 for (pop = pops; pop != NULL; pop = pop->next)
     {
@@ -209,8 +229,8 @@ for (pop = pops; pop != NULL; pop = pop->next)
             n++;
     if (n == 0)
         continue;
-    printf("<tr><td>%s</td><td>%d / %d</td><td>", htmlEncode(pop->label),
-           pop->carriers, pop->called);
+    printf("<tr><td>%s</td><td>%d / %d</td><td>", htmlEncode(pop->label), n,
+           state == csNoCall ? slCount(pop->haps) : pop->called);
     for (ref = pop->haps; ref != NULL; ref = ref->next)
         {
         struct carrierHap *h = ref->val;
@@ -273,7 +293,7 @@ return dyStringCannibalize(&dy);
 }
 
 void pangenomeCarriersSection(struct trackDb *tdb, char *chrom, int start, int end,
-                              char *name)
+                              char *name, char *rest)
 /* If this track names a pangenomeCarriers file, say which haplotypes carry the
  * clicked SV and what the rest have at its site. */
 {
@@ -292,6 +312,9 @@ if (endsWith(hapsPath, ".bb"))
 safecat(hapsPath, sizeof(hapsPath), ".haps");
 
 struct lm *lm = lmInit(0);
+char *item[cfCount + 1];
+int itemCount = isEmpty(rest) ? 0 : chopByChar(lmCloneString(lm, rest), '\t', item,
+                                                ArraySize(item));
 char **row = NULL;
 struct carrierHap *haps = NULL;
 int hapCount = 0;
@@ -305,7 +328,7 @@ if (errCatchStart(errCatch))
         {
         char **r = chopRow(lm, iv->rest);
         if (r != NULL && (int)iv->start == start && (int)iv->end == end &&
-            sameOk(r[cfName], name))
+            sameItem(r, item, itemCount))
             row = r;
         }
     if (row != NULL)
@@ -325,7 +348,7 @@ if (errCatchStart(errCatch))
             if (r == NULL || differentString(r[cfSiteStart], row[cfSiteStart]) ||
                 differentString(r[cfSiteEnd], row[cfSiteEnd]) ||
                 ((int)iv->start == start && (int)iv->end == end &&
-                 sameString(r[cfName], name)))
+                 sameItem(r, item, itemCount)))
                 continue;
             dyStringPrintf(others, "%s%s", others->stringSize ? ", " : "", r[cfName]);
             for (i = 0; i < hapCount; i++)

@@ -484,9 +484,10 @@ void doVcfDetailsExt(struct trackDb *tdb, char *item, struct featureBits **pFbLi
 void doBarChartDetails(struct trackDb *tdb, char *item);
 
 void pangenomeCarriersSection(struct trackDb *tdb, char *chrom, int start, int end,
-                              char *name);
+                              char *name, char *rest);
 /* If this track names a pangenomeCarriers file, say which haplotypes carry the
- * clicked SV and what the rest have at its site.  In pangenomeCarriersClick.c. */
+ * clicked SV and what the rest have at its site.  rest is the item's fields after
+ * chrom, start and end.  In pangenomeCarriersClick.c. */
 /* Details of barChart item */
 
 void doMyVariantsDetails(struct customTrack *ct, char *itemIdString);
