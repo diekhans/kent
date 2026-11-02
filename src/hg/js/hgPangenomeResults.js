@@ -922,9 +922,11 @@ var pgrBatchErrs = [];
 // haplotype that carries a hit from the start - the mapping graded them all -
 // but places only the best pgrSurjectCount() by coverage straight away, as one
 // batch call per hit.  The rest are "pending": listed with their coverage and
-// identity, and placed when a page that shows one is drawn, by one more batch
-// call for the whole hit.  Most readers never leave the first page, and those
-// who do wait a few seconds once.
+// identity, and placed by one more batch call for the whole hit.  That call
+// goes out as soon as the first table is up (pgrPlaceRest), one hit at a time,
+// so that sorting or paging a moment later finds every position already there;
+// with pangenome.resultsPlaceAllAtLoad off it waits until a page that shows a
+// pending row is drawn.
 
 // The haplotypes the batch call did not place, from the mapping's graded list.
 function pgrPendingRows(res, aln, index, placed) {
@@ -951,11 +953,13 @@ function pgrFillPage(dt) {
     Object.keys(want).forEach(function (k) { pgrPlaceAll(want[k]); });
 }
 
+// Resolves once this hit's rows are placed, or could not be; a hit already
+// being placed is waited on rather than asked for twice.
 function pgrPlaceAll(p) {
     var key = pgrPlaceKey(p.query, p.index);
-    if (pgrFull[key] || pgrFullBusy[key]) { return; }
-    pgrFullBusy[key] = true;
-    pgrMappingReady().then(function (results) {
+    if (pgrFull[key]) { return Promise.resolve(); }
+    if (pgrFullBusy[key]) { return pgrFullBusy[key]; }
+    pgrFullBusy[key] = pgrMappingReady().then(function (results) {
         var res = results.filter(function (x) { return x.name === p.query; })[0];
         var aln = res && (res.alignments || [])[p.index];
         if (!aln) { throw new Error("the mapping no longer has this hit"); }
@@ -986,20 +990,49 @@ function pgrPlaceAll(p) {
         pgrFull[key] = true;
         pgrFail("Could not place the rest of the haplotypes: " + err.message + ".");
     }).then(function () {
-        pgrFullBusy[key] = false;
+        pgrFullBusy[key] = null;
         pgrCacheWrite(pgrJobId());
         pgrRedrawKeep();
     });
+    return pgrFullBusy[key];
+}
+
+function pgrPlaceAtLoad() {
+    return (typeof pangenomePlaceAllAtLoad === "boolean") ? pangenomePlaceAllAtLoad : true;
+}
+
+// Every hit that still has pending rows, placed in the background, one after
+// another: one reader's page asks the graph server for one batch at a time.
+function pgrPlaceRest() {
+    if (!pgrPlaceAtLoad() || pgrFocus) { return Promise.resolve(); }
+    var want = [], seen = Object.create(null);
+    pgrRows.forEach(function (r) {
+        var key = pgrPlaceKey(r.query, r.placement);
+        if (r.pending && !seen[key] && !pgrFull[key]) {
+            seen[key] = true;
+            want.push({ query: r.query, index: r.placement });
+        }
+    });
+    return pgrPool(want.map(function (p) { return function () { return pgrPlaceAll(p); }; }), 1);
 }
 
 // Draw the table again from pgrRows on the page, sort and filter it was on.
+// The row open in the detail panel stays open: rows are renumbered when more
+// are placed, so it is found again by what it is rather than by its number.
 function pgrRedrawKeep() {
     var dt = pgrDt;
     var st = dt ? { page: dt.page(), len: dt.page.len(), order: dt.order(), search: dt.search() } : null;
+    var sel = pgrSelKey;
     pgrDraw(pgrQueryCount, pgrRows, pgrNote);
     if (st && pgrDt) {
         pgrDt.page.len(st.len).order(st.order).search(st.search).draw(false);
         pgrDt.page(st.page).draw(false);
+    }
+    if (sel && pgrDt) {
+        var again = pgrRows.filter(function (r) {
+            return r.query === sel.query && r.placement === sel.placement && pgrHapKey(r.hap) === sel.hap;
+        })[0];
+        if (again) { pgrSelect(pgrDt, again.rank); }
     }
 }
 
@@ -1271,6 +1304,7 @@ function pgrFocusShow(failed) {
     if (sel && pgrFocus && pgrHapKey(sel.hap) !== pgrHapKey(pgrFocus)) {
         sel = null;
         pgrSelRank = null;
+        pgrSelKey = null;
         jQuery("#pgrTable tbody tr").removeClass("pgrSel");
         document.getElementById("pgrDetail").innerHTML = pgrHintHtml();
     }
@@ -1482,9 +1516,13 @@ function pgrShowSeq() {
 // ---- page ------------------------------------------------------------------
 
 var pgrSelRank = null;      // rank of the row shown in the detail panel
+var pgrSelKey = null;       // and which row that is, which survives renumbering
 
 function pgrSelect(dt, rank) {
     pgrSelRank = rank;
+    var picked = pgrRows[rank];
+    pgrSelKey = picked ? { query: picked.query, placement: picked.placement,
+                           hap: pgrHapKey(picked.hap) } : null;
     jQuery("#pgrTable tbody tr").removeClass("pgrSel");
     dt.rows().every(function () {
         if (this.data().rank === rank) { jQuery(this.node()).addClass("pgrSel"); }
@@ -1501,6 +1539,7 @@ function pgrDraw(queries, allRows, note) {
     var plotWasOpen = !!oldPlot && oldPlot.style.display !== "none";
     if (pgrDt) { pgrDt.destroy(); pgrDt = null; }
     pgrSelRank = null;
+    pgrSelKey = null;
     // Everything but the rows aligned on request for one haplotype: what the
     // strip counts, the notes describe and the plot is given.
     var rows = allRows.filter(function (r) { return !r.extra; });
@@ -1896,6 +1935,7 @@ function pgrStart() {
         pgrMinShown = (typeof cached.minShown === "number") ? cached.minShown : null;
         pgrFull = cached.full || {};
         pgrDraw(cached.queries, cached.rows, pgrNote);
+        pgrPlaceRest();             // left before the rest were placed
         return;
     }
     pgrMessage(el, "Loading results&#8230;", true);
@@ -1952,6 +1992,7 @@ function pgrStart() {
             pgrNote = null;
             pgrCacheWrite(job);
             pgrDraw(pgrQueryCount, pgrRows, pgrNote);
+            pgrPlaceRest();
         }
     }).catch(function (err) {
         // A job that has aged out of the server's cache is the common case, and

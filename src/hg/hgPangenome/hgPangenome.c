@@ -144,6 +144,10 @@
  *                            ../trash/hgPangenomeSlots
  *   pangenome.maxSurjectTargets  most haplotypes one batch surjection may
  *                            place; default 500, every haplotype in the graph
+ *   pangenome.resultsPlaceAllAtLoad  "on" (default): the results page places
+ *                            every haplotype of each hit straight after the
+ *                            first table is drawn, one batch call at a time;
+ *                            "off": only when a page or a sort needs them
  *   pangenome.resultsShowCoverage  coverage (%) the results table shows by
  *                            default; the reader can move it; default 50
  *   pangenome.apiToken       shared secret sent to the middleware as the
@@ -4152,6 +4156,11 @@ if (sameOk(cgiOptionalString("page"), "results"))
     jsInlineF("var pangenomeSurjectTop = %s;\n",
               cfgOr("pangenome.resultsSurjectTop", "50"));
     jsInlineF("var pangenomeSurjectMax = %d;\n", pgSurjectMax());
+    /* Place every haplotype of every hit as soon as the first table is up,
+     * rather than when the reader pages or sorts to one: one batch call per
+     * hit, one at a time per page view.  "off" goes back to on demand. */
+    jsInlineF("var pangenomePlaceAllAtLoad = %s;\n",
+              sameString(cfgOr("pangenome.resultsPlaceAllAtLoad", "on"), "on") ? "true" : "false");
     /* Coverage floor for the batch surjection.  Left at zero: the service
      * returns its targets best coverage first and stops at max_targets, so the
      * floor only decides what is eligible, and a default of 50 quietly threw
