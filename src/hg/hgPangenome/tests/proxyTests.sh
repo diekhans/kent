@@ -468,6 +468,30 @@ LIFT_MULTI='{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0","
 out=$(cgi_post_cmd "$CONF" liftover "$LIFT_MULTI")
 check_eq "array tgt accepted and forwarded" "$(mock_field body)" "$LIFT_MULTI"
 
+section "every haplotype at once (cmd=liftoverAll)"
+
+# What goes upstream is rebuilt from src/start/end alone: always "*", always
+# the summary, whatever else the page sent.
+: > "$REC"
+out=$(cgi_post_cmd "$CONF" liftoverAll \
+    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0"],"blocks":true}')
+check_eq       "liftoverAll forwarded once" "$(mock_count)" "1"
+check_eq       "liftoverAll hits /api/v1/liftover" "$(mock_field path)" "/api/v1/liftover"
+sent=$(mock_field body | tr -d ' ')
+check_eq       "liftoverAll asks for every haplotype, summarized" "$sent" \
+    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":"*","summary":true}'
+check_contains "liftoverAll answer passed through" "$out" '"intervals"'
+: > "$REC"
+out=$(cgi_post_cmd "$CONF" liftoverAll '{"src":"HG00097#1","start":10,"end":20}')
+check_contains "liftoverAll checks the source path" "$out" "full contig path"
+check_eq       "liftoverAll bad source - not forwarded" "$(mock_count)" "0"
+# An answer past pangenome.maxLiftAllBytes is refused rather than passed on.
+mk_conf "$TMP/small.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
+                          "pangenome.maxLiftAllBytes=50"
+out=$(cgi_post_cmd "$TMP/small.conf" liftoverAll '{"src":"HG00097#1#CM094066.1","start":10,"end":20}')
+check_contains "an oversized answer is refused" "$out" "too large to show"
+check_contains "and comes back as our error" "$out" '"status":"error"'
+
 section "liftover input validation (server-side, before forwarding)"
 
 lift_reject() {                      # lift_reject <label> <payload> <expected text>

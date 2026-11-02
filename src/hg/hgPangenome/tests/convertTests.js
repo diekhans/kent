@@ -216,6 +216,70 @@ t.test('a region with no ancestry says why', function () {
     t.contains(A.ancNone('https://x/hgTracks?db=hub_1_HG002'), 'No ancestry for this assembly', 'a hub');
 });
 
+t.suite('every haplotype at once (page=liftAll)');
+function piece(contig, start, end, strand, ss, se) {
+    return { contig: contig, start: start, end: end, strand: strand,
+             source_start: ss, source_end: se };
+}
+t.test('overlapping pieces on one contig and strand are one place', function () {
+    var A = startPage().api;
+    // The shape the service sends in a duplicated region: one real piece, then
+    // a run of single source bases landing on the same stretch.
+    var flood = [piece('c1', 100, 900, '+', 0, 600)];
+    for (var i = 0; i < 300; i++) flood.push(piece('c1', 500 + i, 900 + i, '+', 600 + i, 601 + i));
+    var m = A.mergePieces(flood);
+    t.eq(m.length, 1, 'one piece');
+    t.eq(m[0].start, 100, 'from the first start');
+    t.eq(m[0].end, 1199, 'to the last end');
+    t.eq(m[0].source_end, 900, 'covering all the source');
+    t.eq(m[0].merged, 301, 'and saying how many it stands for');
+    var kept = A.mergePieces([piece('c1', 0, 10, '+', 0, 10), piece('c1', 10, 20, '+', 10, 20),
+                              piece('c1', 5, 15, '-', 20, 30), piece('c2', 5, 15, '+', 30, 40)]);
+    t.eq(kept.length, 4, 'abutting, other strand, other contig: all kept apart');
+});
+t.test('one entry per haplotype: bases, size change, shape; the source left out', function () {
+    var A = startPage().api;
+    A.setAllSrcHap('CHM13#0');
+    var h = A.allHapsFrom([
+        { haplotype: 'CHM13#0', pieces: [], mapped_bp: 0 },
+        { haplotype: 'HG00097#1', pieces: [piece('c1', 1000, 1950, '+', 0, 1000)], mapped_bp: 950 },
+        { haplotype: 'HG00097#2', pieces: [piece('c2', 0, 400, '+', 600, 1000),
+                                          piece('c2', 900, 1500, '-', 0, 600)], mapped_bp: 1000 },
+        { haplotype: 'HG01234#2', pieces: [], mapped_bp: 0 }], 1000);
+    t.eq(h.length, 3, 'the source is not listed');
+    t.deepEq(h.map(function (x) { return x.hap; }), ['HG00097#2', 'HG00097#1', 'HG01234#2'],
+             'most of the region first');
+    t.eq(h[0].pieces[0].source_start, 0, 'pieces largest first');
+    t.ok(h[0].reverse, 'a reversed piece is noticed');
+    t.eq(h[1].bases, 95, 'bases as a share of the region');
+    t.eq(h[1].change, -50, '50 bp shorter here');
+    t.eq(h[2].change, null, 'no size where nothing carried over');
+});
+t.test('a size from hundreds of merged pieces is not a size', function () {
+    var A = startPage().api;
+    A.setAllSrcHap('CHM13#0');
+    var flood = [piece('c1', 0, 600, '+', 0, 600)];
+    for (var i = 0; i < 100; i++) flood.push(piece('c1', 300, 900000, '+', 600 + i, 601 + i));
+    var h = A.allHapsFrom([{ haplotype: 'HG00097#1', pieces: flood, mapped_bp: 700 }], 1000);
+    t.ok(h[0].unsure, 'flagged');
+    t.eq(h[0].change, null, 'and kept out of the size figures');
+});
+t.test('size changes read as signed lengths', function () {
+    var A = startPage().api;
+    t.eq(A.fmtChange(0), '0 bp', 'none');
+    t.eq(A.fmtChange(312), '+312 bp', 'gain');
+    t.eq(A.fmtChange(-6104), '−6,104 bp', 'loss, with a minus sign');
+    t.eq(A.niceStep(98.6), 100, 'histogram steps are round');
+    t.eq(A.niceStep(13), 20, '1, 2 or 5 times a power of ten');
+});
+t.test('the page is named by the source path and interval', function () {
+    var c = startPage();
+    c.window.pangenomeConfig.hgsid = 'SID1';
+    var u = c.api.liftAllUrl({ src: 'HG00097#1#CM094066.1', start: 100, end: 200 });
+    t.contains(u, 'page=liftAll&src=HG00097%231%23CM094066.1&start=100&end=200', 'source and interval');
+    t.contains(u, 'hgsid=SID1', 'and the cart');
+});
+
 t.suite('block-level liftover responses');
 
 t.test('blocks are split by target haplotype, lower-cased', function () {
@@ -589,8 +653,10 @@ setTimeout(function () {
         });
         setTimeout(function () {
         padPages.forEach(function (c) {
+            // The position link, not the strip's "Show all haplotypes".
             c.link = c.findAll(c.el.pgcResults, function (n) {
-                return n.tagName === 'A';
+                return n.tagName === 'A' &&
+                       (n.getAttribute('href') || '').indexOf('hgTracks') >= 0;
             })[0];
         });
         padNoBeacon.sandbox.navigator = undefined;

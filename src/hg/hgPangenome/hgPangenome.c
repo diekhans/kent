@@ -23,6 +23,9 @@
  *                 Synchronous: the answer comes back in the same response.
  *   cmd=liftoverTargets  POST to {apiBase}/api/v1/liftover/targets - which
  *                 haplotypes this region can translate to at all.
+ *   cmd=liftoverAll  POST to {apiBase}/api/v1/liftover with tgt "*" in its
+ *                 summary form - one row per haplotype in the graph, for
+ *                 page=liftAll.  The request sent on is built here.
  *   cmd=alignTrack write the PSL/FASTA pair BLAT uses ("ss=") so the browser
  *                 draws the mapped sequence on the target haplotype.
  *   cmd=surject   POST {apiBase}/api/v1/surject - re-place an alignment the
@@ -45,10 +48,11 @@
  *   cmd=svOpen    the same for an SV: translate its graph site from the
  *                 reference to one haplotype and open it there, with or without
  *                 the reference's tracks.  Inside the cart shell.
- * and four pages, selected by "page": none for the mapping form, "results" for
- * a mapping job's table, "convert" for PanLift, and "svOpen", the step from a
- * haplotype named on an SV's details page (hgc's pangenomeCarriers section)
- * to that haplotype in the browser.
+ * and five pages, selected by "page": none for the mapping form, "results" for
+ * a mapping job's table, "convert" for PanLift, "liftAll" for one PanLift
+ * region on every haplotype, and "svOpen", the step from a haplotype named on
+ * an SV's details page (hgc's pangenomeCarriers section) to that haplotype in
+ * the browser.
  * The map/poll modes emit raw application/json (the middleware's answer, or a
  * synthesized {"status":"error",...}) and never touch the cart, so they are
  * cheap and DB-free.  Nothing about BLAT is used or changed.
@@ -71,6 +75,10 @@
  *                            a few hundred haplotypes per alignment, so set this
  *                            if those payloads become a problem.
  *   pangenome.maxLiftSpan    max bp per coordinate translation; default 1000000
+ *   pangenome.maxLiftAllBytes  longest answer accepted for one region on every
+ *                            haplotype (page=liftAll); default 20000000.  A
+ *                            summary is about 1 kB a haplotype; past this the
+ *                            page says the region is too complex to show.
  *   pangenome.maxLiftTargetMb  max (span in Mb) x (targets) per request; default
  *                            5.  The service traverses once per target and
  *                            serves one request at a time, so the product is
@@ -235,11 +243,20 @@ struct pgResp
     boolean busy;               /* never sent: no turn came up in the queue */
     };
 
+static long pgMaxBody = 0;      /* refuse answers longer than this; 0 = no cap */
+static boolean pgTooBig = FALSE;
+
 static size_t pgAccum(void *ptr, size_t size, size_t nmemb, void *userData)
-/* libcurl write callback: append received bytes to a dyString. */
+/* libcurl write callback: append received bytes to a dyString.  Past
+ * pgMaxBody it takes nothing more, which makes curl give up on the transfer. */
 {
 struct dyString *dy = userData;
 size_t n = size * nmemb;
+if (pgMaxBody > 0 && dy->stringSize + (long)n > pgMaxBody)
+    {
+    pgTooBig = TRUE;
+    return 0;
+    }
 dyStringAppendN(dy, (char *)ptr, n);
 return n;
 }
@@ -854,6 +871,56 @@ else if (sameString(cmd, "surjectAll"))
     if (!r.transportErr && r.code == 404)
         {
         emitJson("{\"status\":\"expired\"}");
+        dyStringFree(&r.body);
+        freez(&r.errMsg);
+        return;
+        }
+    }
+else if (sameString(cmd, "liftoverAll"))
+    {
+    /* The region on every haplotype, one row each: where it lands and how
+     * much of it does.  The service walks the source once for all of them, so
+     * this costs about what a single target does.  What goes upstream is
+     * rebuilt from the checked fields alone: the target is always "*" in its
+     * summary form, never the block list, which for every haplotype runs to
+     * about 118,000 rows a megabase. */
+    char *payload = cgiOptionalString("payload");
+    if (isEmpty(payload))
+        {
+        emitJsonError("missing 'payload'");
+        return;
+        }
+    long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
+    char *bad = pgValidateLiftover(payload, maxSpan, FALSE, 0);
+    if (bad != NULL)
+        {
+        emitJsonError("%s", bad);
+        return;
+        }
+    struct jsonElement *root = jsonParse(payload);
+    struct jsonWrite *jw = jsonWriteNew();
+    jsonWriteObjectStart(jw, NULL);
+    jsonWriteString(jw, "src", jsonOptionalStringField(root, "src", NULL));
+    jsonWriteNumber(jw, "start", (long long)jsonFindNamedField(root, "", "start")->val.jeNumber);
+    jsonWriteNumber(jw, "end", (long long)jsonFindNamedField(root, "", "end")->val.jeNumber);
+    jsonWriteString(jw, "tgt", "*");
+    jsonWriteBoolean(jw, "summary", TRUE);
+    jsonWriteObjectEnd(jw);
+    safef(url, sizeof(url), "%s/api/v1/liftover", apiBase);
+    /* A summary is about 1 kB a haplotype, but in a duplicated or inverted
+     * region the service has been seen to report a few haplotypes as one piece
+     * per source base: 280 MB for a megabase of 17q21.31, more than this CGI
+     * should hold or a browser can draw.  Stop reading and say so instead. */
+    pgMaxBody = atol(cfgOr("pangenome.maxLiftAllBytes", "20000000"));
+    r = pgHttp(url, jw->dy->string, timeout, token);
+    pgMaxBody = 0;
+    jsonWriteFree(&jw);
+    if (pgTooBig)
+        {
+        emitJsonError("the graph server's answer for this region is over %ld MB, too "
+                      "large to show: in a duplicated or inverted region it can split a "
+                      "haplotype into thousands of pieces. Try a smaller region",
+                      atol(cfgOr("pangenome.maxLiftAllBytes", "20000000")) / 1000000);
         dyStringFree(&r.body);
         freez(&r.errMsg);
         return;
@@ -3923,6 +3990,10 @@ if (quickLiftEnabled(cart))
 printf("<tr><td></td><td>\n");
 printf("<input type='button' id='pgcSubmit' value='Convert'>\n");
 printf("<input type='button' id='pgcClear' value='Clear'>\n");
+/* Every haplotype in one request, on a page of its own (page=liftAll). */
+printf("<input type='button' id='pgcAllBtn' value='Show all haplotypes' "
+       "title='Translate this region to every haplotype in the pangenome and "
+       "summarize how it carries over'>\n");
 printf("</td></tr>\n");
 printf("</table>\n");
 printf("</form>\n");
@@ -4149,6 +4220,59 @@ if (sameOk(cgiOptionalString("page"), "svOpen"))
     return;
     }
 
+/* One PanLift region on every haplotype in the graph: how it carries over, and
+ * the table.  Named entirely by the link - the source path and the interval -
+ * so it can be reloaded and handed on; cmd=liftoverAll checks them again. */
+if (sameOk(cgiOptionalString("page"), "liftAll"))
+    {
+    cartWebStart(cart, NULL, "PanLift — All haplotypes");
+    if (issueBotWarning)
+        botDelayMessage(getenv("REMOTE_ADDR"), botDelayMillis);
+    jsIncludeDataTablesLibs();
+    webIncludeResourceFile("gbModern.css");
+    webIncludeResourceFile("hgPangenome.css");
+    printf("<div id='pgcAll' class='gbApp'>\n");
+    printf("<div id='pgcStatus' class='pgStatus' style='display:none'></div>\n");
+    printf("<div id='pgcResults' class='pgResults'></div>\n");
+    printf("</div>\n");
+    injectConfig();
+    struct jsonWrite *jw = jsonWriteNew();
+    jsonWriteObjectStart(jw, NULL);
+    /* A PanSN contig path is letters, digits and . _ - between its #s; anything
+     * else is not one, and the page says no region was named. */
+    char *src = cgiUsualString("src", "");
+    boolean srcOk = strlen(src) < 256 && countChars(src, '#') >= 2;
+    char *c;
+    for (c = src; srcOk && *c != '\0'; ++c)
+        if (!(isalnum((unsigned char)*c) || strchr("#._-", *c)))
+            srcOk = FALSE;
+    jsonWriteString(jw, "src", srcOk ? src : "");
+    jsonWriteNumber(jw, "start", cgiOptionalInt("start", -1));
+    jsonWriteNumber(jw, "end", cgiOptionalInt("end", -1));
+    jsonWriteStringf(jw, "panLiftUrl", "hgPangenome?page=convert&%s=%s",
+                     cartSessionVarName(), cartSessionId(cart));
+    char *backPos = cartOptionalString(cart, "position");
+    char *backDb = cartOptionalString(cart, "db");
+    if (!isEmpty(backPos) && !isEmpty(backDb))
+        {
+        jsonWriteStringf(jw, "backUrl", "hgTracks?db=%s&%s=%s",
+                         backDb, cartSessionVarName(), cartSessionId(cart));
+        jsonWriteString(jw, "backPos", backPos);
+        }
+    jsonWriteObjectEnd(jw);
+    jsInlineF("var pangenomeLiftAll = %s;\n", jw->dy->string);
+    jsonWriteFree(&jw);
+    boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
+    jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
+    jsIncludeFile("hgPangenomeAssemblies.js", NULL);
+    jsIncludeFile("hgPangenomeSamples.js", NULL);
+    if (pclai)
+        jsIncludeFile("hgPangenomePclai.js", NULL);
+    jsIncludeFile("hgPangenomeConvert.js", NULL);
+    cartWebEnd();
+    return;
+    }
+
 /* The coordinate-translation page is a separate view of this CGI. */
 if (sameOk(cgiOptionalString("page"), "convert"))
     {
@@ -4252,7 +4376,7 @@ if (sameOk(cmd, "locus"))
     }
 if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
                     || sameString(cmd, "liftover") || sameString(cmd, "haplotypes")
-                    || sameString(cmd, "liftoverTargets")
+                    || sameString(cmd, "liftoverTargets") || sameString(cmd, "liftoverAll")
                     || sameString(cmd, "surject") || sameString(cmd, "surjectAll")))
     {
     /* Rate-limit the expensive submit via the UCSC bottleneck server, with a
@@ -4260,7 +4384,8 @@ if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
      * and happens many times per job, so it is deliberately NOT throttled -
      * throttling it would penalize legitimate users' polling loops. */
     if (sameString(cmd, "map") || sameString(cmd, "liftover")
-        || sameString(cmd, "liftoverTargets") || sameString(cmd, "surject"))
+        || sameString(cmd, "liftoverTargets") || sameString(cmd, "liftoverAll")
+        || sameString(cmd, "surject"))
         {
         /* If the bottleneck server itself is unreachable, botDelay errAborts,
          * which would send an HTML 500 down a JSON endpoint (the client would

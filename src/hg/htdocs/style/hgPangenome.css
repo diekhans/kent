@@ -474,6 +474,62 @@
 #pgcTable td.ancCol { white-space:normal; min-width:180px; }
 .pgcNoneWhy { color:var(--muted); }
 .pgcTableWrap { padding:6px 18px 4px; overflow-x:auto; }
+#pgcTable td.pieceCol { font-variant-numeric:tabular-nums; color:var(--muted); }
+#pgcTable td.pctCol.zero { color:var(--faint); }
+
+/* ---- PanLift on every haplotype (page=liftAll) ----
+ * Three panels of figures between the strip and the table; each figure that
+ * counts haplotypes lists them in the table when clicked (.pgcPick2). */
+#pgcAll { margin-top:4px; }
+/* The whole width, as the mapping results have: the table has up to eleven
+ * columns, and sized to their content they no longer fit in the form's 1000px. */
+#pgcResults.pgResults, #pgcAll .pgStatus { max-width:none; }
+.pgcStats { display:grid; grid-template-columns:minmax(300px,1fr) minmax(300px,1fr) minmax(380px,1.3fr);
+    gap:0; border-bottom:1px solid var(--line); }
+@media (max-width:1100px) { .pgcStats { grid-template-columns:minmax(0,1fr); }
+    .pgcStatPanel { border-right:0; border-bottom:1px solid var(--lineSoft); } }
+.pgcStatPanel { padding:12px 18px 14px; border-right:1px solid var(--lineSoft); min-width:0; }
+.pgcStatPanel:last-child { border-right:0; }
+.pgcStatPanel h3 { margin:0 0 10px; font-size:13px; font-weight:700; color:var(--muted); }
+.pgcStatText { font-size:13px; color:var(--ink); line-height:1.6; margin-top:6px;
+    font-variant-numeric:tabular-nums; }
+.pgcPick2 { cursor:pointer; }
+.pgcPick2:hover, .pgcPick2:focus-visible { background:var(--hover); outline:none; }
+span.pgcPick2 { color:var(--accent); }
+span.pgcPick2:hover { color:var(--accentHover); text-decoration:underline; background:none; }
+.pgcBars { display:flex; flex-direction:column; gap:2px; }
+.pgcBarRow { display:grid; grid-template-columns:6.5em minmax(0,1fr) 6.5em; gap:10px;
+    align-items:center; padding:3px 4px; font-size:13px; }
+.pgcBarK { color:var(--ink); }
+.pgcBarTrack { height:12px; background:var(--lineSoft); }
+.pgcBarFill { display:block; height:100%; background:var(--section); min-width:1px; }
+.pgcBarFill.none { background:var(--faint); }
+.pgcBarV { text-align:right; font-variant-numeric:tabular-nums; color:var(--ink); }
+.pgcShapes { display:grid; grid-template-columns:1fr 1fr; gap:4px 12px; margin-top:12px;
+    padding-top:10px; border-top:1px solid var(--lineSoft); }
+.pgcShape { display:flex; align-items:baseline; gap:8px; padding:2px 4px; font-size:13px; }
+.pgcShape .v { font-weight:700; min-width:2.5em; text-align:right; font-variant-numeric:tabular-nums; }
+.pgcShape .k { color:var(--muted); }
+.pgcHistWrap { max-width:440px; }
+svg.pgcHist { width:100%; height:auto; display:block; overflow:visible; }
+svg.pgcHist .tick { font-size:11px; fill:var(--muted); font-variant-numeric:tabular-nums; }
+svg.pgcHist .axis { stroke:var(--btnLine); stroke-width:1; }
+svg.pgcHist .grid { stroke:var(--lineSoft); stroke-width:1; }
+svg.pgcHist .zero { stroke:var(--faint); stroke-width:1; stroke-dasharray:3 3; }
+svg.pgcHist .bar rect { fill:var(--section); }
+svg.pgcHist .bar rect.hit { fill:transparent; }
+svg.pgcHist .bar { cursor:pointer; outline:none; }
+svg.pgcHist .bar:hover rect:not(.hit), svg.pgcHist .bar:focus rect:not(.hit) { fill:var(--navy); }
+.pgcPopScroll { max-height:250px; overflow:auto; border:1px solid var(--lineSoft); }
+.pgcPopTable { width:100%; border-collapse:collapse; font-size:12px; }
+.pgcPopTable th { position:sticky; top:0; background:var(--headrow); text-align:left;
+    font-weight:700; color:var(--ink); padding:4px 6px; border-bottom:1px solid var(--headrowLine); }
+.pgcPopTable td { padding:3px 6px; border-bottom:1px solid var(--lineSoft); }
+.pgcPopTable td.pgcPopName { white-space:normal; line-height:1.3; }
+.pgcPopTable .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.pgcAnnotStat .v { display:flex; gap:12px; font-weight:400; font-size:13px; }
+.pgcAnnotStat label { white-space:nowrap; }
+#pgcAll .pgrBar { margin:8px 18px 0; }
 
 .pgcCard .pgrNotes { padding-top:6px; }
 .pgcSrcAnc .pgcAnc { display:inline; }
@@ -552,3 +608,4 @@
  * to one haplotype in the browser ---- */
 .pgsOpen { max-width: 60em; padding: 8px 0; font-size: 1.05em; }
 .pgsOpen p { margin: 0 0 8px; }
+#pgcTable td.pgcUnsure, .pgcStatText.pgcUnsure { color:#b45309; }
