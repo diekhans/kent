@@ -21,6 +21,8 @@
 
 var pgpSpots = null;        // one {hap, acc, contig, start, end} per hit
 var pgpData = null;         // the server's answer, kept so a redraw is free
+var pgpDataSpots = null;    // the spots that answer is for
+var pgpUpdating = Promise.resolve();   // pgpUpdate()s, one after another
 var pgpPicked = Object.create(null);   // haplotypes the user ticked
 var pgpSelected = null;     // the haplotype whose details are open, if any
 var pgpSelGroup = null;     // the haplotypes sharing the mark that was clicked
@@ -865,11 +867,58 @@ function pgpOpen(spots) {
             throw new Error((resp && resp.error) || "server error");
         }
         pgpData = resp;
+        pgpDataSpots = spots;
         pgpDraw();
+        // The table gained rows while this was being read.
+        if (pgpSpots !== spots) { pgpUpdate(pgpSpots); }
     }).catch(function (err) {
         host.innerHTML = "<p>Could not load the ancestry plot: " +
                          pgpEsc(err.message) + "</p>";
     });
+}
+
+// The table's new spots, once more of its rows are placed, for a plot already
+// set up.  Only the spots not read yet are asked about, and an open plot keeps
+// its drawing until the answer is in, so the page around it does not move.
+function pgpUpdate(spots) {
+    pgpUpdating = pgpUpdating.then(function () {
+        pgpSpots = spots;
+        var old = pgpData;
+        if (!old || !pgpDataSpots) { return; }     // not read yet: opening reads them all
+        var had = Object.create(null), wanted = Object.create(null);
+        pgpDataSpots.forEach(function (sp) { had[pgpKeyOf(sp)] = true; });
+        spots.forEach(function (sp) { wanted[pgpKeyOf(sp)] = true; });
+        var gone = Object.keys(had).filter(function (k) { return !wanted[k]; }).length;
+        var fresh = spots.filter(function (sp) { return !had[pgpKeyOf(sp)]; });
+        var keep = (old.points || []).filter(function (pt) { return wanted[pgpKeyOf(pt)]; });
+        var done = function (resp) {
+            pgpData = { status: "ok", panel: old.panel || (resp && resp.panel),
+                        points: keep.concat((resp && resp.points) || []),
+                        asked: Math.max(0, (old.asked || 0) - gone) + ((resp && resp.asked) || 0),
+                        found: keep.length + ((resp && resp.found) || 0) };
+            pgpDataSpots = spots;
+            var host = pgpEl("pgrPclaiPlot");
+            if (host && host.style.display === "") {
+                // Drawn again in place: what follows the plot stays where it
+                // was on screen, whatever the browser's scroll anchoring makes
+                // of the old drawing going.
+                var below = host.getBoundingClientRect().bottom;
+                pgpDraw();
+                var moved = host.getBoundingClientRect().bottom - below;
+                if (Math.abs(moved) >= 1) { window.scrollBy(0, moved); }
+            }
+        };
+        if (!fresh.length) { done(null); return; }
+        return pgpFetch(fresh).then(function (resp) {
+            if (!resp || resp.status !== "ok") { throw new Error("no answer"); }
+            done(resp);
+        }).catch(function () {
+            // Read afresh the next time the plot is opened.
+            pgpData = null;
+            pgpDataSpots = null;
+        });
+    });
+    return pgpUpdating;
 }
 
 // Called by the results page with one spot per plottable hit.  Returns false
@@ -881,6 +930,7 @@ function pgpInit(spots, opts) {
     // old rows does not cover the new ones.  A caller that has already read
     // them - PanLift, for its ancestry labels - hands its answer over instead.
     pgpData = (opts && opts.data) || null;
+    pgpDataSpots = pgpData ? spots : null;
     if (opts && opts.legend) {
         pgpLegend = { hit: opts.legend.hit || pgpLegend.hit,
                       pick: opts.legend.pick || pgpLegend.pick };
@@ -904,6 +954,6 @@ function pgpInit(spots, opts) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-    module.exports = {pgpInit: pgpInit, pgpOpen: pgpOpen,
+    module.exports = {pgpInit: pgpInit, pgpOpen: pgpOpen, pgpUpdate: pgpUpdate,
                       pgpTogglePick: pgpTogglePick, pgpDraw: pgpDraw};
 }

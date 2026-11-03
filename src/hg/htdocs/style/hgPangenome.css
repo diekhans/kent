@@ -201,21 +201,6 @@
     .pgcHapsList { max-height: 260px; }
 }
 .pgcCardPop { margin-left: 10px; color: #555; font-size: 0.85em; font-weight: normal; }
-/* Ancestry at each region (pcLAI): a line under the region, a strip of its
- * windows where the ancestry changes inside it, and a summary over the cards. */
-.pgcAnc { margin: 3px 0 1px; font-size: 0.9em; }
-.pgcAncSrc { margin: -4px 0 10px; }
-.pgcAncLine { display: inline-flex; align-items: center; gap: 4px; cursor: help; }
-.pgcAncSw { display: inline-block; width: 11px; height: 11px; border: 1px solid #6b7480;
-    background: #ffffff; flex: 0 0 auto; }
-.pgcAncLine .pgcAncSw:last-of-type { margin-right: 3px; }
-.pgcAncStrip { position: relative; height: 10px; margin: 5px 0 2px; max-width: 420px;
-    background: #f2f3f5; border: 1px solid #c8ccd2; }
-.pgcAncCell { position: absolute; top: 0; bottom: 0; cursor: help;
-    box-shadow: inset -1px 0 0 rgba(255,255,255,0.7); }
-.pgcAncSummary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
-    margin: 0 0 10px; font-size: 0.95em; }
-.pgcAncSummary:empty { display: none; }
 #pgrPclaiPlot { margin: 0 0 12px; border: 1px solid #d0d0d0; }
 .pgcViewLink { margin-left: 12px; color: #121E9A; }
 
@@ -478,8 +463,6 @@
 #pgcTable a { color:var(--accent); text-decoration:none; }
 #pgcTable a:hover { color:var(--accentHover); text-decoration:underline; }
 #pgcTable td.pctCol { font-variant-numeric:tabular-nums; }
-#pgcTable td.ancCol .pgcAnc { margin:0; }
-#pgcTable td.ancCol { white-space:normal; min-width:180px; }
 .pgcNoneWhy { color:var(--muted); }
 .pgcTableWrap { padding:6px 18px 4px; overflow-x:auto; }
 #pgcTable td.pieceCol { font-variant-numeric:tabular-nums; color:var(--muted); }
@@ -543,7 +526,6 @@ svg.pgcHist .bar:hover rect:not(.hit), svg.pgcHist .bar:focus rect:not(.hit) { f
 #pgcAll .pgrBar { margin:8px 18px 0; }
 
 .pgcCard .pgrNotes { padding-top:6px; }
-.pgcSrcAnc .pgcAnc { display:inline; }
 #pgcTable_filter input { width:300px; max-width:55vw; border:1px solid var(--btnLine);
     border-radius:0; padding:5px 9px; font-size:14px; }
 .pgrUnplaced { color:var(--muted); font-style:italic; }

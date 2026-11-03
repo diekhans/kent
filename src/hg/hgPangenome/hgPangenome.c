@@ -110,8 +110,6 @@
  *                            the user follows the link; default 5000000.  Both
  *                            are clamped so interval+2*pad fits maxLiftSpan.
  *                            Set either to 0 to switch that stage off.
- *   pangenome.wideRegionBp   warn that a conversion may be incomplete at or above
- *                            this many bp; default 100000
  *   pangenome.maxLiftTargets max target haplotypes in one translation request;
  *                            default 10.  Not a limit on the reader: PanLift
  *                            sends a longer list as several requests, which
@@ -3123,8 +3121,9 @@ static boolean pgPclaiRead(char *dir, char *chrom, int start, int end,
  * window, that is the one window it falls in.
  *
  * With windows non-NULL, also writes every window the interval overlaps as a
- * JSON list, each clipped to the interval: what PanLift shows for a region
- * long enough to cross windows, and how it tells where the ancestry changes.
+ * JSON list, each clipped to the interval, for a caller that wants where the
+ * ancestry changes inside a region long enough to cross windows.  Neither page
+ * asks for it now: both show the plot alone.
  * "c" is the authors' discretized call, the PCA centroid of the ancestry
  * cluster the window falls in - four values across the whole release.
  *
@@ -3815,7 +3814,6 @@ jsInlineF("window.pangenomeConfig = {\n"
           "  presetHide: \"%s\",\n"
           "  minTargetCoverage: %s,\n"
           "  maxTargetNodes: %s,\n"
-          "  wideRegionBp: %ld,\n"
           "  maxLiftTargets: %d,\n"
           "  maxLiftTargetMb: %ld,\n"
           "  hgsid: \"%s\",\n"
@@ -3844,7 +3842,6 @@ jsInlineF("window.pangenomeConfig = {\n"
           jsonStringEscape(cgiUsualString("pgHide", "")),
           cfgOr("pangenome.minTargetCoverage", "10"),
           cfgOr("pangenome.maxTargetNodes", "300"),
-          atol(cfgOr("pangenome.wideRegionBp", "100000")),
           atoi(cfgOr("pangenome.maxLiftTargets", "10")),
           atol(cfgOr("pangenome.maxLiftTargetMb", "5")),
           cartSessionId(cart),
@@ -4294,8 +4291,8 @@ if (sameOk(cgiOptionalString("page"), "convert"))
     webIncludeResourceFile("hgPangenome.css");
     drawConvertPage();
     injectConfig();
-    /* Ancestry at each converted region: the same switch as the results page's
-     * plot, since it is the same data and the same plot. */
+    /* The ancestry plot of the converted regions: the same switch as the
+     * results page's, since it is the same data and the same plot. */
     boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
     jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
     /* The results table pages and sorts as the mapping results page's does. */

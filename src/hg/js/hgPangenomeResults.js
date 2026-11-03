@@ -14,7 +14,7 @@
  *
  * Copyright (C) 2026 The Regents of the University of California */
 
-/* globals $, pangenomeJobId, pangenomeConfig, pangenomeAssemblies, pangenomeAssemblyNames */
+/* globals $, pgpInit, pgpUpdate, pangenomeJobId, pangenomeConfig, pangenomeAssemblies, pangenomeAssemblyNames */
 
 var pgrSelf = window.location.pathname;
 var pgrRows = [];
@@ -973,6 +973,16 @@ function pgrPlaceAll(p) {
     }).then(function (rows) {
         var have = Object.create(null);
         rows.forEach(function (r) { have[pgrHapKey(r.hap)] = true; });
+        // A row already placed and looked up keeps its locus, so the lookup
+        // is not made a second time for the same place.
+        var loci = Object.create(null);
+        var at = function (r) { return pgrHapKey(r.hap) + " " + r.contig + ":" + r.start + "-" + r.end; };
+        pgrRows.forEach(function (r) {
+            if (r.query === p.query && r.placement === p.index && r.locus !== undefined && r.contig != null) {
+                loci[at(r)] = r.locus;
+            }
+        });
+        rows.forEach(function (r) { if (r.locus === undefined && at(r) in loci) { r.locus = loci[at(r)]; } });
         pgrRows = pgrRows.filter(function (r) {
             if (r.query !== p.query || r.placement !== p.index) { return true; }
             return r.extra && !have[pgrHapKey(r.hap)];
@@ -1016,10 +1026,65 @@ function pgrPlaceRest() {
     return pgrPool(want.map(function (p) { return function () { return pgrPlaceAll(p); }; }), 1);
 }
 
-// Draw the table again from pgrRows on the page, sort and filter it was on.
-// The row open in the detail panel stays open: rows are renumbered when more
-// are placed, so it is found again by what it is rather than by its number.
+// Which columns pgrDraw gives the table: a change in these needs a new table.
+var pgrDrawSig = null;
+function pgrColumnsSig(queries, rows) {
+    return [queries > 1, rows.some(function (r) { return r.hits > 1; }), pgrPclaiReady()].join();
+}
+
+// The table's rows replaced in place once more haplotypes are placed, rather
+// than the page drawn again: the strip, the detail panel and the reader's
+// place in the table stay as they are, and only the count, the notes and the
+// rows change.  The row open in the detail panel stays open; rows are
+// renumbered, so it is found again by what it is rather than by its number.
+// Returns false when the table has to be drawn anew instead.
+function pgrRefresh() {
+    var dt = pgrDt;
+    if (!dt || !document.getElementById("pgrTable")) { return false; }
+    var rows = pgrRows.filter(function (r) { return !r.extra; });
+    if (pgrColumnsSig(pgrQueryCount, rows) !== pgrDrawSig) { return false; }
+    var count = document.getElementById("pgrHapCount");
+    if (count) { count.textContent = pgrFmt(rows.length); }
+    var box = document.getElementById("pgrNotes");
+    if (box) {
+        var notes = pgrNotes(rows, pgrNote, pgrQueryCount > 1, rows.some(function (r) { return r.hits > 1; }));
+        var html = pgrNotesHtml(notes);
+        if (box.innerHTML !== html) { box.innerHTML = html; }
+        box.hidden = !notes.length;
+    }
+    // Where the table is on screen, so it can be put back there: the browser's
+    // scroll anchoring, losing the rows it anchored to, moves the page.
+    var table = document.getElementById("pgrTable");
+    var top0 = table.getBoundingClientRect().top;
+    var sel = pgrSelKey;
+    if (sel) {
+        var again = pgrRows.filter(function (r) {
+            return r.query === sel.query && r.placement === sel.placement && pgrHapKey(r.hap) === sel.hap;
+        })[0];
+        pgrSelRank = again ? again.rank : null;
+        if (!again) { pgrSelKey = null; }
+    }
+    // draw(false) keeps the page, the sort and the filter the reader was on.
+    dt.clear().rows.add(pgrRows.slice().sort(pgrRowOrder(pgrQueryNames))).draw(false);
+    pgrHoldStill(table, top0);
+    // The plot is given the new rows; it reads only the ones it has not.
+    if (pgrPclaiReady()) { pgpUpdate(rows.filter(pgrPclaiSpot).map(pgrPclaiSpotOf)); }
+    if (typeof window.convertTitleTagsToMouseovers === "function") {
+        window.convertTitleTagsToMouseovers();
+    }
+    return true;
+}
+
+// Scroll back by however far `node` moved from `top0` on screen.
+function pgrHoldStill(node, top0) {
+    var moved = node.getBoundingClientRect().top - top0;
+    if (Math.abs(moved) >= 1) { window.scrollBy(0, moved); }
+}
+
+// Draw the table again from pgrRows on the page, sort and filter it was on:
+// in place when it can be (pgrRefresh), else as a new table.
 function pgrRedrawKeep() {
+    if (pgrRefresh()) { return; }
     var dt = pgrDt;
     var st = dt ? { page: dt.page(), len: dt.page.len(), order: dt.order(), search: dt.search() } : null;
     var sel = pgrSelKey;
@@ -1359,7 +1424,8 @@ function pgrSummaryStrip(queries, rows, multiPlace) {
                 pgrStat("Length", pgrFmt(r0.queryLength || 0) + " bp");
         if (multiPlace) { stats += div + pgrStat("Hits", pgrFmt(r0.hits)); }
     }
-    stats += div + pgrStat("Haplotypes", pgrFmt(rows.length)) + div + pgrCovControl();
+    stats += div + pgrStat("Haplotypes", '<span id="pgrHapCount">' + pgrFmt(rows.length) + "</span>") +
+             div + pgrCovControl();
     var annot = pgrAnnotControl();
     if (annot) { stats += div + annot; }
     var page = pgrPage();
@@ -1531,40 +1597,9 @@ function pgrSelect(dt, rank) {
     if (r) { document.getElementById("pgrDetail").innerHTML = pgrDetailHtml(r); }
 }
 
-function pgrDraw(queries, allRows, note) {
-    // Drawn again after placements are added, so let go of the last table: its
-    // DataTable, its selection (ranks change), and remember whether the plot
-    // was open, to open it again on the new rows.
-    var oldPlot = document.getElementById("pgrPclaiPlot");
-    var plotWasOpen = !!oldPlot && oldPlot.style.display !== "none";
-    if (pgrDt) { pgrDt.destroy(); pgrDt = null; }
-    pgrSelRank = null;
-    pgrSelKey = null;
-    // Everything but the rows aligned on request for one haplotype: what the
-    // strip counts, the notes describe and the plot is given.
-    var rows = allRows.filter(function (r) { return !r.extra; });
-    var multiQuery = queries > 1;
-    var multiPlace = rows.some(function (r) { return r.hits > 1; });
+// What is worth saying about these rows, beyond the rows themselves.
+function pgrNotes(rows, note, multiQuery, multiPlace) {
     var placed = rows.filter(function (r) { return r.contig != null || r.pending; }).length;
-    var page = pgrPage();
-
-    // Page actions go in the gold title bar beside the title, as on hgBlat's
-    // results page (the framework's own #sectTtl).
-    var sectTtl = document.getElementById("sectTtl");
-    if (sectTtl && !document.getElementById("pgrHeadActions")) {
-        var acts = document.createElement("span");
-        acts.id = "pgrHeadActions";
-        acts.className = "pgrHeadActions";
-        acts.innerHTML = (page.backUrl ?
-            '<a class="gbPill" href="' + pgrEsc(page.backUrl) + '" title="Return to the ' +
-            "Genome Browser at your previous location (" + pgrEsc(page.backPos) + ')">' +
-            "Back to Genome Browser</a>" : "") +
-            '<a class="gbPill" href="' + pgrEsc(page.newSearchUrl || pgrSelf) + '" ' +
-            'title="Map another sequence">New search</a>';
-        sectTtl.appendChild(acts);
-    }
-
-    // What is worth saying about these rows, beyond the rows themselves.
     var notes = [];
     if (note) { notes.push(note); }
     if (placed < rows.length) {
@@ -1611,6 +1646,47 @@ function pgrDraw(queries, allRows, note) {
                    "of a duplicated region the sequence came from; those positions may " +
                    "belong to another copy.");
     }
+    return notes;
+}
+
+function pgrNotesHtml(notes) {
+    return notes.map(function (n) { return '<div class="pgrNote">' + n + "</div>"; }).join("");
+}
+
+function pgrDraw(queries, allRows, note) {
+    // Drawn again after placements are added, so let go of the last table: its
+    // DataTable, its selection (ranks change), and remember whether the plot
+    // was open, to open it again on the new rows.
+    var oldPlot = document.getElementById("pgrPclaiPlot");
+    var plotWasOpen = !!oldPlot && oldPlot.style.display !== "none";
+    if (pgrDt) { pgrDt.destroy(); pgrDt = null; }
+    pgrSelRank = null;
+    pgrSelKey = null;
+    // Everything but the rows aligned on request for one haplotype: what the
+    // strip counts, the notes describe and the plot is given.
+    var rows = allRows.filter(function (r) { return !r.extra; });
+    var multiQuery = queries > 1;
+    var multiPlace = rows.some(function (r) { return r.hits > 1; });
+    pgrDrawSig = pgrColumnsSig(queries, rows);
+    var page = pgrPage();
+
+    // Page actions go in the gold title bar beside the title, as on hgBlat's
+    // results page (the framework's own #sectTtl).
+    var sectTtl = document.getElementById("sectTtl");
+    if (sectTtl && !document.getElementById("pgrHeadActions")) {
+        var acts = document.createElement("span");
+        acts.id = "pgrHeadActions";
+        acts.className = "pgrHeadActions";
+        acts.innerHTML = (page.backUrl ?
+            '<a class="gbPill" href="' + pgrEsc(page.backUrl) + '" title="Return to the ' +
+            "Genome Browser at your previous location (" + pgrEsc(page.backPos) + ')">' +
+            "Back to Genome Browser</a>" : "") +
+            '<a class="gbPill" href="' + pgrEsc(page.newSearchUrl || pgrSelf) + '" ' +
+            'title="Map another sequence">New search</a>';
+        sectTtl.appendChild(acts);
+    }
+
+    var notes = pgrNotes(rows, note, multiQuery, multiPlace);
 
     // hgBlat's columns, with the two it has no need for - which sample, and
     // which of its haplotypes - in front.
@@ -1637,8 +1713,8 @@ function pgrDraw(queries, allRows, note) {
         '<div id="pgrSeqBox" class="gbShareBox" style="display:none"></div>' +
         (pgrPclaiReady() ? '<div id="pgrPclaiPlot" class="pgrPanel" style="display:none"></div>' : "") +
         '<div id="pgrDetail" class="pgrDetail">' + pgrHintHtml() + "</div>" +
-        (notes.length ? '<div class="pgrNotes">' + notes.map(function (n) {
-            return '<div class="pgrNote">' + n + "</div>"; }).join("") + "</div>" : "") +
+        '<div id="pgrNotes" class="pgrNotes"' + (notes.length ? "" : " hidden") + ">" +
+        pgrNotesHtml(notes) + "</div>" +
         '<div id="pgrFocusBar" class="pgrBar on" hidden></div>' +
         '<table id="pgrTable" class="display"><thead><tr>' + th.join("") +
         "</tr></thead></table></div>";
@@ -1701,7 +1777,9 @@ function pgrDraw(queries, allRows, note) {
         render: function (d, type, r) {
             return type === "display" ? pgrCoverageCell(r) : (r.coverage == null ? -1 : r.coverage);
         } });
-    cols.push({ data: null, className: "locusCol",
+    // Not sortable: loci are looked up a page at a time (pgrFillLoci), so a sort
+    // would put every row not looked up yet among the blanks.
+    cols.push({ data: null, className: "locusCol", orderable: false,
         render: function (d, type, r) {
             return type === "display" ? pgrLocusCell(r) : (r.locus || "");
         } });

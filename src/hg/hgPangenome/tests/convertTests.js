@@ -68,7 +68,6 @@ function startPage(opts) {
         defaultTarget: 'grch38#0',
         minTargetCoverage: 10,
         maxLiftTargets: 3,
-        wideRegionBp: opts.wideRegionBp === undefined ? 100000 : opts.wideRegionBp
     };
     Object.keys(opts.config || {}).forEach(function (k) {
         c.window.pangenomeConfig[k] = opts.config[k];
@@ -179,41 +178,39 @@ setTimeout(function () {
 // intervals.  The page has to split those per target haplotype (each becomes
 // its own chain) and still be able to draw the ordinary result cards.
 
-// ---- ancestry at each region (pcLAI) ----------------------------------------
-// A panel shaped like the real one: two populations in two clusters.
-var ANC_PANEL = { labels: ['Yoruba in Ibadan, Nigeria', 'Toscani in Italia', 'Peruvian in Lima, Peru'],
-                  points: [] };
-for (var ai = 0; ai < 70; ai++) {
-    ANC_PANEL.points.push([-1.74 + ai * 0.001, 0.2, 0, 'Y' + ai]);
-    ANC_PANEL.points.push([0.44 + ai * 0.001, -1.31, 1, 'T' + ai]);
-}
-for (var aj = 0; aj < 10; aj++) ANC_PANEL.points.push([0.45, -1.3, 2, 'P' + aj]);
-function ancWin(s, e, cx, cy, conf, rgb) {
-    return { s: s, e: e, w: 'chr1_w' + s, x: cx, y: cy, cx: cx, cy: cy, conf: conf || 999, rgb: rgb };
-}
-
-t.suite('ancestry at each region');
-t.test('a cluster is named by the super-population nearest its centroid', function () {
-    var A = startPage().api;
-    var n = A.ancClusterName(ANC_PANEL, -1.743, 0.207);
-    t.eq(n.name, 'African', 'African');
-    t.contains(n.near, 'Yoruba in Ibadan, Nigeria 100%', 'nearest populations, with shares');
-    t.eq(A.ancClusterName(ANC_PANEL, 0.445, -1.314).name, 'European', 'European, Peruvians nearby notwithstanding');
+// ---- ancestry plot (pcLAI) -------------------------------------------------
+t.suite('ancestry plot');
+t.test('the plot is offered for the HPRC regions, with no ancestry read until it opens', function () {
+    var c = startPage();
+    var given = null;
+    c.sandbox.pangenomePclai = { on: 1 };
+    c.sandbox.pgpPicked = {};
+    c.sandbox.pgpInit = function (spots, opts) { given = { spots: spots, opts: opts }; return true; };
+    var acts = c.sandbox.document.createElement('span');
+    var spots = c.api.ancPlot(acts, [
+        { role: 'source', hap: 'HG00097#1', db: 'GCA_018466835.2', contig: 'CM1', start: 0, end: 10 },
+        { role: 'target', hap: 'GRCh38#0', db: 'hg38', contig: 'chr1', start: 0, end: 10 },
+        { role: 'target', hap: 'HG00099#2', db: 'GCA_018466845.2', contig: 'CM2', start: 5, end: 15 }]);
+    t.eq(spots.length, 2, 'GRCh38 left out: it has no pcLAI');
+    t.eq(given.spots.length, 2, 'handed to the plot');
+    t.ok(!given.opts.data, 'no answer handed over: the plot reads its own when opened');
+    t.ok(c.sandbox.pgpPicked['HG00097#1'], 'the source is ringed');
+    t.eq(acts._kids.length, 1, 'one button');
+    t.eq(acts._kids[0].textContent, 'Show ancestry plot', 'labelled as on the mapping page');
+    t.eq(c.calls.filter(function (x) { return /cmd=pclai/.test((x.opts && x.opts.body) || x.url); }).length, 0,
+         'nothing asked of pcLAI yet');
 });
-t.test('one cluster reads as ancestry in this region; several as a mix by bases', function () {
-    var A = startPage().api;
-    var one = A.ancSummary({ windows: [ancWin(0, 100, -1.743, 0.207), ancWin(100, 300, -1.743, 0.207)] }, ANC_PANEL);
-    t.eq(A.ancText(one), 'African', 'one');
-    var mix = A.ancSummary({ windows: [ancWin(0, 300, 0.445, -1.314), ancWin(300, 400, -1.743, 0.207, 850)] }, ANC_PANEL);
-    t.eq(A.ancText(mix), 'Mixed: European 75% · African 25%', 'by bases, largest first');
-    t.eq(mix.minConf, 850, 'the lowest confidence is kept, for the note');
-    t.eq(mix.parts.length, 2, 'two parts, so a strip');
-});
-t.test('a region with no ancestry says why', function () {
-    var A = startPage().api;
-    t.contains(A.ancNone('hg38'), 'GRCh38 is a mosaic', 'GRCh38');
-    t.contains(A.ancNone('hs1'), "CHM13's own coordinates", 'CHM13');
-    t.contains(A.ancNone('https://x/hgTracks?db=hub_1_HG002'), 'No ancestry for this assembly', 'a hub');
+t.test('no plot with pcLAI off, or with fewer than two regions to plot', function () {
+    var c = startPage();
+    c.sandbox.pgpInit = function () { return true; };
+    var acts = c.sandbox.document.createElement('span');
+    var two = [{ role: 'source', hap: 'HG00097#1', db: 'GCA_018466835.2' },
+               { role: 'target', hap: 'HG00099#2', db: 'GCA_018466845.2' }];
+    t.eq(c.api.ancPlot(acts, two), null, 'off');
+    c.sandbox.pangenomePclai = { on: 1 };
+    c.sandbox.pgpPicked = {};
+    t.eq(c.api.ancPlot(acts, two.slice(0, 1)), null, 'one region');
+    t.eq(acts._kids.length, 0, 'and no button');
 });
 
 t.suite('every haplotype at once (page=liftAll)');
@@ -1089,27 +1086,20 @@ setTimeout(function () {
                             t.eq(o.value, 'CHM13#0', 'percentage is display only');
                         });
 
-                        // ---- wide-region caveat ----
-                        var wide = startPage({ wideRegionBp: 1000,
+                        // ---- no caveat on a wide region ----
+                        // A wide region loses nothing a tiled one finds (tested
+                        // against the service, 2026-11-02), so it is not flagged.
+                        var wide = startPage({
                             liftover: { intervals: [{ haplotype: 'CHM13#0#chr10',
-                                        start: 10, end: 20, strand: '+' }] } });
-                        var narrow = startPage({ wideRegionBp: 1000,
-                            liftover: { intervals: [{ haplotype: 'CHM13#0#chr10',
-                                        start: 10, end: 20, strand: '+' }] } });
+                                        start: 10, end: 500010, strand: '+' }] } });
                         setTimeout(function () {
-                            convert(wide, 'CM094066.1:1-5000', ['CHM13#0']);
-                            convert(narrow, 'CM094066.1:1-100', ['CHM13#0']);
+                            convert(wide, 'CM094066.1:1-500000', ['CHM13#0']);
                             setTimeout(function () {
-                                t.suite('wide-region caveat');
+                                t.suite('wide regions');
 
-                                t.test('a wide interval is flagged as possibly incomplete',
-                                       function () {
-                                    t.contains(text(wide), 'treat the result as incomplete',
-                                               'caveat shown');
-                                });
-
-                                t.test('a browser-sized interval is not flagged', function () {
-                                    t.notOk(/incomplete/.test(text(narrow)), 'no caveat');
+                                t.test('a wide region is not flagged as incomplete', function () {
+                                    t.notOk(/incomplete|drop some positions/.test(text(wide)),
+                                            'no caveat');
                                 });
 
                                 process.exit(t.report());
