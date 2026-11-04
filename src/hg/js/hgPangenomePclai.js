@@ -7,13 +7,13 @@
  * pcLAI (Geleta et al. 2026, doi:10.64898/2026.03.23.713813) gives every window
  * of every HPRC haplotype a coordinate in a reference PCA space rather than an
  * ancestry label.  This plots the reference cloud - the pcLAI authors' own
- * published panel, coloured by its 21 populations, as hgc's details page draws
- * it - and puts one mark per hit haplotype on top.
+ * published panel - and puts one mark per hit haplotype on top, over the space
+ * painted in pcLAI's own colours.
  *
- * Deliberately no ancestry labels on the hits.  The method exists to avoid
- * discrete labels, each window discretises to one of only four cluster centres,
- * and naming those would be our reading rather than the authors'.  The cloud is
- * the legend.
+ * Deliberately no labels anywhere: not on the hits, and not on the reference
+ * panel either, whose 1000 Genomes populations are not how the HPRC describes
+ * its samples and will not fit the next release's.  Colour means one thing
+ * throughout, a position in the space, exactly as the pcLAI tracks paint it.
  *
  * Copyright (C) 2026 The Regents of the University of California */
 
@@ -26,6 +26,7 @@ var pgpUpdating = Promise.resolve();   // pgpUpdate()s, one after another
 var pgpPicked = Object.create(null);   // haplotypes the user ticked
 var pgpSelected = null;     // the haplotype whose details are open, if any
 var pgpSelGroup = null;     // the haplotypes sharing the mark that was clicked
+var pgpWindows = Object.create(null);  // key -> its windows, or null while being read
 
 // The hit index, shared by the hover readout and the click that opens details:
 // both ask the same question - which mark is under the cursor.
@@ -48,7 +49,7 @@ var pgpEscBound = false;
 // What the two marks of our own are called in the legend.  The results page's
 // points are hits it can tick; PanLift's are the targets of a conversion and
 // its source, and it says so through pgpInit's options.
-var pgpLegend = { hit: "a hit, in pcLAI's own colour", pick: "ticked in the table" };
+var pgpLegend = { hit: "a hit", pick: "ticked in the table", many: "hits" };
 var pgpMinCov = null;       // coverage floor, % - null until the config is read
 var pgpBestOnly = true;     // only the best placement of each query
 
@@ -79,12 +80,58 @@ function pgpHasPlacements() {
     return (pgpSpots || []).some(function (s) { return s.placements > 1; });
 }
 
-// Colours for the reference populations.  The same wheel hgc.scatterPlot.js
-// uses, so a reader who has seen the details page sees the same space.
-var PGP_HUES = ["#d40000","#0033cc","#00802b","#cc6600","#7700aa","#008b8b",
-                "#b8860b","#9932cc","#2e8b57","#c71585","#4682b4","#8b4513",
-                "#556b2f","#483d8b","#b22222","#20b2aa","#daa520","#6a5acd",
-                "#228b22","#a0522d","#5f9ea0"];
+// pcLAI's own colour for a coordinate.  The authors' paintings.py puts PC1 and
+// PC2 on CIE Lab's a and b axes at a fixed lightness of 80 and converts to
+// sRGB, clipping what falls outside it.  The PC range it stretches over comes
+// from their founder panel and scaling, which are not published; the bounds
+// here were fitted to the itemRgb of 1,521 windows from 30 HPRC2 assemblies,
+// and reproduce every one of them to within 3 of 255 on each channel.
+var PGP_LAB_X = [-2.3757, 1.3365], PGP_LAB_Y = [-2.0158, 2.1053];
+
+function pgpLabRgb(x, y) {
+    var a = ((x - PGP_LAB_X[0]) / (PGP_LAB_X[1] - PGP_LAB_X[0]) - 0.5) * 240;
+    var b = ((y - PGP_LAB_Y[0]) / (PGP_LAB_Y[1] - PGP_LAB_Y[0]) - 0.5) * 240;
+    var fy = (80 + 16) / 116, fx = fy + a / 500, fz = Math.max(0, fy - b / 200);
+    var inv = function (t) { return t > 0.2068966 ? t * t * t : (t - 16 / 116) / 7.787; };
+    var X = 0.95047 * inv(fx), Y = inv(fy), Z = 1.08883 * inv(fz);
+    return [3.2404813 * X - 1.5371515 * Y - 0.4985363 * Z,
+            -0.9692549 * X + 1.8759900 * Y + 0.0415559 * Z,
+            0.0556466 * X - 0.2040413 * Y + 1.0573111 * Z].map(function (c) {
+        c = c > 0.0031308 ? 1.055 * Math.pow(c, 1 / 2.4) - 0.055 : 12.92 * c;
+        return Math.round(255 * Math.min(1, Math.max(0, c)));
+    });
+}
+
+// The plot area painted with those colours, as an image: a small canvas the
+// browser smooths as it stretches it, so the field has no visible steps.
+// Kept for the scale it was made for, so a redraw does not paint it again.
+var pgpFieldCache = null;
+function pgpField(s) {
+    var key = [s.x0, s.x1, s.y0, s.y1].join();
+    if (pgpFieldCache && pgpFieldCache.key === key) { return pgpFieldCache.href; }
+    var href = null;
+    try {
+        var w = 140, h = 128, cv = document.createElement("canvas");
+        cv.width = w; cv.height = h;
+        var ctx = cv.getContext && cv.getContext("2d");
+        if (ctx) {
+            var img = ctx.createImageData(w, h);
+            for (var j = 0; j < h; j++) {
+                for (var i = 0; i < w; i++) {
+                    var c = pgpLabRgb(s.x0 + (i + 0.5) / w * (s.x1 - s.x0),
+                                      s.y1 - (j + 0.5) / h * (s.y1 - s.y0));
+                    var k = 4 * (j * w + i);
+                    img.data[k] = c[0]; img.data[k + 1] = c[1]; img.data[k + 2] = c[2];
+                    img.data[k + 3] = 255;
+                }
+            }
+            ctx.putImageData(img, 0, 0);
+            href = cv.toDataURL("image/png");
+        }
+    } catch (e) { href = null; }
+    pgpFieldCache = { key: key, href: href };
+    return href;
+}
 
 function pgpEl(id) { return document.getElementById(id); }
 
@@ -104,9 +151,10 @@ function pgpEsc(s) {
 // pieces, one after another, and the answers put together.
 var PGP_PER_REQUEST = 100;
 
-function pgpFetchOne(spots) {
+function pgpFetchOne(spots, windows) {
     var body = "cmd=pclai&payload=" +
-               encodeURIComponent(JSON.stringify({spots: spots}));
+               encodeURIComponent(JSON.stringify(windows ? {spots: spots, windows: true}
+                                                         : {spots: spots}));
     return fetch(window.location.pathname, {
         method: "POST",
         headers: {"Content-Type": "application/x-www-form-urlencoded",
@@ -138,7 +186,8 @@ function pgpFetch(spots) {
 
 // ---- the plot ---------------------------------------------------------------
 
-var PGP_W = 820, PGP_H = 644, PGP_L = 66, PGP_R = 250, PGP_T = 56, PGP_B = 88;
+var PGP_W = 820, PGP_H = 680, PGP_L = 66, PGP_R = 250, PGP_T = 92, PGP_B = 88;
+var PGP_MARG = 28;          // how far the bars along each axis reach
 
 // Everything below the plot is stacked from the plot's own bottom edge rather
 // than from the canvas height, so the three rows cannot drift into each other
@@ -306,8 +355,7 @@ function pgpBuildIndex(panel, pts, scale) {
     pgpMarks = [];
     (panel.points || []).forEach(function (p) {
         pgpMarks.push({x: scale.X(p[0]), y: scale.Y(p[1]), hit: false, r: 2,
-                       name: p[3], pop: (panel.labels || [])[p[2]],
-                       px: p[0], py: p[1]});
+                       name: p[3], px: p[0], py: p[1]});
     });
     // One entry per group, and each is aimable over its whole drawn area: a
     // big group is a big target, which is the point of drawing it big.
@@ -466,9 +514,9 @@ function pgpFill(p) {
 function pgpTipHtml(m) {
     var coord = "PC1 " + pgpFmtNum(m.px) + ", PC2 " + pgpFmtNum(m.py);
     if (!m.hit) {
-        // A reference haplotype: who it is and which population places it.
-        return "<b>" + pgpEsc(m.name) + "</b><br>" +
-               (m.pop ? pgpEsc(m.pop) + "<br>" : "") +
+        // A reference haplotype: which one, and where.  Its population is
+        // left out with the rest of the labels.
+        return "<b>" + pgpEsc(m.name) + "</b> (reference)<br>" +
                '<span style="color:#5b6572">' + coord + "</span>";
     }
     if (m.group && m.group.members.length > 1) {
@@ -491,6 +539,72 @@ function pgpTipHtml(m) {
                m.spot.end.toLocaleString() + "</span>";
     }
     return out;
+}
+
+// How the plotted haplotypes spread along each axis, as bars on the plot's top
+// and right edges.  Marks gather into groups and the cloud can hide them; a bar
+// still counts every haplotype at that value.  One count scale for both axes,
+// so the two can be compared.
+var PGP_MARG_BINS = 28;
+function pgpMarginals(pts, s) {
+    var count = function (vals, lo, hi) {
+        var c = [], i;
+        for (i = 0; i < PGP_MARG_BINS; i++) { c.push(0); }
+        vals.forEach(function (v) {
+            c[Math.max(0, Math.min(PGP_MARG_BINS - 1,
+                                   Math.floor((v - lo) / (hi - lo) * PGP_MARG_BINS)))]++;
+        });
+        return c;
+    };
+    var cx = count(pts.map(function (p) { return p.x; }), s.x0, s.x1);
+    var cy = count(pts.map(function (p) { return p.y; }), s.y0, s.y1);
+    var most = Math.max(1, Math.max.apply(null, cx.concat(cy)));
+    var len = function (n) { return Math.max(1.5, PGP_MARG * n / most); };
+    var tip = function (axis, a, b, n) {
+        return '<title>' + axis + ' ' + pgpFmtNum(a.toFixed(2)) + ' to ' +
+               pgpFmtNum(b.toFixed(2)) + ': ' + n + ' ' + pgpLegend.many + '</title>';
+    };
+    var top = PGP_T - 6, side = PGP_W - PGP_R + 6;
+    var o = ['<g id="pgpMarginals" fill="#5b6572">'];
+    o.push('<line x1="' + PGP_L + '" y1="' + top + '" x2="' + (PGP_W - PGP_R) + '" y2="' +
+           top + '" stroke="#c9ced4"/>');
+    o.push('<line x1="' + side + '" y1="' + PGP_T + '" x2="' + side + '" y2="' +
+           (PGP_H - PGP_B) + '" stroke="#c9ced4"/>');
+    var stepX = (s.x1 - s.x0) / PGP_MARG_BINS, stepY = (s.y1 - s.y0) / PGP_MARG_BINS;
+    cx.forEach(function (n, i) {
+        if (!n) { return; }
+        var a = s.x0 + i * stepX, x0 = s.X(a), w = s.X(a + stepX) - x0, h = len(n);
+        o.push('<rect x="' + (x0 + 0.5).toFixed(1) + '" y="' + (top - h).toFixed(1) +
+               '" width="' + Math.max(1, w - 1).toFixed(1) + '" height="' + h.toFixed(1) +
+               '">' + tip("PC1", a, a + stepX, n) + '</rect>');
+    });
+    cy.forEach(function (n, i) {
+        if (!n) { return; }
+        var a = s.y0 + i * stepY, y1 = s.Y(a + stepY), hgt = s.Y(a) - y1, w = len(n);
+        o.push('<rect x="' + side + '" y="' + (y1 + 0.5).toFixed(1) + '" width="' +
+               w.toFixed(1) + '" height="' + Math.max(1, hgt - 1).toFixed(1) + '">' +
+               tip("PC2", a, a + stepY, n) + '</rect>');
+    });
+    o.push('</g>');
+    return o.join("");
+}
+
+// The windows of one haplotype's region, read once and kept; the plot is drawn
+// again when they arrive, if that haplotype is still the one selected.
+function pgpReadWindows(key) {
+    if (key in pgpWindows) { return; }
+    var spot = null;
+    (pgpSpots || []).forEach(function (sp) { if (pgpKeyOf(sp) === key) { spot = sp; } });
+    if (spot === null) { pgpWindows[key] = []; return; }
+    pgpWindows[key] = null;
+    pgpFetchOne([spot], true).then(function (r) {
+        var p = r && r.points && r.points[0];
+        pgpWindows[key] = (p && p.windows) || [];
+    }).catch(function () {
+        pgpWindows[key] = [];
+    }).then(function () {
+        if (pgpSelected === key) { pgpDraw(); }
+    });
 }
 
 function pgpDraw() {
@@ -532,10 +646,10 @@ function pgpDraw() {
     // No shared locus to name: each haplotype is read where the query matched
     // it, in that assembly's own coordinates.
     o.push('<text x="' + PGP_L + '" y="41" font-size="11.5" fill="#5b6572">' +
-           pts.length + (dropped ? ' of ' + all.length + ' placed hits' :
-                         ' of ' + pgpData.asked + ' haplotypes placed') +
-           ', each read at its own match' +
-           (dropped ? ' \u2014 ' + dropped + ' filtered out' : '') + '</text>');
+           (dropped ? pts.length + ' of ' + all.length + ' plotted, ' + dropped +
+                      ' filtered out'
+                    : pts.length + ' of ' + pgpData.asked + ' ' + pgpLegend.many +
+                      ' placed') + '</text>');
     // Dispersion: how far apart the hits are, against the reference panel as a
     // yardstick.  Tight means the sequence sits in one part of the space;
     // broad means it is carried right across it.
@@ -545,19 +659,28 @@ function pgpDraw() {
     if (sp !== null && sp.n >= 2 && ref !== null && ref.rms > 0) {
         o.push('<text x="' + PGP_L + '" y="' + PGP_DISP_Y +
                '" font-size="11" fill="#1e2833">Dispersion ' + sp.rms.toFixed(3) +
-               ' (' + Math.round(sp.rms / ref.rms * 100) + '% of the reference ' +
-               "panel's " + ref.rms.toFixed(3) + ')</text>');
+               ', ' + Math.round(sp.rms / ref.rms * 100) + "% of the reference " +
+               "panel's</text>");
     }
 
+    // The space itself, in pcLAI's colours, so a mark's fill reads as where it
+    // is: the same colour as the ground under it, only stronger.
+    var field = pgpField(s);
+    if (field) {
+        o.push('<image href="' + field + '" x="' + PGP_L + '" y="' + PGP_T +
+               '" width="' + (PGP_W - PGP_L - PGP_R) + '" height="' +
+               (PGP_H - PGP_T - PGP_B) + '" preserveAspectRatio="none" opacity="0.38"/>');
+    }
+    var gridInk = field ? '" stroke="#ffffff" stroke-opacity="0.75"/>' : '" stroke="#ececec"/>';
     pgpTicks(s.x0, s.x1).forEach(function (t) {
         o.push('<line x1="' + s.X(t).toFixed(1) + '" y1="' + PGP_T + '" x2="' +
-               s.X(t).toFixed(1) + '" y2="' + (PGP_H - PGP_B) + '" stroke="#ececec"/>');
+               s.X(t).toFixed(1) + '" y2="' + (PGP_H - PGP_B) + gridInk);
         o.push('<text x="' + s.X(t).toFixed(1) + '" y="' + PGP_TICK_Y +
                '" font-size="10.5" fill="#5b6572" text-anchor="middle">' + t + '</text>');
     });
     pgpTicks(s.y0, s.y1).forEach(function (t) {
         o.push('<line x1="' + PGP_L + '" y1="' + s.Y(t).toFixed(1) + '" x2="' +
-               (PGP_W - PGP_R) + '" y2="' + s.Y(t).toFixed(1) + '" stroke="#ececec"/>');
+               (PGP_W - PGP_R) + '" y2="' + s.Y(t).toFixed(1) + gridInk);
         o.push('<text x="' + (PGP_L - 8) + '" y="' + (s.Y(t) + 3.5).toFixed(1) +
                '" font-size="10.5" fill="#5b6572" text-anchor="end">' + t + '</text>');
     });
@@ -566,13 +689,15 @@ function pgpDraw() {
     o.push('<text transform="translate(17,' + ((PGP_T + PGP_H - PGP_B) / 2).toFixed(0) +
            ') rotate(-90)" font-size="11.5" fill="#1e2833" text-anchor="middle">PC2</text>');
 
-    // the reference cloud, coloured by population
-    o.push('<g>');
+    // The reference cloud, all one neutral ink: where the panel's haplotypes
+    // sit is the information, and colour already means position.
+    o.push('<g fill="#2b333d" opacity="0.45">');
     panel.points.forEach(function (p) {
         o.push('<circle cx="' + s.X(p[0]).toFixed(1) + '" cy="' + s.Y(p[1]).toFixed(1) +
-               '" r="1.7" fill="' + PGP_HUES[p[2] % PGP_HUES.length] + '" opacity="0.5"/>');
+               '" r="1.6"/>');
     });
     o.push('</g>');
+    o.push(pgpMarginals(pts, s));
 
     // The centroid of the hits, under them so it never hides one.
     if (sp !== null && sp.n >= 2) {
@@ -588,6 +713,21 @@ function pgpDraw() {
     // the same place in the space are the same colour, and the spread of
     // colour across the marks is the dispersion in another form.  The dark
     // ring keeps a mark findable whatever colour it carries.
+    // The selected haplotype's own windows, where its region crosses more than
+    // one: its mark is the window covering most of the region, and these are
+    // the rest, joined in order along the genome.
+    var trail = (pgpSelected !== null) ? pgpWindows[pgpSelected] : null;
+    if (trail && trail.length > 1) {
+        o.push('<g id="pgpTrail"><polyline fill="none" stroke="#1e2833" stroke-width="1.2" ' +
+               'stroke-opacity="0.7" points="' + trail.map(function (w) {
+                   return s.X(w.x).toFixed(1) + "," + s.Y(w.y).toFixed(1); }).join(" ") + '"/>');
+        trail.forEach(function (w) {
+            o.push('<circle cx="' + s.X(w.x).toFixed(1) + '" cy="' + s.Y(w.y).toFixed(1) +
+                   '" r="3" fill="' + pgpFill(w) + '" stroke="#1e2833" stroke-width="1"/>');
+        });
+        o.push('</g>');
+    }
+
     o.push('<g id="pgrPclaiHits">');
     // Biggest first, so a large group never covers a small one drawn under it.
     var groups = pgpGroups(pts, s).slice().sort(function (a, b) {
@@ -658,34 +798,40 @@ function pgpDraw() {
     });
     o.push('</g>');
 
-    // legend: the populations, then what our own mark means
-    var lx = PGP_W - PGP_R + 24, ly = PGP_T + 6;
-    o.push('<text x="' + lx + '" y="' + (ly - 6) + '" font-size="11" font-weight="600" ' +
-           'fill="#1e2833">1000 Genomes reference</text>');
-    (panel.labels || []).forEach(function (lab, i) {
-        var yy = ly + 13 + i * 12.6;
-        o.push('<circle cx="' + (lx + 4) + '" cy="' + (yy - 3.5).toFixed(1) +
-               '" r="3.2" fill="' + PGP_HUES[i % PGP_HUES.length] + '"/>');
-        o.push('<text x="' + (lx + 13) + '" y="' + yy.toFixed(1) +
-               '" font-size="9.6" fill="#5b6572">' + pgpEsc(lab) + '</text>');
-    });
-    var hy = ly + 13 + (panel.labels || []).length * 12.6 + 14;
-    o.push('<circle cx="' + (lx + 4) + '" cy="' + (hy - 3.5) + '" r="5" fill="#d8c0f0" ' +
-           'stroke="#1e2833" stroke-width="1.6"/>');
-    o.push('<text x="' + (lx + 15) + '" y="' + hy + '" font-size="10" fill="#1e2833">' +
-           pgpEsc(pgpLegend.hit) + "</text>");
-    o.push('<circle cx="' + (lx + 7) + '" cy="' + (hy + 38) + '" r="11" ' +
-           'fill="#d8c0f0" fill-opacity="0.85" stroke="#1e2833" stroke-width="1.6"/>');
-    o.push('<text x="' + (lx + 7) + '" y="' + (hy + 41.6) + '" font-size="9.5" ' +
-           'font-weight="600" fill="#1e2833" text-anchor="middle">n</text>');
-    o.push('<text x="' + (lx + 22) + '" y="' + (hy + 41.6) + '" font-size="10" ' +
-           'fill="#1e2833">n of them, too close to split</text>');
-    o.push('<circle cx="' + (lx + 4) + '" cy="' + (hy + 12.5) + '" r="9" fill="none" ' +
+    // The key: our marks and nothing else.
+    var lx = PGP_W - PGP_R + 54, ly = PGP_T + 4;
+    var keyText = function (x, y, text) {
+        o.push('<text x="' + x + '" y="' + y + '" font-size="10" fill="#1e2833">' +
+               pgpEsc(text) + '</text>');
+    };
+    var hitInk = 'rgb(' + pgpLabRgb(sp.cx, sp.cy).join(",") + ')';
+    o.push('<circle cx="' + (lx + 5) + '" cy="' + ly + '" r="1.9" fill="#2b333d" opacity="0.55"/>');
+    keyText(lx + 18, ly + 3.5, "a reference haplotype");
+    o.push('<circle cx="' + (lx + 5) + '" cy="' + (ly + 22) + '" r="5" fill="' + hitInk +
+           '" stroke="#1e2833" stroke-width="1.6"/>');
+    keyText(lx + 18, ly + 25.5, pgpLegend.hit);
+    o.push('<circle cx="' + (lx + 5) + '" cy="' + (ly + 50) + '" r="9" fill="none" ' +
            'stroke="#1664c0" stroke-width="2.6"/>');
-    o.push('<circle cx="' + (lx + 4) + '" cy="' + (hy + 12.5) + '" r="5" fill="#d8c0f0" ' +
-           'stroke="#1e2833" stroke-width="1.6"/>');
-    o.push('<text x="' + (lx + 19) + '" y="' + (hy + 16) + '" font-size="10" fill="#1e2833">' + pgpEsc(pgpLegend.pick) + '</text>');
-    o.push('<text x="' + lx + '" y="' + (hy + 64) + '" font-size="9.6" fill="#5b6572">' +
+    o.push('<circle cx="' + (lx + 5) + '" cy="' + (ly + 50) + '" r="5" fill="' + hitInk +
+           '" stroke="#1e2833" stroke-width="1.6"/>');
+    keyText(lx + 18, ly + 53.5, pgpLegend.pick);
+    o.push('<circle cx="' + (lx + 5) + '" cy="' + (ly + 80) + '" r="11" fill="' + hitInk +
+           '" fill-opacity="0.85" stroke="#1e2833" stroke-width="1.6"/>');
+    o.push('<text x="' + (lx + 5) + '" y="' + (ly + 83.6) + '" font-size="9.5" ' +
+           'font-weight="600" fill="#1e2833" text-anchor="middle">n</text>');
+    keyText(lx + 22, ly + 83.5, "n of them, too close to split");
+    o.push('<path d="M' + lx + ' ' + (ly + 108) + 'h10M' + (lx + 5) + ' ' + (ly + 103) +
+           'v10" stroke="#1e2833" stroke-width="1.2"/>');
+    keyText(lx + 18, ly + 111.5, "the centre of the " + pgpLegend.many);
+    o.push('<rect x="' + lx + '" y="' + (ly + 124) + '" width="3" height="10" fill="#5b6572"/>' +
+           '<rect x="' + (lx + 4) + '" y="' + (ly + 128) + '" width="3" height="6" fill="#5b6572"/>' +
+           '<rect x="' + (lx + 8) + '" y="' + (ly + 121) + '" width="3" height="13" fill="#5b6572"/>');
+    keyText(lx + 18, ly + 133.5, "how many sit at each value");
+    o.push('<text x="' + lx + '" y="' + (ly + 160) + '" font-size="9.6" fill="#5b6572">' +
+           "Colour is pcLAI's own for each</text>");
+    o.push('<text x="' + lx + '" y="' + (ly + 172) + '" font-size="9.6" fill="#5b6572">' +
+           'position, as its tracks paint it.</text>');
+    o.push('<text x="' + lx + '" y="' + (ly + 192) + '" font-size="9.6" fill="#5b6572">' +
            'Click a mark for details.</text>');
     o.push('</svg>');
 
@@ -697,6 +843,7 @@ function pgpDraw() {
                      'display:inline-block;max-width:100%">' + o.join("") + '</div>' +
                      pgpDetailHtml();
     pgpBindControls();
+    if (pgpSelected !== null) { pgpReadWindows(pgpSelected); }
     pgpBuildIndex(panel, pts, s);
     pgpAttachHover(pgpEl("pgpPlotWrap"));
 
@@ -806,15 +953,26 @@ function pgpDetailHtml() {
                    '</div><div class="v">' + v + '</div></div>');
     }
     if (point !== null) {
-        tile("Ancestry", pgpSwatch(point) + "PC1 " + pgpFmtNum(point.x) + ", PC2 " +
+        tile("Position", pgpSwatch(point) + "PC1 " + pgpFmtNum(point.x) + ", PC2 " +
                          pgpFmtNum(point.y));
         tile("Confidence", point.conf + "/1000");
+        // Where the region is long enough to cross windows, how far apart
+        // they are: one position for the whole of it, or several.
+        var wins = pgpWindows[pgpSelected];
+        if (wins === null) {
+            tile("pcLAI windows", "reading\u2026");
+        } else if (wins && wins.length === 1) {
+            tile("pcLAI windows", "1");
+        } else if (wins && wins.length > 1) {
+            tile("pcLAI windows", wins.length + " (the line), dispersion " +
+                 pgpSpread(wins).rms.toFixed(3));
+        }
         // Where this haplotype sits relative to the rest of the hits, which is
         // the dispersion read one haplotype at a time.
         var sp = pgpSpread(pgpData.points || []);
         if (sp !== null && sp.n >= 2) {
             var d = Math.sqrt(Math.pow(point.x - sp.cx, 2) + Math.pow(point.y - sp.cy, 2));
-            tile("From centroid", d.toFixed(3) + " of " + sp.rms.toFixed(3));
+            tile("From the centre", d.toFixed(3) + " (dispersion " + sp.rms.toFixed(3) + ")");
         }
     }
     ((spot && spot.info) || []).forEach(function (pair) { tile(pair[0], pgpEsc(pair[1])); });
@@ -928,12 +1086,13 @@ function pgpInit(spots, opts) {
     if (!spots || !spots.length) { return false; }
     // Called again when the table gains placements; what was read for the
     // old rows does not cover the new ones.  A caller that has already read
-    // them - PanLift, for its ancestry labels - hands its answer over instead.
+    // them can hand its answer over instead.
     pgpData = (opts && opts.data) || null;
     pgpDataSpots = pgpData ? spots : null;
     if (opts && opts.legend) {
         pgpLegend = { hit: opts.legend.hit || pgpLegend.hit,
-                      pick: opts.legend.pick || pgpLegend.pick };
+                      pick: opts.legend.pick || pgpLegend.pick,
+                      many: opts.legend.many || pgpLegend.many };
     }
     pgpSpots = spots;
     var btn = pgpEl("pgrPclaiBtn");
@@ -955,5 +1114,6 @@ function pgpInit(spots, opts) {
 
 if (typeof module !== "undefined" && module.exports) {
     module.exports = {pgpInit: pgpInit, pgpOpen: pgpOpen, pgpUpdate: pgpUpdate,
-                      pgpTogglePick: pgpTogglePick, pgpDraw: pgpDraw};
+                      pgpTogglePick: pgpTogglePick, pgpDraw: pgpDraw,
+                      pgpLabRgb: pgpLabRgb};
 }

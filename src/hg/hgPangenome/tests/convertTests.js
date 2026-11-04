@@ -170,6 +170,19 @@ setTimeout(function () {
     t.test('with all populations shown, each name carries its code', function () {
         t.contains(el.pgcHaps.textContent, 'HG00097 hap2GBR', 'code beside the name');
     });
+    t.test('Clear lets every target go and keeps the source', function () {
+        var pos = el.pgcPos.value;
+        t.ok(api.selectedTargets().length > 0, 'something chosen first');
+        el.pgcFilter.value = 'gbr';
+        el.pgcClear.dispatch('click');
+        t.eq(api.selectedTargets().length, 0, 'nothing chosen');
+        t.contains(el.pgcChosen.textContent, 'Choose target assemblies', 'no chips');
+        t.notOk(picker.findAll(el.pgcPops, function (n) {
+            return n.className === 'pgcPopPicked'; }).length, 'no chosen counts by the populations');
+        t.eq(el.pgcFilter.value, '', 'the search emptied');
+        t.eq(el.pgcPos.value, pos, 'the source position kept');
+        t.ok(!!pos, 'and it is not empty');
+    });
 }, 40);
 
 // ================================================= blocks (annotation lifting)
@@ -251,6 +264,45 @@ t.test('one entry per haplotype: bases, size change, shape; the source left out'
     t.eq(h[1].bases, 95, 'bases as a share of the region');
     t.eq(h[1].change, -50, '50 bp shorter here');
     t.eq(h[2].change, null, 'no size where nothing carried over');
+    t.eq(h[1].inserted, 0, 'nothing here without a source base');
+    t.eq(h[1].deleted, 50, '50 source bases with no place');
+    t.eq(h[0].inserted, 0, 'two pieces, every base placed: nothing inserted');
+    t.eq(h[0].deleted, 0, 'and nothing deleted');
+    t.eq(h[2].inserted, null, 'nothing to count where it did not carry over');
+});
+t.test('a gain and a loss of the same size show apart, though the net is nothing', function () {
+    var A = startPage().api;
+    A.setAllSrcHap('CHM13#0');
+    // 1000 source bases, 900 placed: 100 deleted; 1000 bases here, so 100 inserted.
+    var h = A.allHapsFrom([{ haplotype: 'HG00097#1', pieces: [piece('c1', 0, 1000, '+', 0, 1000)],
+                             mapped_bp: 900 }], 1000);
+    t.eq(h[0].change, 0, 'net nothing');
+    t.eq(h[0].inserted, 100, '100 inserted');
+    t.eq(h[0].deleted, 100, '100 deleted');
+    // A duplicated region: both copies carry the same source, counted once.
+    var d = A.allHapsFrom([{ haplotype: 'HG00097#1', mapped_bp: 1000,
+        pieces: [piece('c1', 0, 1000, '+', 0, 1000), piece('c1', 5000, 6000, '+', 0, 1000)] }], 1000);
+    t.eq(d[0].deleted, 0, 'the source is covered once');
+    t.eq(d[0].inserted, 1000, 'the second copy is a gain');
+    t.eq(A.unionLength([[0, 10], [5, 20], [30, 40]]), 30, 'overlaps counted once');
+    t.eq(A.unionLength([]), 0, 'nothing covers nothing');
+});
+t.test('rows are filtered on any figure, every filter at once', function () {
+    var A = startPage().api;
+    var m = function (k) { return A.allMetrics.filter(function (x) { return x.key === k; })[0]; };
+    var row = function (bases, ins, change) {
+        return { h: { bases: bases, inserted: ins, deleted: 0, pieces: [1] }, span: bases, change: change };
+    };
+    A.setMetricFilters([{ metric: m('coverage'), op: 'below', value: 50 }]);
+    t.ok(A.metricKeeps(row(20, 0, 0)), 'coverage below 50 keeps 20%');
+    t.ok(!A.metricKeeps(row(50, 0, 0)), 'and drops 50%');
+    A.setMetricFilters([{ metric: m('coverage'), op: 'min', value: 90 },
+                        { metric: m('inserted'), op: 'min', value: 100 }]);
+    t.ok(A.metricKeeps(row(95, 150, 0)), 'both met');
+    t.ok(!A.metricKeeps(row(95, 50, 0)), 'one missed');
+    t.ok(!A.metricKeeps(row(95, null, 0)), 'an unclear figure is not kept');
+    A.setMetricFilters([]);
+    t.ok(A.metricKeeps(row(0, null, null)), 'no filters keep everything');
 });
 t.test('a size from hundreds of merged pieces is not a size', function () {
     var A = startPage().api;
@@ -1005,7 +1057,7 @@ setTimeout(function () {
                     var s = text(single);
                     t.contains(s, 'CHM13', 'target named');
                     t.contains(s, 'chr10:4338780-4338799', '1-based display');
-                    t.contains(s, 'Bases', 'share of the region, as a column');
+                    t.contains(s, 'Coverage', 'share of the region, as a column');
                     t.contains(s, '83.3%', 'its figure');
                     var l = links(single);
                     t.eq(l.length, 1, 'one view link');

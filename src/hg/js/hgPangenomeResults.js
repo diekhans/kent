@@ -923,10 +923,11 @@ var pgrBatchErrs = [];
 // but places only the best pgrSurjectCount() by coverage straight away, as one
 // batch call per hit.  The rest are "pending": listed with their coverage and
 // identity, and placed by one more batch call for the whole hit.  That call
-// goes out as soon as the first table is up (pgrPlaceRest), one hit at a time,
-// so that sorting or paging a moment later finds every position already there;
-// with pangenome.resultsPlaceAllAtLoad off it waits until a page that shows a
-// pending row is drawn.
+// goes out only when the reader turns to another page - Next, Previous, a page
+// number, or more rows a page - that shows a pending row (pgrFillPage); a sort
+// or a filter asks for nothing.  With pangenome.resultsPlaceAllAtLoad on it
+// goes out instead as soon as the first table is up (pgrPlaceRest), one hit at
+// a time.
 
 // The haplotypes the batch call did not place, from the mapping's graded list.
 function pgrPendingRows(res, aln, index, placed) {
@@ -943,7 +944,8 @@ function pgrPendingRows(res, aln, index, placed) {
 var pgrFull = {};           // hits whose every haplotype has been placed
 var pgrFullBusy = {};
 
-// Place every pending row of the hits on the page now drawn.
+// Place every pending row of the hits on the page now drawn: called when the
+// reader has turned to another page.
 function pgrFillPage(dt) {
     if (pgrFocus) { return; }
     var want = Object.create(null);
@@ -1008,7 +1010,7 @@ function pgrPlaceAll(p) {
 }
 
 function pgrPlaceAtLoad() {
-    return (typeof pangenomePlaceAllAtLoad === "boolean") ? pangenomePlaceAllAtLoad : true;
+    return (typeof pangenomePlaceAllAtLoad === "boolean") ? pangenomePlaceAllAtLoad : false;
 }
 
 // Every hit that still has pending rows, placed in the background, one after
@@ -1861,14 +1863,18 @@ function pgrDraw(queries, allRows, note) {
         var d = dt.row(this).data();
         if (d) { pgrSelect(dt, d.rank); }
     });
-    // The highlight survives sorting and filtering; a page that shows a row
-    // still waiting for its position has its hit placed.
+    // The highlight survives sorting and filtering.  Turning to another page
+    // places the hits of its rows still waiting for a position; sorting and
+    // filtering do not, so they never wait on the graph server.
+    var paged = false;
+    dt.on("page", function () { paged = true; });
     dt.on("draw", function () {
         if (pgrSelRank !== null) { pgrSelect(dt, pgrSelRank); }
-        pgrFillPage(dt);
+        if (paged) { paged = false; pgrFillPage(dt); }
         pgrFillLoci(dt);
     });
     dt.on("length", function (e, settings, len) {
+        paged = true;
         try { window.localStorage.setItem("hgPangenome.pageLen", String(len)); } catch (err) { /* this page only */ }
     });
 

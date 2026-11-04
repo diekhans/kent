@@ -930,7 +930,7 @@ function ancPlot(acts, asks) {
     });
     acts.appendChild(el("button", { type: "button", class: "gbPill", id: "pgrPclaiBtn",
         title: "Where these regions sit in the pcLAI reference space", text: "Show ancestry plot" }));
-    pgpInit(spots, { legend: { hit: "a region, in pcLAI's own colour", pick: "the source" } });
+    pgpInit(spots, { legend: { hit: "a region", pick: "the source", many: "regions" } });
     return spots;
 }
 
@@ -1045,8 +1045,8 @@ function renderResults(srcLabel, targets, intervals, failed, errors) {
     }
 
     var head = ["#", "Sample", "Haplotype", "Population", "Open in Genome Browser",
-                "Bases", "Span", "Strand"];
-    var tips = { Bases: "Share of the region's bases that carried over to this place",
+                "Coverage", "Span", "Strand"];
+    var tips = { Coverage: "Share of the region's bases that carried over to this place",
                  Span: "Share of the region's span between the first and last base that carried over",
                  Haplotype: "Which of the sample's two haplotypes; 0 for a reference",
                  Population: "The sample's population, as the HPRC describes it" };
@@ -1478,15 +1478,18 @@ function liftInBatches(request, targets, progress) {
     return Promise.all(lanes).then(function () { return out; });
 }
 
+// Start the choice over: no targets, no search, every population, and no
+// results.  The source stays - it came from the browser and is not a control
+// on this page, so emptying it left every later conversion with nothing to
+// convert.  The reachability answer is kept too, since it depends only on the
+// source.
 function onClear() {
-    $("pgcPos").value = "";
     $("pgcFilter").value = "";
     popFilter = null;
     reachable = null;
     reachableScored = false;
-    reachableCache = null;
-    reachableCacheScored = false;
     if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
+    targetOptions($("pgcTargets")).forEach(function (o) { o.selected = false; });
     fillTargets("");
     clear($("pgcResults"));
     hideStatus();
@@ -1534,9 +1537,13 @@ function onShowAll() {
 // One entry per haplotype, its pieces largest first, as the mapping page
 // numbers hits best first.  The source is left out: "*" names it too, so the
 // service lists it, with nothing mapped.
-//   bases   - % of the region's bases with a place on this haplotype
-//   change  - bases gained (+) or lost (-) inside the parts that carried over:
-//             each piece's length here less the length of source it covers
+//   bases    - coverage: % of the region's bases with a place on this haplotype
+//   change   - the net size change inside the parts that carried over: each
+//              piece's length here less the length of source it covers
+//   inserted - bases here, inside those parts, that no source base is placed on
+//   deleted  - source bases inside those parts with no place here
+// inserted - deleted is the net change, so a gain and a loss of about the same
+// size, which cancel in the net, still show in the two.
 function allHapsFrom(summary, len) {
     var src = String(allSrcHap).toLowerCase();
     var haps = [];
@@ -1545,18 +1552,22 @@ function allHapsFrom(summary, len) {
         var pieces = mergePieces(s.pieces || []).sort(function (a, b) {
             return (b.source_end - b.source_start) - (a.source_end - a.source_start);
         });
-        var change = 0, contigs = Object.create(null), nContigs = 0;
+        var change = 0, here = 0, contigs = Object.create(null), nContigs = 0;
         pieces.forEach(function (p) {
             change += (p.end - p.start) - (p.source_end - p.source_start);
+            here += p.end - p.start;
             if (!contigs[p.contig]) { contigs[p.contig] = true; nContigs++; }
         });
         var mapped = s.mapped_bp || 0;
+        var spanned = unionLength(pieces.map(function (p) { return [p.source_start, p.source_end]; }));
         // Hundreds of pieces merged into one: the service could not settle
         // where these bases go, and the span they add up to is not a length.
         var unsure = pieces.some(function (p) { return p.merged > ALL_MERGED_MAX; });
         haps.push({ hap: s.haplotype, pieces: pieces, mapped: mapped,
                     bases: len > 0 ? Math.min(100, 100 * mapped / len) : 0,
                     change: pieces.length && !unsure ? change : null,
+                    inserted: pieces.length && !unsure ? Math.max(0, here - mapped) : null,
+                    deleted: pieces.length && !unsure ? Math.max(0, spanned - mapped) : null,
                     unsure: unsure,
                     contigs: nContigs,
                     reverse: pieces.some(function (p) { return p.strand === "-"; }),
@@ -1568,6 +1579,22 @@ function allHapsFrom(summary, len) {
         return (b.bases - a.bases) || (a.hap < b.hap ? -1 : a.hap > b.hap ? 1 : 0);
     });
     return haps;
+}
+
+// The bases a list of [start, end) intervals covers, overlaps counted once: two
+// pieces of a duplicated region can carry the same source bases.
+function unionLength(ivs) {
+    var sorted = ivs.slice().sort(function (a, b) { return a[0] - b[0]; });
+    var total = 0, from = null, to = null;
+    sorted.forEach(function (iv) {
+        if (to === null || iv[0] > to) {
+            if (to !== null) total += to - from;
+            from = iv[0]; to = iv[1];
+        } else if (iv[1] > to) {
+            to = iv[1];
+        }
+    });
+    return to === null ? total : total + to - from;
 }
 
 // Pieces on the same contig and strand whose places overlap are one place.
@@ -1602,6 +1629,8 @@ function fmtChange(v) {
     return (v > 0 ? "+" : "−") + withCommas(Math.abs(v)) + " bp";
 }
 
+function fmtBp(v) { return v == null ? "" : withCommas(v) + " bp"; }
+
 // Axis labels: "-6 kb", "0", "+250 bp".
 function fmtChangeShort(v) {
     if (v === 0) return "0";
@@ -1625,6 +1654,88 @@ function median(values) {
     return v.length % 2 ? v[mid] : Math.round((v[mid - 1] + v[mid]) / 2);
 }
 
+// What a table row can be filtered on.  Coverage, the inserted and deleted
+// bases and the piece count belong to the haplotype, so every row of it has
+// the same; span and size change are the row's own piece.
+var ALL_METRICS = [
+    { key: "coverage", label: "Coverage", unit: "%", get: function (r) { return r.h.bases; } },
+    { key: "span", label: "Span", unit: "%", get: function (r) { return r.span; } },
+    { key: "inserted", label: "Inserted", unit: "bp", get: function (r) { return r.h.inserted; } },
+    { key: "deleted", label: "Deleted", unit: "bp", get: function (r) { return r.h.deleted; } },
+    { key: "change", label: "Size change", unit: "bp", get: function (r) { return r.change; } },
+    { key: "pieces", label: "Pieces", unit: "", get: function (r) { return r.h.pieces.length; } }
+];
+var allMetricFilters = [];     // {metric, op: "min"|"below", value}, all applied together
+
+function metricKeeps(r) {
+    return allMetricFilters.every(function (f) {
+        var v = f.metric.get(r);
+        if (v == null) return false;
+        return f.op === "min" ? v >= f.value : v < f.value;
+    });
+}
+
+function metricFilterText(f) {
+    return f.metric.label + (f.op === "min" ? " at least " : " below ") +
+           (f.metric.unit === "bp" ? withCommas(f.value) + " bp" : f.value + f.metric.unit);
+}
+
+// The row of controls that adds a filter, and the filters in force as chips.
+function allMetricControls() {
+    var key = el("select", { id: "pgcMfKey", "aria-label": "Filter on" });
+    ALL_METRICS.forEach(function (m) { key.appendChild(el("option", { value: m.key, text: m.label })); });
+    var op = el("select", { id: "pgcMfOp", "aria-label": "How" }, [
+        el("option", { value: "min", text: "at least" }), el("option", { value: "below", text: "below" })]);
+    var val = el("input", { id: "pgcMfVal", type: "number", value: "50", "aria-label": "Value" });
+    var unit = el("span", { id: "pgcMfUnit", class: "pgcMfUnit", text: "%" });
+    var add = el("button", { type: "button", class: "gbPill", id: "pgcMfAdd", text: "Add filter" });
+    var chips = el("span", { id: "pgcMfChips", class: "pgcMfChips" });
+    var metricOf = function () {
+        return ALL_METRICS.filter(function (m) { return m.key === key.value; })[0];
+    };
+    key.addEventListener("change", function () { unit.textContent = metricOf().unit; });
+    var go = function () {
+        var v = parseFloat(val.value);
+        if (isNaN(v)) { val.focus(); return; }
+        allMetricFilters.push({ metric: metricOf(), op: op.value, value: v });
+        drawMetricChips();
+        applyAllFilters();
+    };
+    add.addEventListener("click", go);
+    val.addEventListener("keydown", function (e) { if (e.key === "Enter") { e.preventDefault(); go(); } });
+    chips.addEventListener("click", function (ev) {
+        var i = ev.target && ev.target.getAttribute && ev.target.getAttribute("data-mf");
+        if (i === null || i === undefined) return;
+        allMetricFilters.splice(+i, 1);
+        drawMetricChips();
+        applyAllFilters();
+    });
+    return el("div", { class: "pgcMf", id: "pgcMf" }, [
+        el("label", { for: "pgcMfKey", class: "pgcMfLab", text: "Filter rows:" }),
+        key, op, val, unit, add, chips]);
+}
+
+function drawMetricChips() {
+    var chips = $("pgcMfChips");
+    if (!chips) return;
+    clear(chips);
+    allMetricFilters.forEach(function (f, i) {
+        chips.appendChild(el("span", { class: "pgcMfChip" }, [
+            el("span", { text: metricFilterText(f) }),
+            el("button", { type: "button", "data-mf": String(i), "aria-label": "Remove this filter",
+                           title: "Remove this filter", text: "×" })]));
+    });
+}
+
+// The figure's filter and the metric filters, together, on the table.
+function applyAllFilters() {
+    if (allDt) allDt.draw();
+    else if (allRows)                       // no DataTables: hide the rows by hand
+        allRows.forEach(function (r) {
+            r.tr.hidden = !!(allFilter && !allFilter.test(r.h)) || !metricKeeps(r);
+        });
+}
+
 // Narrow the table to the haplotypes a figure counts, or (null) widen it
 // again.  The bar above the table says what it shows.
 function setAllFilter(f) {
@@ -1642,9 +1753,7 @@ function setAllFilter(f) {
             bar.appendChild(b);
         }
     }
-    if (allDt) allDt.draw();
-    else if (allRows)                       // no DataTables: hide the rows by hand
-        allRows.forEach(function (r) { r.tr.hidden = !!(f && !f.test(r.h)); });
+    applyAllFilters();
 }
 
 // A figure that narrows the table when clicked.
@@ -1706,12 +1815,21 @@ function allCoveragePanel(haps) {
         el("h3", { text: "How much of the region each haplotype has" }), list, grid]);
 }
 
-// Bases gained or lost where the region carried over, as a histogram: one
-// allele of a deletion shows as its own bar.
+// Bases inserted and deleted where the region carried over, each as its own
+// histogram, so that opposite changes are not netted away; then the net change,
+// whose exact sizes are worth listing - an indel is the same length on
+// everyone who carries it.
+var ALL_SIZE_KINDS = [
+    { key: "inserted", title: "Inserted", get: function (h) { return h.inserted; },
+      says: "inserted", fmt: fmtBp },
+    { key: "deleted", title: "Deleted", get: function (h) { return h.deleted; },
+      says: "deleted", fmt: fmtBp }
+];
+
 function allSizePanel(haps) {
     var found = haps.filter(function (h) { return h.change != null; });
     var unsure = haps.filter(function (h) { return h.unsure; });
-    var panel = el("div", { class: "pgcStatPanel" }, [el("h3", { text: "Size change where it carried over" })]);
+    var panel = el("div", { class: "pgcStatPanel" }, [el("h3", { text: "Bases inserted and deleted where it carried over" })]);
     if (unsure.length)
         panel.appendChild(filterLink(el("p", { class: "pgcStatText pgcUnsure",
             text: withCommas(unsure.length) + " haplotype" + (unsure.length === 1 ? " is" : "s are") +
@@ -1722,10 +1840,17 @@ function allSizePanel(haps) {
         panel.appendChild(el("p", { class: "pgMuted", text: "The region carried over to no haplotype." }));
         return panel;
     }
+    ALL_SIZE_KINDS.forEach(function (k) {
+        var vals = found.map(k.get);
+        var hi = Math.max.apply(null, vals);
+        var head = el("div", { class: "pgcSizeHead" }, [el("b", { text: k.title }),
+            el("span", { text: hi === 0 ? "none on any haplotype"
+                                        : "median " + k.fmt(median(vals)) + ", up to " + k.fmt(hi) })]);
+        panel.appendChild(head);
+        if (hi > 0) panel.appendChild(allHistogram(vals, 0, hi, k));
+    });
+
     var vals = found.map(function (h) { return h.change; });
-    var lo = Math.min.apply(null, vals), hi = Math.max.apply(null, vals);
-    // The exact sizes most haplotypes share: an insertion or deletion is the
-    // same length on everyone who carries it.
     var bySize = Object.create(null), sizes = [];
     vals.forEach(function (v) {
         if (!(v in bySize)) { bySize[v] = 0; sizes.push(v); }
@@ -1733,27 +1858,16 @@ function allSizePanel(haps) {
     });
     sizes.sort(function (a, b) { return bySize[b] - bySize[a] || Math.abs(a) - Math.abs(b); });
     var common = sizes.filter(function (v) { return bySize[v] > 1; }).slice(0, 4);
-
-    if (hi - lo <= 20 && Math.abs(lo) <= 10 && Math.abs(hi) <= 10) {
-        panel.appendChild(el("p", { class: "pgcStatText", text: "The same length, to within 10 bp, on all " +
-            withCommas(found.length) + " haplotypes it carried over to." }));
-    } else {
-        panel.appendChild(allHistogram(vals, lo, hi));
-    }
-    var lines = el("div", { class: "pgcStatText" });
-    lines.appendChild(el("div", { text: "From " + fmtChange(lo) + " to " + fmtChange(hi) +
-                                        "; median " + fmtChange(median(vals)) + "." }));
-    if (common.length) {
-        var line = el("div", null, [el("span", { text: "Most common: " })]);
-        common.forEach(function (v, i) {
-            if (i) line.appendChild(document.createTextNode(" · "));
-            line.appendChild(filterLink(el("span", { text: fmtChange(v) + " on " + withCommas(bySize[v]) }),
-                "with a size change of " + fmtChange(v),
-                function (h) { return h.change === v; }));
-        });
-        lines.appendChild(line);
-    }
-    panel.appendChild(lines);
+    var line = el("div", { class: "pgcStatText" }, [
+        el("b", { text: "Net change" }),
+        el("span", { text: ": median " + fmtChange(median(vals)) + (common.length ? "; most common " : ".") })]);
+    common.forEach(function (v, i) {
+        if (i) line.appendChild(document.createTextNode(" · "));
+        line.appendChild(filterLink(el("span", { text: fmtChange(v) + " on " + withCommas(bySize[v]) }),
+            "with a net size change of " + fmtChange(v),
+            function (h) { return h.change === v; }));
+    });
+    panel.appendChild(line);
     return panel;
 }
 
@@ -1765,20 +1879,22 @@ function svgEl(tag, attrs, text) {
     return e;
 }
 
-function allHistogram(vals, lo, hi) {
-    var step = niceStep((hi - lo) / 30);
+// One histogram of a haplotype figure, kind being one of ALL_SIZE_KINDS.  A
+// bar narrows the table to the haplotypes it counts.
+function allHistogram(vals, lo, hi, kind) {
+    var step = Math.max(1, niceStep((hi - lo) / 30));     // whole bases
     var first = Math.floor(lo / step) * step;
     var nBins = Math.floor((hi - first) / step) + 1;
     var counts = [];
     for (var i = 0; i < nBins; i++) counts.push(0);
     vals.forEach(function (v) { counts[Math.min(nBins - 1, Math.floor((v - first) / step))]++; });
     var most = Math.max.apply(null, counts);
-    var W = 420, H = 150, L = 34, R = 12, T = 8, B = 26;
+    var W = 420, H = 104, L = 34, R = 12, T = 6, B = 24;
     var x = function (v) { return L + (W - L - R) * (v - first) / (nBins * step); };
     var y = function (n) { return T + (H - T - B) * (1 - n / most); };
     var svg = svgEl("svg", { viewBox: "0 0 " + W + " " + H, class: "pgcHist", role: "img",
-        "aria-label": "Histogram of the size change on each haplotype, from " +
-                      fmtChange(lo) + " to " + fmtChange(hi) });
+        "aria-label": "Histogram of the bases " + kind.says + " on each haplotype, from " +
+                      kind.fmt(lo) + " to " + kind.fmt(hi) });
     // The count axis: its top and the baseline.
     svg.appendChild(svgEl("line", { x1: L, x2: W - R, y1: y(most), y2: y(most), class: "grid" }));
     svg.appendChild(svgEl("text", { x: L - 5, y: y(most) + 4, "text-anchor": "end", class: "tick" },
@@ -1788,10 +1904,8 @@ function allHistogram(vals, lo, hi) {
     for (var t = Math.ceil(first / tickStep) * tickStep; t <= first + nBins * step; t += tickStep) {
         svg.appendChild(svgEl("line", { x1: x(t), x2: x(t), y1: y(0), y2: y(0) + 4, class: "axis" }));
         svg.appendChild(svgEl("text", { x: x(t), y: H - 8, "text-anchor": "middle", class: "tick" },
-                              fmtChangeShort(t)));
+                              fmtChangeShort(t).replace(/^\+/, "")));
     }
-    if (first <= 0 && 0 <= first + nBins * step)
-        svg.appendChild(svgEl("line", { x1: x(0), x2: x(0), y1: T, y2: y(0), class: "zero" }));
     var barW = (W - L - R) / nBins;
     counts.forEach(function (n, i) {
         if (!n) return;
@@ -1803,12 +1917,12 @@ function allHistogram(vals, lo, hi) {
                                       height: y(0) - top }));
         // A wider target than the bar, so the thin ones can be hovered.
         g.appendChild(svgEl("rect", { x: x(a), y: T, width: barW, height: y(0) - T, class: "hit" }));
-        var range = step === 1 ? fmtChange(a) : fmtChange(a) + " to " + fmtChange(b - 1);
+        var range = step === 1 ? kind.fmt(a) : withCommas(a) + " to " + kind.fmt(b - 1);
         g.appendChild(svgEl("title", null, range + ": " + withCommas(n) + " haplotype" +
                                            (n === 1 ? "" : "s") + ". Click to list them."));
         var go = function () {
-            setAllFilter({ label: "with a size change of " + range,
-                           test: function (h) { return h.change != null && h.change >= a && h.change < b; } });
+            setAllFilter({ label: "with " + range + " " + kind.says,
+                           test: function (h) { var v = kind.get(h); return v != null && v >= a && v < b; } });
         };
         g.addEventListener("click", go);
         g.addEventListener("keydown", function (e) {
@@ -1820,7 +1934,9 @@ function allHistogram(vals, lo, hi) {
     return el("div", { class: "pgcHistWrap" }, [svg]);
 }
 
-// The same figures by population.
+// How many haplotypes of each population there are, and how the region fares
+// on them.  The populations are the HPRC's own description of each sample, as
+// in the table; nothing is grouped above them.  A header sorts by its column.
 function allPopPanel(haps) {
     var groups = Object.create(null), order = [];
     haps.forEach(function (h) {
@@ -1828,44 +1944,76 @@ function allPopPanel(haps) {
         if (!groups[g.key]) { groups[g.key] = { g: g, haps: [] }; order.push(g.key); }
         groups[g.key].haps.push(h);
     });
-    order.sort(function (a, b) {
-        var x = groups[a].g, y = groups[b].g;
-        return (x.rank - y.rank) || (x.label < y.label ? -1 : x.label > y.label ? 1 : 0);
-    });
-    var tbody = el("tbody");
-    order.forEach(function (k) {
+    var rows = order.map(function (k) {
         var hs = groups[k].haps;
         var found = hs.filter(function (h) { return h.pieces.length; });
-        var whole = found.filter(function (h) { return h.bases >= ALL_WHOLE; });
-        var med = median(found.map(function (h) { return h.change; }));
-        var g = groups[k].g;
-        var tr = el("tr", null, [
-            el("td", { class: "pgcPopName", text: g.label }),
-            el("td", { class: "num", text: withCommas(hs.length) }),
-            el("td", { class: "num", text: withCommas(found.length) }),
-            el("td", { class: "num", text: withCommas(whole.length) }),
-            el("td", { class: "num", text: med == null ? "" : fmtChange(med) })
-        ]);
-        tbody.appendChild(filterLink(tr, "from " + (g.key.charAt(0) === "~" ? "the " : "") +
-                                         g.label.replace(/^Reference assemblies$/, "reference assemblies"),
-            function (h) { return h.group.key === k; }));
+        var sized = found.filter(function (h) { return h.change != null; });
+        return { key: k, g: groups[k].g, n: hs.length, found: found.length,
+                 ins: median(sized.map(function (h) { return h.inserted; })),
+                 del: median(sized.map(function (h) { return h.deleted; })),
+                 net: median(sized.map(function (h) { return h.change; })) };
     });
-    var table = el("table", { class: "pgcPopTable" }, [
-        el("thead", null, [el("tr", null, [
-            el("th", { text: "Population" }),
-            el("th", { class: "num", text: "Haps", title: "Haplotypes from this population" }),
-            el("th", { class: "num", text: "Found" }),
-            el("th", { class: "num", text: "99%+", title: "Haplotypes with 99% or more of the region" }),
-            el("th", { class: "num", text: "Median change", title: "Median size change where it carried over" })
-        ])]), tbody]);
+    var cols = [
+        { k: "name", text: "Population", cls: "" },
+        { k: "n", text: "Haps", cls: "num", title: "Haplotypes from this population" },
+        { k: "found", text: "Found", cls: "num", title: "Haplotypes the region carried over to" },
+        { k: "ins", text: "Inserted", cls: "num", title: "Median bases inserted, where it carried over" },
+        { k: "del", text: "Deleted", cls: "num", title: "Median bases deleted, where it carried over" },
+        { k: "net", text: "Net", cls: "num", title: "Median net size change, where it carried over" }
+    ];
+    var sortBy = "name", desc = false;
+    var tbody = el("tbody");
+    var byName = function (a, b) {
+        return (a.g.rank - b.g.rank) || (a.g.label < b.g.label ? -1 : a.g.label > b.g.label ? 1 : 0);
+    };
+    var fill = function () {
+        clear(tbody);
+        rows.slice().sort(function (a, b) {
+            if (sortBy === "name") return desc ? byName(b, a) : byName(a, b);
+            var x = a[sortBy], y = b[sortBy];
+            if (x == null || y == null) return (x == null) - (y == null);
+            return (desc ? y - x : x - y) || byName(a, b);
+        }).forEach(function (r) {
+            var tr = el("tr", null, [
+                el("td", { class: "pgcPopName", text: r.g.label }),
+                el("td", { class: "num", text: withCommas(r.n) }),
+                el("td", { class: "num", text: withCommas(r.found) }),
+                el("td", { class: "num", text: fmtBp(r.ins) }),
+                el("td", { class: "num", text: fmtBp(r.del) }),
+                el("td", { class: "num", text: r.net == null ? "" : fmtChange(r.net) })
+            ]);
+            tbody.appendChild(filterLink(tr, "from " + (r.key.charAt(0) === "~" ? "the " : "") +
+                                             r.g.label.replace(/^Reference assemblies$/, "reference assemblies"),
+                function (h) { return h.group.key === r.key; }));
+        });
+    };
+    var headRow = el("tr");
+    cols.forEach(function (c) {
+        var th = el("th", c.title ? { class: c.cls, title: c.title } : { class: c.cls });
+        var b = el("button", { type: "button", class: "pgcSortBtn", text: c.text });
+        b.addEventListener("click", function () {
+            // Names read A to Z first; figures largest first.
+            if (sortBy === c.k) desc = !desc;
+            else { sortBy = c.k; desc = c.k !== "name"; }
+            Array.prototype.forEach.call(headRow.querySelectorAll("th"), function (x) {
+                x.removeAttribute("aria-sort"); });
+            th.setAttribute("aria-sort", desc ? "descending" : "ascending");
+            fill();
+        });
+        th.appendChild(b);
+        headRow.appendChild(th);
+    });
+    headRow.firstChild.setAttribute("aria-sort", "ascending");
+    fill();
+    var table = el("table", { class: "pgcPopTable" }, [el("thead", null, [headRow]), tbody]);
     return el("div", { class: "pgcStatPanel pgcPopPanel" }, [
         el("h3", { text: "By population" }), el("div", { class: "pgcPopScroll" }, [table])]);
 }
 
 function allTsv(rows, len) {
     var head = ["sample", "haplotype", "population", "piece", "pieces", "assembly", "contig",
-                "start", "end", "strand", "bases_pct", "span_pct", "size_change_bp",
-                "mapped_bp", "source_start", "source_end"];
+                "start", "end", "strand", "coverage_pct", "span_pct", "inserted_bp", "deleted_bp",
+                "size_change_bp", "mapped_bp", "source_start", "source_end"];
     var clean = function (v) {
         return String(v === undefined || v === null ? "" : v).replace(/[\t\r\n]/g, " ");
     };
@@ -1876,6 +2024,7 @@ function allTsv(rows, len) {
                 p ? p.contig : "", p ? p.start + 1 : "", p ? p.end : "", p ? p.strand : "",
                 h.bases.toFixed(1),
                 p && len ? (100 * (p.source_end - p.source_start) / len).toFixed(1) : "",
+                h.inserted, h.deleted,
                 p ? (p.end - p.start) - (p.source_end - p.source_start) : "",
                 h.mapped, p ? p.source_start + 1 : "", p ? p.source_end : ""].map(clean).join("\t");
     }).join("\n") + "\n";
@@ -1960,10 +2109,9 @@ function renderAll(resp, src) {
                    url: (browserLinkFor({ haplotype: src.src, start: src.start, end: src.end }) || {}).url });
     }
     var notes = el("div", { class: "pgrNotes" });
-    notes.appendChild(el("div", { class: "pgrNote", text: "Every haplotype in the pangenome " +
-        "graph but the source itself. Each place the region lands is a row; a region split " +
-        "by an inversion, a duplication or a break between contigs has a row per piece, " +
-        "numbered largest first. Click a figure above to list those haplotypes." }));
+    notes.appendChild(el("div", { class: "pgrNote", text: "Every haplotype but the source, a row " +
+        "for each piece the region lands in, largest first. Click a figure above to list " +
+        "those haplotypes." }));
     (resp.warnings || []).forEach(function (w) {
         if (w && w.reason === "timeout")
             notes.appendChild(el("div", { class: "pgrNote pgErrBox", text: "The graph server " +
@@ -1986,17 +2134,23 @@ function renderAll(resp, src) {
         card.appendChild(plotHost);
     }
     card.appendChild(el("div", { id: "pgcAllBar", class: "pgrBar on", hidden: "hidden" }));
+    allMetricFilters = [];
+    card.appendChild(allMetricControls());
 
     // The table.
     var split = haps.some(function (h) { return h.pieces.length > 1; });
     var head = ["#", "Sample", "Haplotype", "Population"];
     if (split) head.push("Piece");
-    head.push("Open in Genome Browser", "Bases", "Span", "Size change", "Strand");
+    head.push("Open in Genome Browser", "Coverage", "Span", "Inserted", "Deleted", "Size change", "Strand");
     var tips = { Piece: "Which piece of the region this is, numbered largest first",
-                 Bases: "Share of the region's bases with a place on this haplotype, all pieces together",
+                 Coverage: "Share of the region's bases with a place on this haplotype, all pieces together",
+                 Inserted: "Bases on this haplotype, inside the parts that carried over, that no " +
+                           "base of the region is placed on; all pieces together",
+                 Deleted: "Bases of the region, inside the parts that carried over, with no " +
+                          "place on this haplotype; all pieces together",
                  Span: "Share of the region this piece covers, from its first base to its last",
                  "Size change": "This piece's length here less the length of the source it covers: " +
-                                "bases inserted (+) or deleted (−) on this haplotype",
+                                "inserted less deleted, net",
                  Haplotype: "Which of the sample's two haplotypes; 0 for a reference",
                  Population: "The sample's population, as the HPRC describes it" };
     var table = el("table", { id: "pgcTable", class: "display" });
@@ -2008,7 +2162,10 @@ function renderAll(resp, src) {
     var rows = allRows = [];
     haps.forEach(function (h) {
         (h.pieces.length ? h.pieces : [null]).forEach(function (p, i) {
-            rows.push({ h: h, piece: p, i: i });
+            rows.push({ h: h, piece: p, i: i,
+                        span: p ? (len ? 100 * (p.source_end - p.source_start) / len : null) : 0,
+                        change: p && p.merged <= ALL_MERGED_MAX
+                                ? (p.end - p.start) - (p.source_end - p.source_start) : null });
         });
     });
     var annotOk = !!CFG.quickLiftEnabled;
@@ -2035,6 +2192,8 @@ function renderAll(resp, src) {
                        el("td", { class: "pctCol", "data-order": "0" }),
                        el("td", { class: "pctCol", "data-order": "0" }),
                        el("td", { class: "pctCol", "data-order": "" }),
+                       el("td", { class: "pctCol", "data-order": "" }),
+                       el("td", { class: "pctCol", "data-order": "" }),
                        el("td", { class: "strandCol" }));
         } else {
             var iv = { haplotype: h.hap + "#" + p.contig, start: p.start, end: p.end, strand: p.strand };
@@ -2057,9 +2216,15 @@ function renderAll(resp, src) {
                                     " overlapping pieces, shown here as one; its length is not a size change" })
                 : el("td", { class: "pctCol" + (change ? "" : " zero"), text: fmtChange(change),
                              "data-order": String(change) });
+            var bpCell = function (v) {
+                return v == null
+                    ? el("td", { class: "pctCol pgcUnsure", text: "unclear", "data-order": "" })
+                    : el("td", { class: "pctCol" + (v ? "" : " zero"), text: fmtBp(v), "data-order": String(v) });
+            };
             cells.push(posCell,
                 el("td", { class: "pctCol", text: pctText(h.bases), "data-order": h.bases.toFixed(3) }),
                 el("td", { class: "pctCol", text: pctText(spanPct), "data-order": spanPct.toFixed(3) }),
+                bpCell(h.inserted), bpCell(h.deleted),
                 changeCell,
                 el("td", p.strand === "-" ? { class: "strandCol", text: "-", title: "reverse strand" }
                                           : { class: "strandCol", text: "+" }));
@@ -2078,10 +2243,10 @@ function renderAll(resp, src) {
     if (jq && jq.fn && jq.fn.dataTable && !allSearchHooked) {
         allSearchHooked = true;
         jq.fn.dataTable.ext.search.push(function (settings, data, i) {
-            if (!allFilter || settings.nTable.id !== "pgcTable") return true;
+            if (settings.nTable.id !== "pgcTable" || (!allFilter && !allMetricFilters.length)) return true;
             var tr = settings.aoData[i] && settings.aoData[i].nTr;
             var r = tr ? allRows[+tr.getAttribute("data-i")] : null;
-            return !r || allFilter.test(r.h);
+            return !r || ((!allFilter || allFilter.test(r.h)) && metricKeeps(r));
         });
     }
     allDt = pgcPageTable(table, [[0, "asc"]]);
@@ -2092,8 +2257,8 @@ function renderAll(resp, src) {
             allDt.rows({ search: "applied", order: "applied" }).nodes().each(function (tr) {
                 shown.push(allRows[+tr.getAttribute("data-i")]);
             });
-        } else if (allFilter) {
-            shown = allRows.filter(function (r) { return allFilter.test(r.h); });
+        } else {
+            shown = allRows.filter(function (r) { return !r.tr.hidden; });
         }
         var name = String(src.src).replace(/#/g, "_") + "_" + (src.start + 1) + "-" + src.end;
         saveFile(allTsv(shown, len), "panLift_" + name + ".tsv", "text/tab-separated-values");
@@ -2257,6 +2422,10 @@ if (typeof module !== "undefined" && module.exports)
         samplePop: samplePop,
         allHapsFrom: allHapsFrom,
         mergePieces: mergePieces,
+        unionLength: unionLength,
+        metricKeeps: metricKeeps,
+        setMetricFilters: function (f) { allMetricFilters = f; },
+        allMetrics: ALL_METRICS,
         setAllSrcHap: function (h) { allSrcHap = h; },
         fmtChange: fmtChange,
         niceStep: niceStep,

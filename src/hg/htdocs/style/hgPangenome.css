@@ -524,6 +524,32 @@ svg.pgcHist .bar:hover rect:not(.hit), svg.pgcHist .bar:focus rect:not(.hit) { f
 .pgcAnnotStat .v { display:flex; gap:12px; font-weight:400; font-size:13px; }
 .pgcAnnotStat label { white-space:nowrap; }
 #pgcAll .pgrBar { margin:8px 18px 0; }
+/* Inserted and deleted bases, a histogram each, under a one-line head. */
+.pgcSizeHead { display:flex; gap:8px; align-items:baseline; font-size:13px; margin-top:4px;
+    font-variant-numeric:tabular-nums; }
+.pgcSizeHead span { color:var(--muted); }
+.pgcSizeHead + .pgcHistWrap { margin-bottom:6px; }
+.pgcPopTable th { padding:0; }
+.pgcSortBtn { all:unset; box-sizing:border-box; display:block; width:100%; padding:4px 6px;
+    cursor:pointer; text-align:inherit; }
+.pgcSortBtn:hover { color:var(--accentHover); }
+.pgcSortBtn:focus-visible { outline:2px solid var(--navy); outline-offset:-2px; }
+.pgcPopTable th[aria-sort] .pgcSortBtn::after { content:" \25B2"; font-size:9px; }
+.pgcPopTable th[aria-sort="descending"] .pgcSortBtn::after { content:" \25BC"; }
+/* Filters on any figure of a row, combined; each in force is a chip. */
+.pgcMf { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin:10px 18px 0;
+    font-size:13px; }
+.pgcMf select, .pgcMf input { font-size:13px; padding:3px 6px; border:1px solid var(--btnLine);
+    border-radius:0; background:#fff; }
+.pgcMf input { width:6.5em; }
+.pgcMfLab { font-weight:700; color:var(--ink); }
+.pgcMfUnit { color:var(--muted); min-width:1.5em; }
+.pgcMfChips { display:flex; gap:6px; flex-wrap:wrap; }
+.pgcMfChip { display:inline-flex; align-items:center; gap:4px; padding:1px 4px 1px 9px;
+    background:var(--sel); border:1px solid var(--line); font-variant-numeric:tabular-nums; }
+.pgcMfChip button { all:unset; cursor:pointer; padding:0 5px; font-size:15px; line-height:1;
+    color:var(--muted); }
+.pgcMfChip button:hover, .pgcMfChip button:focus-visible { color:var(--ink); outline:1px solid var(--line); }
 
 .pgcCard .pgrNotes { padding-top:6px; }
 #pgcTable_filter input { width:300px; max-width:55vw; border:1px solid var(--btnLine);
