@@ -189,6 +189,7 @@
 #include "botDelay.h"
 #include "errCatch.h"
 #include "portable.h"
+#include "net.h"
 #include "jksql.h"
 #include <fcntl.h>
 #include <sys/file.h>
@@ -1586,6 +1587,31 @@ fprintf(f, "quickLiftUrl %s\n", chainRel);
 fprintf(f, "quickLiftDb %s\n", srcDb);
 }
 
+static void pgCopySetting(struct dyString *stanza, char *line)
+/* Add one setting from trackHubBuild's file to a stanza.  A file setting that
+ * names a local path relative to this CGI - a custom track's
+ * "bigDataUrl ../trash/hgBlat/..." - is made absolute on the way: the hub
+ * reader resolves relative paths against the hub's own directory, so left as
+ * it is the browser looks for the file under trash/pangenomeQuickLift and says
+ * it cannot open it. */
+{
+char *value = skipToSpaces(line);
+if (value != NULL)
+    {
+    int nameLen = value - line;
+    value = skipLeadingSpaces(value);
+    char name[128];
+    safencpy(name, sizeof(name), line, min(nameLen, (int)sizeof(name) - 1));
+    if ((endsWith(name, "Url") || endsWith(name, "File") || endsWith(name, "Index")) &&
+        !isEmpty(value) && value[0] != '/' && !hasProtocol(value))
+        {
+        dyStringPrintf(stanza, "%s %s/%s\n", name, getCurrentDir(), value);
+        return;
+        }
+    }
+dyStringPrintf(stanza, "%s\n", line);
+}
+
 static void pgFreshLiftHub(char *db)
 /* Empty the quickLift hub file this cart is using for db, so that the next
  * trackHubBuild() writes only what the source is showing now.
@@ -1739,7 +1765,7 @@ while (lineFileNext(lf, &line, NULL))
     if (startsWith("shortLabel ", trimmed))
         safef(label, sizeof(label), "%s",
               skipLeadingSpaces(trimmed + strlen("shortLabel")));
-    dyStringPrintf(stanza, "%s\n", trimmed);
+    pgCopySetting(stanza, trimmed);
     }
 if (inTrack)
     {
