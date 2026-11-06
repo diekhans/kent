@@ -8197,9 +8197,21 @@ char *pslName, *faName, *qName;
 enum gfType qt, tt;
 boolean isProt;
 
-cartWebStart(cart, database, "BLAT Search Alignments");
+/* A tool other than hgBlat that writes ss names the track with ssShortLabel,
+ * which hgBlat never sets (see hgTracks.c userPslTg).  Its results are not a
+ * BLAT search, so the page says neither BLAT in its title nor BLAT's track
+ * description. */
+char *ssLong = cartOptionalString(cart, "ssLongLabel");
+boolean blatContext = isEmpty(cartOptionalString(cart, "ssShortLabel"));
+char heading[256];
+if (blatContext)
+    safef(heading, sizeof heading, "BLAT Search Alignments");
+else
+    safef(heading, sizeof heading, "%s", isNotEmpty(ssLong) ? ssLong : "Sequence Alignments");
+char *headingHtml = htmlEncode(heading);
+cartWebStart(cart, database, "%s", headingHtml);
 
-printf("<H2>BLAT Search Alignments</H2>\n");
+printf("<H2>%s</H2>\n", headingHtml);
 printf("<A href id='hgUsualPslShowAllLink'>Show All</A>\n");
 printf("<H3>Click on a line to see detailed letter-by-letter display</H3>\n");
 
@@ -8262,7 +8274,24 @@ jsInline("$('#hgUsualPslShowAllLink').click(function(){\n"
 	"return false;\n"
 	"});\n");
 
-webIncludeHelpFile(USER_PSL_TRACK_NAME, TRUE);
+if (blatContext)
+    webIncludeHelpFile(USER_PSL_TRACK_NAME, TRUE);
+else
+    {
+    printf("<H2>Description</H2>\n");
+    printf("<P>This track shows the alignments of your sequence(s) to the genome assembly. "
+           "In the Genome Browser, alignments of nucleotides use color to highlight "
+           "differences as follows:</P>\n");
+    printf("<UL>\n"
+           "<LI><B>red</B>: Genome and query sequence have different bases at this position.\n"
+           "<LI><B>orange</B>: The query sequence has an insertion (or genome has a deletion "
+           "/ alignment gap) at this point.\n"
+           "<LI><B>purple</B>: The query sequence extends beyond the end of the alignment.\n"
+           "<LI><B>green</B>: The query sequence appears to have a polyA tail that is not "
+           "aligned to the genome.\n"
+           "</UL>\n");
+    }
+freeMem(headingHtml);
 }
 
 void doHgGold(struct trackDb *tdb, char *fragName)
