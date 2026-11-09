@@ -55,9 +55,16 @@
  * The middleware base URL and related knobs come from hg.conf so they are not
  * baked into the client and can differ per install:
  *
+ *   pangenomeTools           "on" turns the tools on.  Off - the default, and
+ *                            so on any server whose hg.conf does not say
+ *                            otherwise - the page says they are not available
+ *                            here and every command answers with that error.
+ *                            hgConvert reads it too.  No cart variable can
+ *                            turn it on: on, the page sends work to the graph
+ *                            server with this server's token.
  *   pangenome.apiBase        base URL of the mapping API, e.g. https://host/pangenome
- *                            (empty => run against the built-in JS mock)
- *   pangenome.useMock        "on"/"off"; default "on" when apiBase is empty
+ *   pangenome.useMock        "on" runs the page against the built-in JS mock
+ *                            instead of the API; default "off"
  *   pangenome.transport      "job" (async, poll) or "sync"; default "job"
  *   pangenome.timeoutSecs    per-request timeout talking to the middleware; default 120
  *   pangenome.pollIntervalMs poll interval in ms; default 1500
@@ -395,6 +402,12 @@ static void emitJson(char *json)
 {
 printf("Content-Type: application/json\n\n");
 fputs(json, stdout);
+}
+
+static boolean pgToolsOn()
+/* TRUE when hg.conf turns the pangenome tools on here (pangenomeTools=on). */
+{
+return cfgOptionBooleanDefault("pangenomeTools", FALSE);
 }
 
 static void emitJsonError(char *fmt, ...)
@@ -3671,11 +3684,10 @@ static void injectConfig()
  * hgPangenome.js reads this on DOMContentLoaded, which fires after inline
  * scripts have run, so ordering relative to the external <script src> is safe. */
 {
-char *apiBase = cfgOr("pangenome.apiBase", "");
-/* Default to the mock when no API base is configured, so a fresh install
- * (or a developer with no live server) still gets a working page. */
-char *useMockDef = isEmpty(apiBase) ? "on" : "off";
-boolean useMock = sameString(cfgOr("pangenome.useMock", useMockDef), "on");
+/* The mock only when asked for.  It used to be the default with no API base,
+ * which on a server never set up for the tools meant a page of made-up
+ * results. */
+boolean useMock = sameString(cfgOr("pangenome.useMock", "off"), "on");
 char *transport = cfgOr("pangenome.transport", "job");
 int pollMs = atoi(cfgOr("pangenome.pollIntervalMs", "1500"));
 int maxSeq = atoi(cfgOr("pangenome.maxSequences", "10"));
@@ -3929,6 +3941,14 @@ void doMiddle(struct cart *theCart)
 /* Write the page. */
 {
 cart = theCart;
+
+if (!pgToolsOn())
+    {
+    cartWebStart(cart, NULL, "Pangenome tools");
+    printf("<p>Pangenome Mapping and PanLift are not available on this server.</p>\n");
+    cartWebEnd();
+    return;
+    }
 
 /* Asked before a conversion is submitted, so it needs the cart too. */
 if (sameOk(cgiOptionalString("cmd"), "liftCheck"))
@@ -4221,6 +4241,13 @@ cgiSpoof(&argc, argv);
 /* API modes: forward to the middleware and return JSON, skipping the cart
  * (and its central-DB dependency) entirely. */
 char *cmd = cgiOptionalString("cmd");
+
+/* Off on this server: every command says so, and the page does in doMiddle. */
+if (cmd != NULL && !pgToolsOn())
+    {
+    emitJsonError("Pangenome Mapping and PanLift are not available on this server");
+    return 0;
+    }
 
 /* One size cap for every command, before anything dispatches.
  *

@@ -78,9 +78,10 @@ stop_mock() {
 }
 
 # Write a test hg.conf.  Deliberately standalone (no include of the site conf).
+# The tools are turned on; the "off switch" section writes one without it.
 mk_conf() {                          # mk_conf <file> [extra lines...]
     local f="$1"; shift
-    : > "$f"
+    echo "pangenomeTools=on" > "$f"
     for line in "$@"; do echo "$line" >> "$f"; done
 }
 
@@ -321,6 +322,19 @@ check_eq "token also sent on poll" "$(mock_field token)" "test-token-abc123"
 : > "$REC"
 cgi_post "$CONF" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}' > /dev/null
 check_eq "no token configured means no auth header" "$(mock_field token)" "<null>"
+
+# ============================================================= off switch
+section "off switch (pangenomeTools)"
+
+printf '%s\n' "pangenome.apiBase=http://127.0.0.1:$PORT" > "$TMP/off.conf"
+: > "$REC"
+out=$(cgi_post "$TMP/off.conf" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
+check_contains "tools off: map says they are not available" "$out" "not available on this server"
+check_eq "tools off: nothing sent to the graph server" "$(mock_count)" "0"
+out=$(cgi_get "$TMP/off.conf" "cmd=poll&job_id=job1")
+check_contains "tools off: poll says so too" "$out" "not available on this server"
+out=$(cgi_get "$TMP/off.conf" "cmd=pclai")
+check_contains "tools off: a file-reading command says so too" "$out" "not available on this server"
 
 # ======================================================= C. job_id guard
 section "job_id guard (path traversal / SSRF)"
@@ -677,6 +691,7 @@ for cand in "${HGDB_CONF:-}" "${HOME:-}/.hg.conf" "${HOME:-}/hg.conf" \
     # reaching the command at all.
     { echo "include $abs"
       echo "delete cloudFlareSiteKey bottleneck.host bottleneck.port"
+      echo "pangenomeTools=on"
       echo "pangenome.apiBase=http://127.0.0.1:$PORT"
       echo "pangenome.timeoutSecs=10"; } > "$TMP/quicklift.conf"
     case "$(cgi_post_cmd "$TMP/quicklift.conf" quickLift '{}' 2>/dev/null)" in

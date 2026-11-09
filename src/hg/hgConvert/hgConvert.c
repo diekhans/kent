@@ -75,9 +75,9 @@ return toDb;
  * which does the translation.
  *
  * The list is read from the published HPRC index named by hg.conf
- * "pangenome.assemblyIndex".  With that setting absent - which is the case on
- * any install that has not enabled the tool - nothing here does anything, so
- * hgConvert behaves exactly as before.
+ * "pangenome.assemblyIndex".  With that setting absent, or the tools not
+ * turned on (hg.conf pangenomeTools=on, as hgPangenome reads it), nothing here
+ * does anything, so hgConvert behaves exactly as before.
  */
 
 struct pgAsm
@@ -97,6 +97,8 @@ if (tried)
     return cached;
 tried = TRUE;
 
+if (!cfgOptionBooleanDefault("pangenomeTools", FALSE))
+    return NULL;
 char *indexFile = cfgOption("pangenome.assemblyIndex");
 if (isEmpty(indexFile) || !fileExists(indexFile))
     return NULL;

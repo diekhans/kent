@@ -1729,6 +1729,14 @@ if(scriptName)
     menuStr = replaceChars(menuStr, "<!-- SHARE_LINK -->", shareLi);
     }
 
+// The pangenome tools' Tools menu items are commented out in globalNavBar.inc, so a static page
+// or a server that has not turned the tools on (hg.conf pangenomeTools=on) does not offer them.
+if (cfgOptionBooleanDefault("pangenomeTools", FALSE))
+    {
+    menuStr = replaceChars(menuStr, "<!-- OPTIONAL_PANGENOME_MENU_START", "");
+    menuStr = replaceChars(menuStr, "OPTIONAL_PANGENOME_MENU_END -->", "");
+    }
+
 if(scriptName)
     {  // Provide optional official mirror servers menu items
     char *geoMenu = geoMirrorMenu();
