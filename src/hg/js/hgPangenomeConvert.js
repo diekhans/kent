@@ -1015,7 +1015,7 @@ function renderResults(srcLabel, targets, intervals, failed, errors) {
     if (lastSource)
         acts.appendChild(el("a", { class: "gbPill", href: liftAllUrl(lastSource),
             title: "This region on every haplotype in the pangenome, with figures on " +
-                   "how it carries over", text: "Show all haplotypes" }));
+                   "how it carries over", text: "View all haplotypes" }));
 
     // The regions the ancestry plot is offered for, the source first.
     var anc = ancOn() && lastSource ? [] : null;

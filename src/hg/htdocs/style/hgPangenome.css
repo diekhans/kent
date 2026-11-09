@@ -291,6 +291,27 @@
 .pgcTable { table-layout: fixed; }
 .pgcTable td:first-child { width: 11em; }
 
+/* The two ways on from the source: convert to haplotypes the user picks, or
+ * compare them all first.  Plain boxes with an "or" between, in the page's
+ * classic look; a box's tables keep the label column of the source above. */
+.pgcPath {
+    border: 1px solid #c8ccd2;
+    background: #fafbfc;
+    padding: 0.6em 0.8em 0.7em;
+    margin: 0.8em 0 0;
+    max-width: 62em;
+    box-sizing: border-box;
+}
+.pgcPathHead { font-weight: bold; font-size: 1.05em; }
+.pgcPathText { margin: 0.2em 0 0.6em; max-width: 52em; line-height: 1.35; }
+.pgcPath .pgcTable { margin-left: -2px; }
+.pgcOr {
+    display: flex; align-items: center; gap: 0.8em;
+    max-width: 62em; margin: 0.8em 0 0;
+    color: #6b7380; font-style: italic;
+}
+.pgcOr::before, .pgcOr::after { content: ""; flex: 1; border-top: 1px solid #d5d9de; }
+
 
 /* ==== search form (formBuild in hgPangenome.js) ===========================
  * Mirrors the search-form rules of hgBlat.css (#blatFormBox), under #pgFormBox. */

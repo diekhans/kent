@@ -3960,6 +3960,20 @@ printf("<div id='pgcSrcNote' class='pgMuted'></div>\n");
 printf("<div class='pgMuted'>To convert a different region, go to it in the "
        "<a href='../cgi-bin/hgTracks'>Genome Browser</a> and come back.</div>"
        "</td></tr>\n");
+printf("</table>\n");
+
+/* ---- two ways on ----
+ *
+ * Someone who knows the haplotype they want picks it here and converts.
+ * Someone who does not yet - who wants to see which haplotypes carry the
+ * region well before choosing - goes to the all-haplotypes page, which opens
+ * any of them from its table.  Two boxes with an "or" between them, so the
+ * second is not read as one more button of the first. */
+printf("<div class='pgcPath'>\n");
+printf("<div class='pgcPathHead'>I know which haplotypes I want</div>\n");
+printf("<div class='pgcPathText'>Choose one or more haplotypes below and "
+       "convert the region to them.</div>\n");
+printf("<table class='hgPangenomeTable pgcTable' border=0>\n");
 
 /* ---- destination ---- */
 printf("<tr><td><label for='pgcFilter'><b>Target assemblies</b></label></td>\n");
@@ -4018,12 +4032,23 @@ if (quickLiftEnabled(cart))
 printf("<tr><td></td><td>\n");
 printf("<input type='button' id='pgcSubmit' value='Convert'>\n");
 printf("<input type='button' id='pgcClear' value='Clear'>\n");
-/* Every haplotype in one request, on a page of its own (page=liftAll). */
-printf("<input type='button' id='pgcAllBtn' value='Show all haplotypes' "
-       "title='Translate this region to every haplotype in the pangenome and "
-       "summarize how it carries over'>\n");
 printf("</td></tr>\n");
 printf("</table>\n");
+printf("</div>\n");
+
+printf("<div class='pgcOr'><span>or</span></div>\n");
+
+/* Every haplotype in one request, on a page of its own (page=liftAll). */
+printf("<div class='pgcPath'>\n");
+printf("<div class='pgcPathHead'>I want to compare haplotypes</div>\n");
+printf("<div class='pgcPathText'>Not sure which haplotype to look at?  See how "
+       "this region carries over to every haplotype in the pangenome: how much "
+       "of it is covered, what is inserted or deleted, and whether it stays in "
+       "one piece.  Open any of them in the Genome Browser from there.</div>\n");
+printf("<input type='button' id='pgcAllBtn' value='View all haplotypes' "
+       "title='Translate this region to every haplotype in the pangenome and "
+       "summarize how it carries over'>\n");
+printf("</div>\n");
 printf("</form>\n");
 
 printf("<div id='pgcStatus' class='pgStatus' style='display:none'></div>\n");
