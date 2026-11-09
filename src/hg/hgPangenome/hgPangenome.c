@@ -45,14 +45,9 @@
  *                 reference onto the haplotype.  Also inside the cart shell.
  *   cmd=locus     the gene each of a list of hits falls in, for the results
  *                 table's Locus column: hgBlat's words, from CAT genes
- *   cmd=svOpen    the same for an SV: translate its graph site from the
- *                 reference to one haplotype and open it there, with or without
- *                 the reference's tracks.  Inside the cart shell.
- * and five pages, selected by "page": none for the mapping form, "results" for
- * a mapping job's table, "convert" for PanLift, "liftAll" for one PanLift
- * region on every haplotype, and "svOpen", the step from a haplotype named on
- * an SV's details page (hgc's pangenomeCarriers section) to that haplotype in
- * the browser.
+ * and four pages, selected by "page": none for the mapping form, "results" for
+ * a mapping job's table, "convert" for PanLift, and "liftAll" for one PanLift
+ * region on every haplotype.
  * The map/poll modes emit raw application/json (the middleware's answer, or a
  * synthesized {"status":"error",...}) and never touch the cart, so they are
  * cheap and DB-free.  Nothing about BLAT is used or changed.
@@ -133,8 +128,6 @@
  *   pangenome.annotationHideOwn  "on" (default) hides the haplotype's own tracks
  *                            when a reference's annotations are brought, as
  *                            PanLift's "hide the target's default tracks" does.
- *   pangenome.svFlank        bp either side of an SV's graph site shown when a
- *                            haplotype is opened there; default 1000
  *   pangenome.maxConcurrent  requests this web server sends the graph server at
  *                            once; the rest wait their turn; default 4, 0 = no queue
  *   pangenome.queueWaitSecs  longest a request waits for its turn; default 120
@@ -2711,133 +2704,6 @@ doQuickLift(ql->string, FALSE);
 dyStringFree(&ql);
 }
 
-/* ---- One haplotype at a structural variant's site --------------------------
- *
- * The details page of an item on the HPRC v2.1 SV track lists the haplotypes
- * that carry it (hgc/pangenomeCarriersClick.c), and each name links here: the
- * SV's graph site, translated from the reference to that haplotype through the
- * graph, opened in the browser with the reference's tracks carried across -
- * the way the results page opens a hit.  page=svOpen is the step between the
- * two, and cmd=svOpen does the work. */
-
-static char *pgRefHapForDb(char *db)
-/* The graph's name for a reference assembly ("hg38" -> "GRCh38#0"), from the
- * same pairs the results page brings annotations from. */
-{
-struct slPair *rp;
-for (rp = pgAnnotRefs(); rp != NULL; rp = rp->next)
-    if (sameString((char *)rp->val, db))
-        return rp->name;
-return NULL;
-}
-
-static void doSvOpen()
-/* Open one haplotype at an SV's site: translate the site, with a flank either
- * side, from the reference to the haplotype through the graph, and open the
- * browser there - with the reference's tracks carried across, as the results
- * page does, unless the page asks for the haplotype alone. */
-{
-char *payload = cgiOptionalString("payload");
-struct jsonElement *root = NULL;
-if (!isEmpty(payload))
-    {
-    struct errCatch *errCatch = errCatchNew();
-    if (errCatchStart(errCatch))
-        root = jsonParse(payload);
-    errCatchEnd(errCatch);
-    errCatchFree(&errCatch);
-    }
-if (root == NULL)
-    {
-    emitJsonError("missing or invalid JSON payload");
-    return;
-    }
-char *db = jsonOptionalStringField(root, "db", NULL);
-if (db != NULL)
-    db = trackHubSkipHubName(db);
-char *chrom = jsonOptionalStringField(root, "chrom", NULL);
-char *hap = jsonOptionalStringField(root, "hap", NULL);
-char *hapDb = jsonOptionalStringField(root, "hapDb", NULL);
-boolean annot = sameOk(jsonOptionalStringField(root, "annot", "on"), "on");
-struct jsonElement *sEl = jsonFindNamedField(root, "", "start");
-struct jsonElement *eEl = jsonFindNamedField(root, "", "end");
-char *refHap = pgValidDb(db) ? pgRefHapForDb(db) : NULL;
-if (refHap == NULL || !pgSafeToken(chrom) || isEmpty(hap) || countChars(hap, '#') != 1 ||
-    !pgValidDb(hapDb))
-    {
-    emitJsonError("missing or malformed assembly, sequence or haplotype");
-    return;
-    }
-if (sEl == NULL || eEl == NULL || sEl->type != jsonNumber || eEl->type != jsonNumber ||
-    sEl->val.jeNumber < 0 || eEl->val.jeNumber <= sEl->val.jeNumber)
-    {
-    emitJsonError("missing or malformed start and end");
-    return;
-    }
-long flank = atol(cfgOr("pangenome.svFlank", "1000"));
-long start = (long)sEl->val.jeNumber - flank, end = (long)eEl->val.jeNumber + flank;
-if (start < 0)
-    start = 0;
-struct hash *sizes = pgChromSizes(db);
-long size = sizes ? hashIntValDefault(sizes, chrom, 0) : 0;
-if (size > 0 && end > size)
-    end = size;
-long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
-if (end - start > maxSpan)
-    {
-    emitJsonError("this site is longer than the %ld bp a translation may cover", maxSpan);
-    return;
-    }
-
-/* The reference itself needs no translating. */
-struct dyString *out = dyStringNew(512);
-if (sameWord(hap, refHap))
-    {
-    char position[256];
-    safef(position, sizeof(position), "%s:%ld-%ld", chrom, start + 1, end);
-    dyStringPrintf(out, "{\"status\":\"ok\",\"url\":\"hgTracks?db=%s&position=%s\"}",
-                   db, cgiEncode(position));
-    emitJson(out->string);
-    return;
-    }
-
-char refPath[512];
-safef(refPath, sizeof(refPath), "%s#%s", refHap, chrom);
-char *hapPath = NULL, *err = NULL;
-long hapStart = 0, hapEnd = 0;
-if (!pgLiftInterval(refPath, hap, start, end, &hapPath, &hapStart, &hapEnd, &err))
-    {
-    /* "stage" tells the page that leaving the tracks behind would not help:
-     * the site itself has nowhere to go. */
-    struct dyString *out = dyStringNew(300);
-    dyStringPrintf(out, "{\"status\":\"error\",\"stage\":\"translate\",\"error\":\"%s\"}",
-                   jsonStringEscape(err));
-    emitJson(out->string);
-    return;
-    }
-char position[512];
-safef(position, sizeof(position), "%s:%ld-%ld", pgContigOf(hapPath), hapStart + 1, hapEnd);
-
-if (!annot || !quickLiftEnabled(cart))
-    {
-    dyStringPrintf(out, "{\"status\":\"ok\",\"url\":\"hgTracks?db=%s&position=%s\"}",
-                   hapDb, cgiEncode(position));
-    emitJson(out->string);
-    return;
-    }
-/* As doRefAnnot hands it over: a conversion from the reference onto the
- * haplotype, of the interval just translated. */
-boolean hideOwn = sameString(cfgOr("pangenome.annotationHideOwn", "on"), "on");
-dyStringPrintf(out, "{\"srcDb\":\"%s\",\"tgtDb\":\"%s\",\"src\":\"%s\","
-                    "\"srcHap\":\"%s\",\"srcStart\":%ld,\"srcEnd\":%ld,"
-                    "\"tgt\":\"%s\",\"position\":\"%s\",\"hideTracks\":\"%s\"}",
-               jsonStringEscape(db), jsonStringEscape(hapDb), jsonStringEscape(refPath),
-               jsonStringEscape(pgRefLabel(refHap)), start, end,
-               jsonStringEscape(hap), jsonStringEscape(position), hideOwn ? "on" : "off");
-doQuickLift(out->string, FALSE);
-dyStringFree(&out);
-}
-
 /* ---- The mapped sequence as a track on the target ------------------------
  *
  * BLAT hands its results to the browser by writing a PSL and a FASTA into
@@ -4084,12 +3950,6 @@ if (sameOk(cgiOptionalString("cmd"), "refAnnot"))
     doRefAnnot();
     return;
     }
-/* One haplotype at an SV's site, for page=svOpen. */
-if (sameOk(cgiOptionalString("cmd"), "svOpen"))
-    {
-    doSvOpen();
-    return;
-    }
 /* Same work, wider chain.  Sent after the user has followed the link, so the
  * chain they are already looking at is replaced by one that survives panning.
  * Nothing waits for it, and the reply goes nowhere. */
@@ -4242,38 +4102,6 @@ if (sameOk(cgiOptionalString("page"), "results"))
         jsIncludeFile("hgPangenomePclai.js", NULL);
     jsIncludeFile("hgPangenomeSamples.js", NULL);   /* the Population column */
     jsIncludeFile("hgPangenomeResults.js", NULL);
-    cartWebEnd();
-    return;
-    }
-
-/* The step between an SV's details page and the browser: says what it is
- * opening, asks for it (cmd=svOpen) and goes there.  Everything it needs is in
- * the link, and checked again by cmd=svOpen. */
-if (sameOk(cgiOptionalString("page"), "svOpen"))
-    {
-    cartWebStart(cart, NULL, "Opening a haplotype at an SV");
-    if (issueBotWarning)
-        botDelayMessage(getenv("REMOTE_ADDR"), botDelayMillis);
-    webIncludeResourceFile("hgPangenome.css");
-    printf("<div id='pgsOpen' class='pgsOpen'></div>\n");
-    injectConfig();
-    struct jsonWrite *jw = jsonWriteNew();
-    jsonWriteObjectStart(jw, NULL);
-    /* As the cart gives it, hs1 is hub_<id>_hs1; the graph knows it as hs1. */
-    jsonWriteString(jw, "db", trackHubSkipHubName(cgiUsualString("db", "")));
-    jsonWriteString(jw, "chrom", cgiUsualString("chrom", ""));
-    jsonWriteNumber(jw, "start", cgiOptionalInt("start", -1));
-    jsonWriteNumber(jw, "end", cgiOptionalInt("end", -1));
-    jsonWriteString(jw, "hap", cgiUsualString("hap", ""));
-    jsonWriteString(jw, "sv", cgiUsualString("sv", ""));
-    char *refHap = pgRefHapForDb(trackHubSkipHubName(cgiUsualString("db", "")));
-    jsonWriteString(jw, "refLabel", refHap ? pgRefLabel(refHap) : "");
-    jsonWriteBoolean(jw, "quickLift", quickLiftEnabled(cart));
-    jsonWriteObjectEnd(jw);
-    jsInlineF("var pangenomeSvOpen = %s;\n", jw->dy->string);
-    jsonWriteFree(&jw);
-    jsIncludeFile("hgPangenomeAssemblies.js", NULL);
-    jsIncludeFile("hgPangenomeSvOpen.js", NULL);
     cartWebEnd();
     return;
     }
@@ -4496,7 +4324,7 @@ if (sameOk(cmd, "alignTrack"))
     }
 
 if (sameOk(cmd, "quickLift") || sameOk(cmd, "extendChain") || sameOk(cmd, "liftCheck") ||
-    sameOk(cmd, "refAnnot") || sameOk(cmd, "svOpen"))
+    sameOk(cmd, "refAnnot"))
     {
     struct errCatch *errCatch = errCatchNew();
     if (errCatchStart(errCatch))
