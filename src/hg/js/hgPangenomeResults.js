@@ -1,4 +1,4 @@
-/* hgPangenomeResults.js - the results of one pangenome mapping job, as a table.
+/* hgPangenomeResults.js - the results of one PanView mapping job, as a table.
  *
  * Reached as hgPangenome?page=results&job_id=<id>.  The page carries nothing
  * but the job id, so everything here is fetched from that: the mapping is read

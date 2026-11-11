@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mockMiddleware.py - stand-in for the pangenome mapping middleware.
+"""mockMiddleware.py - stand-in for the PanView mapping middleware.
 
 Used by the Layer 2 proxy tests.  Two jobs:
 

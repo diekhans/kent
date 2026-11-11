@@ -1,7 +1,7 @@
 kentSrc = ../../..
 include ../../../inc/common.mk
 
-# Tests for the pangenome mapping tool.  Everything here is self-contained: no
+# Tests for PanView, the pangenome mapping tool.  Everything here is self-contained: no
 # network, no MySQL, no live middleware, no shared bottleneck server.  Layers
 # whose tool is missing SKIP rather than fail, so "make test" is safe on a build
 # machine that has no node (node is optional in kent, see NODEBIN in common.mk).

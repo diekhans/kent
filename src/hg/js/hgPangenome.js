@@ -1,4 +1,4 @@
-/* hgPangenome.js - client for the pangenome mapping page.
+/* hgPangenome.js - client for the PanView page (pangenome mapping).
  *
  * Parses pasted/uploaded sequences (one-per-line or FASTA), validates them,
  * submits them to the mapping API, polls for results (or uses the synchronous
@@ -1319,7 +1319,7 @@ function formSidebar(fd) {
         'you already have coordinates for: translates it from one assembly to ' +
         'another through the graph.</div>' +
         '</div>' +
-        '<div class="gbCard"><h3>About pangenome mapping</h3>' +
+        '<div class="gbCard"><h3>About PanView</h3>' +
         '<div>Your sequence is aligned to the pangenome graph, which holds every ' +
         'haplotype in it at once. The results list the haplotypes that carry it, ' +
         'with how well it matches each and where it lands, and open any of them ' +

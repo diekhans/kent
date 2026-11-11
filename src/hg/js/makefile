@@ -35,7 +35,7 @@ JQUERY_FILES_MODIFIED=jquery.tablednd.js ui.dropdownchecklist.js
 
 JQUERY_FILES=${JQUERY_FILES_UNTOUCHED} ${JQUERY_FILES_MODIFIED}
 
-# Pangenome mapping tool (new browser service).  Its JSON API field names are
+# PanView and PanLift, the pangenome tools (new browser service).  Its JSON API field names are
 # snake_case (dictated by the mapping middleware contract), which conflicts with
 # the repo-wide camelcase jshint rule, so these are deployed without jshint,
 # like the untouched third-party files.

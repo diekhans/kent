@@ -1,7 +1,7 @@
 hgPangenome test suite
 ======================
 
-Tests for the pangenome mapping tool: the browser client (js/hgPangenome.js)
+Tests for PanView, the pangenome mapping tool: the browser client (js/hgPangenome.js)
 and the CGI proxy (hgPangenome.c).  Layered so that everything except the
 end-to-end layer runs with no middleware and no browser.
 

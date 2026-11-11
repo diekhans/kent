@@ -1,4 +1,4 @@
-/* hgPangenome - Pangenome-enabled sequence mapping page.
+/* hgPangenome - PanView (pangenome-enabled sequence mapping) and PanLift pages.
  *
  * A new, self-contained browser service, in the spirit of hgBlat but talking
  * to its own middleware.  The actual mapping + surjection is done by a separate
@@ -3657,8 +3657,8 @@ cartSetString(cart, "ss", ss);
 if (dropLifts)
     pgForgetStaleHubs(NULL, FALSE);
 /* Name the track for this tool rather than leaving hgBlat's label on it. */
-cartSetString(cart, "ssShortLabel", "Pangenome Seq");
-cartSetString(cart, "ssLongLabel", "Your Sequence from Pangenome Mapping");
+cartSetString(cart, "ssShortLabel", "PanView Seq");
+cartSetString(cart, "ssLongLabel", "Your Sequence from PanView");
 dyStringPrintf(url, "hgTracks?db=%s&position=%s",
                cgiEncode(viewDb), cgiEncode(pos));
 /* The alignment details page, the same one hgBlat's "details" link opens:
@@ -3933,7 +3933,7 @@ printf("<div id='pgcStatus' class='pgStatus' style='display:none'></div>\n");
 printf("<div id='pgcResults' class='pgResults'></div>\n");
 
 printf("<p>Have a sequence instead of coordinates?  "
-       "<a href='hgPangenome'>Pangenome Mapping</a> maps reads to the graph and "
+       "<a href='hgPangenome'>PanView</a> maps reads to the graph and "
        "reports the assemblies carrying them.</p>\n");
 }
 
@@ -3945,7 +3945,7 @@ cart = theCart;
 if (!pgToolsOn())
     {
     cartWebStart(cart, NULL, "Pangenome tools");
-    printf("<p>Pangenome Mapping and PanLift are not available on this server.</p>\n");
+    printf("<p>PanView and PanLift are not available on this server.</p>\n");
     cartWebEnd();
     return;
     }
@@ -4000,7 +4000,7 @@ pgForgetStaleHubs(NULL, TRUE);
  * cached upstream. */
 if (sameOk(cgiOptionalString("page"), "results"))
     {
-    cartWebStart(cart, NULL, "Pangenome Mapping Results");
+    cartWebStart(cart, NULL, "PanView Results");
     if (issueBotWarning)
         botDelayMessage(getenv("REMOTE_ADDR"), botDelayMillis);
     /* The results page of hgBlat's new design: hgPangenomeResults.js builds the
@@ -4210,7 +4210,7 @@ if (sameOk(cgiOptionalString("page"), "convert"))
  * gbModern.css styles, rather than a bare name in the bar and an <h2> repeating
  * it underneath.  cartWebStart HTML-escapes the title, so the dash is a literal
  * em dash and not &mdash;. */
-cartWebStart(cart, NULL, "Pangenome Mapping — Find a DNA sequence across the human pangenome");
+cartWebStart(cart, NULL, "PanView — Find a DNA sequence across the human pangenome");
 
 if (issueBotWarning)
     {
@@ -4245,7 +4245,7 @@ char *cmd = cgiOptionalString("cmd");
 /* Off on this server: every command says so, and the page does in doMiddle. */
 if (cmd != NULL && !pgToolsOn())
     {
-    emitJsonError("Pangenome Mapping and PanLift are not available on this server");
+    emitJsonError("PanView and PanLift are not available on this server");
     return 0;
     }
 

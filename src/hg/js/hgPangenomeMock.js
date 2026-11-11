@@ -1,4 +1,4 @@
-/* hgPangenomeMock.js - in-browser mock of the pangenome mapping API.
+/* hgPangenomeMock.js - in-browser mock of the PanView mapping API.
  *
  * Lets the page run with no live backend.  It implements the same small
  * transport surface the real API layer uses (submit + poll for the job flow,

@@ -1,6 +1,6 @@
 /* hgPangenome.css - styling for hgPangenome's pages.
  *
- * The pangenome mapping pages - the search form and the results table - are in
+ * The PanView pages - the search form and the results table - are in
  * the house style of hgBlat's new pages: the shared components (design tokens on
  * .gbApp, .gbPill, .gbCard, .gbStrip, .gbSection, .gbBanner, the busy overlay)
  * come from gbModern.css, loaded alongside this file, and this file holds only
