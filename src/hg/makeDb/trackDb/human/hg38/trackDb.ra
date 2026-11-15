@@ -12,6 +12,8 @@ include clinvarMapped.ra alpha
 
 include gdcCancer.ra
 
+include cancerMutations.ra alpha
+
 include cortexVelmeshev.ra
 include heartCellAtlas.ra
 include kidneyStewart.ra
@@ -206,8 +208,8 @@ origAssembly hg19
 pennantIcon 19.jpg ../goldenPath/help/liftOver.html "lifted from hg19"
 
 include nonCodingRNAs.ra
-include mirGeneDb.ra alpha
-include mirBase.ra alpha
+include mirGeneDbV3_0.ra alpha
+include mirBaseV22_1.ra alpha
 
 #track wgRna override 
 #dataVersion miRBase Release 15.0 (April 2010) and snoRNABase Version 3
@@ -953,12 +955,14 @@ include methbase2.ra alpha
 
 include fiberSeq.ra
 
+include encodeE2g.ra alpha
+
 include imprinting.ra alpha
 # include hg38.GCF_040939455.1.chainNet.ra alpha
 
 include hprcPclai.ra alpha
 
-include episignatures.ra alpha,beta
+include episignatures.ra
 
 include transcriptionStart.ra alpha
 include transcriptionStartPublic.ra beta,public
@@ -972,3 +976,5 @@ include ../fusionGenes.ra alpha
 include gpnStar.ra alpha
 
 include allPrimatesChainNet.ra alpha
+
+include chainCompare.trackDb.ra alpha

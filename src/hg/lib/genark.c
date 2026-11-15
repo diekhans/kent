@@ -292,7 +292,10 @@ if (genarkPrefix == NULL)
 
 struct sqlConnection *conn = hConnectCentral();
 if (!sqlTableExists(conn, genarkTableName()))
+    {
+    hDisconnectCentral(&conn);
     return NULL;
+    }
 
 char *url = NULL;
 char query[4096];
@@ -410,7 +413,7 @@ return dbDb;
 struct dbDb *genarkLiftOverDbs(struct slName *accList)
 /* return list of dbDb structures for the genark genomes named in accList */
 {
-if (!cfgOption("genarkLiftOver"))
+if (!cfgOptionBooleanDefault("genarkLiftOver", TRUE))
     return NULL;
 struct dbDb *list = NULL;
 struct slName *acc;
@@ -432,6 +435,11 @@ if (!any)
 /* the escaping in sqlDyStringPrintf needs a live connection, so connect
  * before the query is built */
 struct sqlConnection *conn = hConnectCentral();
+if (!sqlTableExists(conn, genarkTableName()))
+    {
+    hDisconnectCentral(&conn);
+    return NULL;
+    }
 struct sqlResult *sr;
 char **row;
 boolean first = TRUE;

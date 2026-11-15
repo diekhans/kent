@@ -60,6 +60,7 @@
 #include "cartTrackDb.h"
 #include "quickLift.h"
 #include "portable.h"
+#include "multiRegionSpace.h"
 
 #ifdef USE_HAL
 #include "halBlockViz.h"
@@ -1236,7 +1237,7 @@ if (!isEmpty(hub->name))
 
 if ((genome->twoBitPath != NULL) && (*foundFirstGenome == FALSE))
     *foundFirstGenome = TRUE;
-else if ((genome->groups != NULL) && hubsCanAddGroups())
+else if (genome->groups != NULL)
     tdbListAddHubToGroup(hub->name, tdbList);
 else
     trackHubAddGroupName(hub->name, tdbList);
@@ -1563,6 +1564,7 @@ if (bigDataUrl != NULL)
              startsWithWord("bigMaf", type) ||
              startsWithWord("bigBarChart", type) || startsWithWord("bigInteract", type) ||
              startsWithWord("bigLolly", type) || startsWithWord("bigRmsk",type) ||
+             (multiRegionSpacesEnabled() && startsWithWord("bigBaseView", type)) ||
              startsWithWord("bigMethyl", type))
         {
         /* Just open and close to verify file exists and is correct type. */
@@ -1847,9 +1849,16 @@ if (!inited)
 
     for(ii = 0; ii < len; ii++)
         hashStore(vettedHash, vettedTracks[ii]);
+    inited = TRUE;
     }
 
 return hashLookup(vettedHash, track) != NULL;
+}
+
+boolean trackHubQuickLiftVetted(char *track)
+/* Has this track's name handler been tested with quickLift?  See trackHub.h. */
+{
+return isVetted(trackHubSkipHubName(track));
 }
 
 static bool isParentVisible(struct cart *cart, struct trackDb *tdb)
@@ -2015,6 +2024,32 @@ return startsWithNoCase("bigPsl", type) ||
        startsWithNoCase("psl ", type);
 }
 
+boolean trackHubQuickLiftCanCarry(struct cart *cart, struct trackDb *tdb)
+/* Can quickLift carry a track of this type?  See trackHub.h. */
+{
+// trackDb types are matched without regard to case since that's how the rest of the
+// browser reads them (some trackDb stanzas say "bigbed" rather than "bigBed").
+return !sameString("cytoBandIdeo", trackHubSkipHubName(tdb->track)) &&
+     ( startsWithNoCase("bigBed", tdb->type) || \
+       startsWithNoCase("bigWig", tdb->type) || \
+       startsWithNoCase("bigDbSnp", tdb->type) || \
+       startsWithNoCase("bigGenePred", tdb->type) || \
+       startsWithNoCase("gvf", tdb->type) || \
+       startsWithNoCase("genePred", tdb->type) || \
+       startsWithNoCase("narrowPeak", tdb->type) || \
+       startsWithNoCase("broadPeak", tdb->type) || \
+       startsWithNoCase("bigLolly", tdb->type) || \
+       (startsWithNoCase("bigNet", tdb->type) && trackHubBigNetEnabled()) || \
+       (isAlignmentType(tdb->type) && quickLiftAlignmentsEnabled(cart)) || \
+       (startsWithNoCase("bigBarChart", tdb->type) && quickLiftBarChartEnabled(cart)) || \
+       ((sameWord("wig", tdb->type) || startsWithNoCase("wig ", tdb->type)) &&
+        quickLiftWigEnabled(cart)) ||
+       ((sameWord("rmsk", tdb->type) || startsWithNoCase("bigRmsk", tdb->type)) &&
+        quickLiftRmskEnabled(cart)) ||
+       sameWord("bed", tdb->type) ||
+       startsWithNoCase("bed ", tdb->type));
+}
+
 static boolean validateOneTdb(struct cart *cart, char *db, struct trackDb *tdb, struct trackDb **badList)
 /* Make sure the tdb is a track type we grok.  badList may be NULL to validate
  * silently (no user-facing complaint about non-liftable types). */
@@ -2036,6 +2071,8 @@ if (sameString("cytoBandIdeo", trackHubSkipHubName(tdb->track)) ||
        (startsWithNoCase("bigBarChart", tdb->type) && quickLiftBarChartEnabled(cart)) || \
        ((sameWord("wig", tdb->type) || startsWithNoCase("wig ", tdb->type)) &&
         quickLiftWigEnabled(cart)) ||
+       ((sameWord("rmsk", tdb->type) || startsWithNoCase("bigRmsk", tdb->type)) &&
+        quickLiftRmskEnabled(cart)) ||
        sameWord("bed", tdb->type) ||
        startsWithNoCase("bed ", tdb->type)))
     {
@@ -2051,6 +2088,7 @@ if (startsWithNoCase("bigBed", tdb->type) || \
        startsWithNoCase("bigChain", tdb->type) || \
        startsWithNoCase("bigMaf", tdb->type) || \
        startsWithNoCase("bigBarChart", tdb->type) || \
+       (startsWithNoCase("bigRmsk", tdb->type) && quickLiftRmskEnabled(cart)) || \
        startsWithNoCase("bigWig", tdb->type))
     {
     char *fileName = cloneString(trackDbSetting(tdb, "bigDataUrl"));
@@ -2074,27 +2112,27 @@ struct trackDb *validTdbs = NULL;
 struct trackDb *nextTdb;
 unsigned count = 0;
 
-if (tdb->subtracks)  // this is a view, descend again
+/* Decide view or subtrack for each child, not from the first one.  A view with no
+ * subtracks is marked as a subtrack when the tree is linked up, so it is known by its
+ * own view setting, and it is dropped:  it has nothing to lift.  refs #38591 */
+for(; tdb; tdb = nextTdb)
     {
-    struct trackDb *view = tdb;
-    for (; view; view = nextTdb)
+    nextTdb = tdb->next;
+    if ((tdb->subtracks != NULL) || (trackDbLocalSetting(tdb, "view") != NULL))
         {
-        nextTdb = view->next;
-        view->subtracks = validateTdbChildren(cart, db,view->subtracks, badList);
+        // this is a view, descend again
+        if (tdb->subtracks != NULL)
+            tdb->subtracks = validateTdbChildren(cart, db, tdb->subtracks, badList);
 
-        if (view->subtracks != NULL)
+        if (tdb->subtracks != NULL)
             {
-            slAddHead(&validTdbs, view);
-            if (view->visibility)
+            slAddHead(&validTdbs, tdb);
+            if (tdb->visibility)
                 count++;
             }
         }
-    }
-else
-    {
-    for(; tdb; tdb = nextTdb)
+    else
         {
-        nextTdb = tdb->next;
         boolean visible = isParentVisible(cart, tdb) && isSubtrackVisible(cart, tdb);
         // Lift all siblings of a visible subtrack, but only complain about
         // non-liftable ones the user actually asked for (visible ones).
@@ -2238,7 +2276,7 @@ for(; tdb; tdb = tdbNext)
     }
 }
 
-static void writeMergedHubFile(char *filename, char *db, struct dyString *newContent)
+void writeMergedHubFile(char *filename, char *db, struct dyString *newContent)
 /* Write the hub file from the stanzas we just generated plus whatever was already
  * in the file.  A generated stanza replaces the old stanza of the same track, in
  * the slot the old one held, so the file keeps parents ahead of their children.

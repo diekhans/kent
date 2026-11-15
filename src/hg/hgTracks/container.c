@@ -13,6 +13,7 @@
 #include "hgTracks.h"
 #include "errCatch.h"
 #include "container.h"
+#include "multiRegionSpace.h"
 
 
 void containerLoadItems(struct track *track)
@@ -27,14 +28,21 @@ for (subtrack = track->subtracks; subtrack != NULL; subtrack = subtrack->next)
 	 * aborts out of the container's own loadItems, so the children after it never
 	 * load and the message lands on the container rather than on the row that
 	 * failed.  refs #38560 */
+	unsigned connGeneration = hConnGeneration();
 	struct errCatch *errCatch = errCatchNew();
 	if (errCatchStart(errCatch))
 	    subtrack->loadItems(subtrack);
 	errCatchEnd(errCatch);
 	if (errCatch->gotError)
+	    {
 	    subtrack->networkErrMsg = cloneString(errCatch->message->string);
-	else if (errCatch->gotWarning)
-	    warn("%s", errCatch->message->string);  // errCatch took it, hand it back
+	/* A loader that aborts never reached its hFreeConn, and the connection cache holds
+	 * sixteen, so without this a handful of failing tracks fills it and every later
+	 * track reports "Too many open sqlConnections" instead of its own trouble.  refs
+	 * #38560 */
+	    hConnFreeNewerThan(connGeneration);
+	    }
+	errCatchReWarn(errCatch);   // errCatchStart took the warnings, hand them back
 	errCatchFree(&errCatch);
 	}
     }
@@ -103,7 +111,12 @@ for (subtdb = tdb->subtracks; subtdb != NULL; subtdb = subtdb->next)
     struct track *subtrack = trackFromTrackDb(subtdb);
     TrackHandler handler = lookupTrackHandlerClosestToHome(subtdb);
     if (handler != NULL)
+        {
+        if (multiRegionSpacesEnabled())
+            applyTrackHandler(subtrack, handler);
+        else
 	handler(subtrack);
+        }
     slAddHead(&track->subtracks, subtrack);
     subtrack->parent = track;
     if (subtdb->subtracks != NULL)

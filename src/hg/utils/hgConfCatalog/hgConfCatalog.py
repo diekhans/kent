@@ -136,11 +136,14 @@ def h(name, kind, src, default=None, note=None, public=False, verified=False,
                 line is derived data: it is recomputed for display from the
                 harvester, so an edit above a read is not a citation to fix
     default     compiled-in default if the read supplies one
-    role        for boolean flags only: "gate" (a release gate, temporary by
+    role        for boolean flags: "gate" (a release gate, temporary by
                 intent, subject to sunsetting) or "knob" (a permanent
                 deployment switch, exempt).  Every cfgOptionBooleanDefault
                 flag in the tree must be one or the other; --reconcile
-                enforces that
+                enforces that.  A setting that is not a flag can be a gate
+                too when the code it controls is temporary, such as a
+                measurement that should come out once it has run, but it
+                must then carry an explicit sunset, since it has no flip
     sunset      release by which a gate should be gone from the tree.  Omit to
                 take the default of flipped + KEEP_AFTER_FLIP; the age cache
                 supplies the flip version
@@ -290,6 +293,15 @@ RELEASE_GATES = {
                "hgTrackUi.c, which does the clearing; with it off the menu item "
                "is not offered and hgTrackUi ignores the request.  Off during "
                "QA; flip to TRUE once released."),
+        h("urlTrackOpensContainer", "flag", "hg/hgTracks/hgTracks.c",
+          default="FALSE", role="gate", verified=True, ticket="38762",
+          note="A track turned on by a link or a form, e.g. hmc=pack on the "
+               "URL, opens its hidden supertrack and hides the supertrack's "
+               "other members, by setting the same <track>_sel mark the Track "
+               "Search checkbox sends.  Read once in getTrackList(); off, such "
+               "a link sets the track's visibility but the track stays hidden "
+               "inside its supertrack.  On for genome-test and hgwdev since "
+               "2026-11-13; flip to TRUE once released."),
         h("showMouseovers", "flag", "hg/hgTracks/config.c", default="FALSE",
           role="gate", verified=True,
           note="Mouseover text on track items instead of the browser's own "
@@ -329,15 +341,12 @@ RELEASE_GATES = {
                "server-specific, since off they are.  Off during QA; "
                "flip to TRUE once released."),
         h("autoBlatBigPsl", "flag", "hg/hgBlat/hgBlat.c",
-          default="FALSE", role="gate", verified=True, ticket="32751",
+          default="TRUE", role="gate", verified=True, ticket="32751",
           note="Always create a custom track from BLAT results, so a result "
-               "page can be reopened and shared.  The read at hgBlat.c:2972 "
-               "overrides the file-scope autoBigPsl, which is initialised "
-               "FALSE at hgBlat.c:60 under the comment \"DEFAULT VALUE change "
-               "to TRUE in future\", and eleven branches downstream test it.  "
-               "Filed as a knob until that was read, on the strength of the "
-               "default being an identifier the harvester could not resolve; "
-               "a flag whose own source says to flip it later is a gate."),
+               "page can be reopened and shared.  The read in main() "
+               "overrides the file-scope autoBigPsl, now initialised TRUE, "
+               "and about a dozen branches downstream test it.  On at the "
+               "RR through hg.conf before the default was flipped TRUE."),
         h("blatShowLocus", "flag", "hg/hgBlat/hgBlat.c", default="FALSE",
           role="gate", verified=True,
           note="Show the genomic locus alongside BLAT results."),
@@ -374,10 +383,11 @@ RELEASE_GATES = {
                "(synthesizes the group) and customFactory.c (refuses a "
                "hand-written group=blat when the group does not exist).  Off "
                "during QA; flip to TRUE once released."),
-        h("genarkLiftOver", "flag", "hg/lib/genark.c", default="FALSE",
+        h("genarkLiftOver", "flag", "hg/lib/genark.c", default="TRUE",
           role="gate", verified=True,
           note="Offer liftOver between GenArk assemblies.  Four call sites in "
-               "genark.c and hdb.c."),
+               "genark.c and hdb.c, one of them under #ifdef NTONOW.  On at "
+               "the RR through hg.conf before the default was flipped TRUE."),
         h("showIgv", "flag", "hg/hgTracks/hgTracks.c", default="FALSE",
           role="gate", verified=True,
           note="An IGV link in the track hamburger menus."),
@@ -530,6 +540,25 @@ RELEASE_GATES = {
                "written while it was on draws nothing with it off, rather than "
                "this assembly's table of the same name.  A cart variable of "
                "the same name overrides it, like browser.quickLiftBarChart."),
+        h("browser.quickLiftRmsk", "flag", "hg/lib/quickLift.c",
+          default="FALSE", role="gate", verified=True, ticket="37437",
+          note="Let quickLift lift RepeatMasker tracks:  rmsk tables, "
+               "RepeatMasker Viz. (rmskJoined) tables and bigRmsk files, "
+               "reading the items from the assembly they came from and "
+               "drawing each one where the chain puts it.  Read in "
+               "quickLiftRmskEnabled() and asked by validateOneTdb() "
+               "(hg/lib/trackHub.c), which lets rmsk and bigRmsk tracks into "
+               "the quickLift hub, by quickLiftIsLiftedRmskJoined(), which "
+               "gives a lifted Viz. track its own drawing in hgTracks, by "
+               "repeatDraw() (hgTracks/rmskTrack.c), bigRmskLoadItems() "
+               "(hgTracks/bigRmskTrack.c), and by the hgc click dispatch, "
+               "which sends a click on a lifted RepeatMasker track to a page "
+               "reading the item through the chain.  Off, rmsk and bigRmsk "
+               "tracks are left out of a quickLift and a lifted Viz. track "
+               "draws as a plain bed, all as before;  a lifted rmsk or bigRmsk "
+               "left in a hub written while it was on draws nothing rather "
+               "than this assembly's data.  A cart variable of the same name "
+               "overrides it, like browser.quickLiftBarChart."),
         h("showManeInSearch", "flag", "hg/cgilib/cartJson.c",
           default="FALSE", role="gate", verified=True, ticket="38285",
           note="Pulls the MANE Select/Plus Clinical transcript out into its "
@@ -573,24 +602,9 @@ RELEASE_GATES = {
           role="gate", verified=True,
           note="The interactive tutorials.  Public since v466, five call "
                "sites across four CGIs.  Nothing is gating any more."),
-        h("canDupTracks", "flag", "hg/lib/dupTrack.c", default="TRUE",
-          role="gate", verified=True,
-          note="Duplicate-track feature.  Public since v443."),
-        h("canSnake", "flag", "hg/hgc/hgc.c", default="TRUE", role="gate",
-          verified=True,
-          note="Snake display for chain and alignment tracks.  Public since "
-               "v467."),
         h("showDownloadUi", "flag", "hg/hgTracks/hgTracks.c",
           default="TRUE", role="gate", verified=True,
           note="The download-current-track UI.  Public since v467."),
-        h("mergeRecommended", "flag", "hg/hgTracks/recTrackSets.c",
-          default="TRUE", role="gate", verified=True,
-          note="Merge behaviour for recommended track sets.  Public since "
-               "v467."),
-        h("svgBarChart", "flag", "hg/hgc/barChartClick.c", default="TRUE",
-          role="gate", verified=True,
-          note="SVG rather than raster bar charts on the details page.  "
-               "Public since v428, the longest-shipped gate still in place."),
         h("canDoHgcInPopUp", "flag", "hg/hgTracks/config.c", default="TRUE",
           role="gate", verified=True,
           note="Details pages in a popup instead of a page load.  Public "
@@ -599,9 +613,6 @@ RELEASE_GATES = {
           default="TRUE", role="gate", verified=True,
           note="The grey side-bar icons on track images.  Public since v492.  "
                "Four call sites in hgTracks.c and imageV2.c."),
-        h("trackHubsCanAddGroups", "flag", "hg/lib/hubConnect.c",
-          default="TRUE", role="gate", verified=True,
-          note="Let hubs declare their own track groups.  Public since v492."),
         h("newBotDelay", "flag", "hg/lib/botDelay.c", default="TRUE",
           role="gate", verified=True,
           note="The reworked bot-delay logic.  Public since v492."),
@@ -610,9 +621,6 @@ RELEASE_GATES = {
           note="Calculate the GC percent track at draw time instead of "
                "reading a stored table.  Public since v496, so it is inside "
                "its grace period."),
-        h("useBlatBigPsl", "flag", "hg/hgBlat/hgBlat.c", default="TRUE",
-          role="gate", verified=True,
-          note="bigPsl output from BLAT.  Public since v348."),
         h("alwaysItemRgb", "flag", "hg/cgilib/bedCart.c", default="TRUE",
           role="gate", verified=True,
           note="Honour a BED's itemRgb without requiring the track setting.  "
@@ -741,6 +749,34 @@ RELEASE_GATES = {
                "chain's whole source range is read in one piece, as before.  "
                "Sibling of quickLiftMultiChain.  hgwdev's hg.conf turns it "
                "on."),
+        h("multiRegionSpaces", "flag", "hg/lib/multiRegionSpace.c",
+          default="FALSE", role="gate", verified=True, ticket="37788",
+          note="Draw a multi-region view (exon view, gene view, custom "
+               "regions, alt haplotype) as a synthetic assembly:  "
+               "loader/regionsToChain lays the regions end to end into a "
+               "bigChain in trash/mrSpace, tracks are lifted into it with "
+               "quickLift, and the ruler is numbered in source coordinates.  "
+               "Read once, in multiRegionSpacesEnabled(), which "
+               "enterMultiRegionSpace() and the other space entry points in "
+               "hgTracks.c ask first;  every other test of the space "
+               "(multiRegionSpaceForDb(), liftedInSpace()) is FALSE until "
+               "one of them installs a space.  Off, the old virtual-"
+               "chromosome path draws the view, as before.  Needs the "
+               "hgcentral table from hg/lib/multiRegionSpaceKey.sql.  "
+               "hgwdev's hg.conf turns it on."),
+        h("multiRegionSpaceMaxRegions", "limit", "hg/lib/multiRegionSpace.c",
+          default="500000", verified=True, ticket="37788",
+          note="The most regions a multi-region space is built for.  A view "
+               "with more warns and is drawn by the old virtual-chromosome "
+               "path.  Read in multiRegionSpaceMaxRegions();  only asked "
+               "when multiRegionSpaces is on."),
+        h("multiRegionSpaceKeyName", "table", "hg/lib/multiRegionSpace.c",
+          default='"multiRegionSpaceKey"', verified=True, ticket="37788",
+          note="The hgcentral table that maps a multi-region view's "
+               "conditions to the SHA1 of its region list, so a view built "
+               "once is found again without rebuilding the list.  Read in "
+               "multiRegionSpaceKeyTable();  only asked when "
+               "multiRegionSpaces is on."),
         h("browser.quickLiftBarChart", "flag", "hg/lib/quickLift.c",
           default="FALSE", role="gate", verified=True, ticket="38490",
           note="Let quickLift lift bigBarChart tracks.  Read in "
@@ -826,6 +862,17 @@ MIRROR_KNOBS = {
                "measurably faster to draw, so both positions have a "
                "constituency.  Its companions freeTypeDir and freeTypeFont "
                "are plain values and stay."),
+        h("freeTypeTuneUI", "flag", "hg/hgTracks/config.c", default="FALSE",
+          role="knob", ticket="38562", public=True, verified=True,
+          note="Shows a block of FreeType controls on the hgTracks configure "
+               "page: pixel size and baseline per text size, glyph gamma, the "
+               "fit-to-box multiplier, hinting and the anti-aliasing target, "
+               "with a Reset FreeType button.  The freeTypeTune.* cart "
+               "variables are read only while this is on, so a server without "
+               "it draws what it always drew.  A debugging aid for tuning "
+               "small text, not a feature waiting to ship, so it stays off by "
+               "default and is a knob.  Documented in ex.hg.conf and the "
+               "mirror manual."),
         h("trustTrackDb", "flag", "hg/lib/hdb.c", default="FALSE",
           role="knob", verified=True,
           note="Skip the per-track check that a trackDb row's table or file "
@@ -1006,7 +1053,7 @@ MIRROR_KNOBS = {
                "exact value turns it on and true, 1 and yes do not, unlike "
                "every flag read through cfgOptionBooleanDefault."),
         h("sessionLoadNotice", "flag", "hg/hgTracks/hgTracks.c",
-          default="TRUE", role="knob", public=True, verified=True,
+          default="FALSE", role="gate", public=True, verified=True,
           ticket="38157",
           note="Whether hgTracks shows the note that names the session just "
                "opened and its owner, and says the browser configuration the "
@@ -1254,8 +1301,6 @@ PATHS = {
         h("hubSpaceTusdEndpoint", "url",
           "hg/hgHubConnect/trackHubWizard.c", default="NULL",
           verified=True, family="hubSpace"),
-        h("myVariantsDataDir", "path", "hg/lib/myVariants.c",
-          verified=True, note="Goes with the doMyVariants gate."),
         h("hgPhyloPlaceServerDir", "path", "hg/hgPhyloPlace/runUsher.c",
           verified=True),
         h("browser.documentRoot", "path", "hg/lib/hui.c",
@@ -1413,6 +1458,31 @@ ABUSE = {
         h("bottleneck.except", "internal", "hg/lib/botDelay.c",
           verified=True, family="bottleneck",
           note="IPs exempt from delay."),
+        h("bottleneck.serveOnFailure", "flag", "hg/lib/botDelay.c",
+          default="FALSE", role="gate", verified=True, ticket="37738",
+          family="bottleneck",
+          note="Serve the request when the bottleneck server cannot be reached, "
+               "instead of failing the CGI.  Without it an unreachable bottleneck "
+               "server takes down every CGI that consults it, which is about fifteen "
+               "of them plus das, so one process is a single point of failure for the "
+               "whole site.  hubApi follows the same gate: with it off hubApi answers "
+               "with a JSON 500, with it on hubApi serves the request like every other "
+               "CGI.  Flip it once QA has seen a browser run with the bottleneck server "
+               "stopped."),
+        h("bottleneck.failureDelay", "limit", "hg/lib/botDelay.c",
+          default='"0"', verified=True, ticket="37738", family="bottleneck",
+          note="Milliseconds to delay each request while the bottleneck server is "
+               "unreachable and bottleneck.serveOnFailure is on.  The default of 0 "
+               "serves at full speed, on the reasoning that an outage of ours should "
+               "not slow users down.  Capped at 2000."),
+        h("bottleneck.timeoutSeconds", "limit", "hg/lib/botDelay.c",
+          default='"10"', verified=True, ticket="37738", family="bottleneck",
+          note="Connect, read and write timeout on the bottleneck socket.  The stock socket "
+               "default is 120 seconds for a read and 10 for the connect, both far "
+               "longer than a rate-limit lookup can usefully take.  The connect is the "
+               "one that matters: a bottleneck host that drops packets instead of "
+               "refusing costs that much on every request.  Values above 10 are "
+               "treated as 10."),
         h("hguidIpTracking.maxIps", "limit", "hg/lib/botDelay.c",
           default='"10"', verified=True, family="hguidIpTracking"),
         h("hguidIpTracking.windowSeconds", "limit", "hg/lib/botDelay.c",
@@ -1484,7 +1554,8 @@ LOGGING = {
         h("logProxy", "debug", "hg/lib/cart.c", verified=True,
           family="proxy"),
         h("pngTimingSampleRate", "debug", "hg/hgTracks/hgTracks.c",
-          default="0", verified=True, ticket="38109",
+          default="0", verified=True, ticket="38109", role="gate",
+          sunset=508,
           note="One page load in this many measures how long the track image "
                "took to reach the reader.  hgTracks writes the rate into the "
                "page as a JavaScript variable and reportPngTiming() in "
@@ -1496,7 +1567,12 @@ LOGGING = {
                "can see, because apache stops timing once the kernel has the "
                "bytes.  Zero, or the setting left out, and nothing is written "
                "into the page, so the beacon is off.  It samples rather than "
-               "reporting every load because each report is another request."),
+               "reporting every load because each report is another request.  "
+               "A gate because the measurement is done: #38109 closed on "
+               "2026-11-03 keeping zlib level 6.  At its sunset, delete the "
+               "read in hgTracks.c, reportPngTiming() in hgTracks.js and "
+               "hg/utils/pngTiming, and any pngTimingSampleRate line left in "
+               "an hg.conf."),
     ],
 }
 
@@ -1556,13 +1632,13 @@ BRANDING = {
         h("geneTracks", "internal", "hg/lib/hgFind.c", verified=True),
         h("browser.recTrackSets", "internal", "hg/hgTracks/recTrackSets.c",
           verified=True, family="recTrackSets",
-          note="Recommended track sets.  Goes with the mergeRecommended "
-               "gate."),
+          note="Recommended track sets.  Loading one merges it into the "
+               "current cart."),
         h("browser.recTrackSetsDetectChange", "internal",
           "hg/hgTracks/recTrackSets.c", verified=True,
           family="recTrackSets",
-          note="Drives the 'session changed' banner.  The mergeRecommended "
-               "gate belongs to the same feature."),
+          note="Drives the 'session changed' banner shown after a "
+               "recommended track set is loaded."),
         h("browser.exportedDataHubs", "internal",
           "hg/lib/exportedDataHubs.c", verified=True),
         h("browser.cgiExpireMinutes", "limit",
@@ -1902,6 +1978,30 @@ AWAITING_REVIEW = {
         # --auto-register inserts new rows directly below this line.  Leave the
         # marker in place; it is how the writer finds its way in.
         # AUTO-REGISTER INSERTION POINT
+        h("hubGenomeNotFoundError", "flag", "hg/lib/cart.c", default="FALSE",
+          ticket="30832",
+          note="Written down by --auto-register, not yet reviewed by a "
+               "person.  Read with cfgOptionBooleanDefault in hg/lib/cart.c. "
+               "Came in at 79ea85d0f5f, The hub genome error pages (no "
+               "twoBitPath, and hub_<id>_<name> from another server) are now "
+               "off by default and turned on with hubGenomeNotFoundError=on "
+               "in hg.conf, refs #30832.  Needs a description and a gate or "
+               "knob call."),
+        h("browser.quickLiftMuteTriangles", "flag", "hg/lib/quickLift.c",
+          default="FALSE", ticket="38693",
+          note="Written down by --auto-register, not yet reviewed by a "
+               "person.  Read with cfgOptionBooleanDefault in "
+               "hg/lib/quickLift.c.  Came in at a789fe5ac91, quickLift: fade "
+               "the difference triangles on a chain track when they overlap. "
+               "When there are more triangles than fit side by side, they "
+               "merge into one solid band of color.  The color now moves "
+               "toward white as the overlap grows: no fade while they fit, "
+               "then 90% x (1 - 1/fill), where fill is the total triangle "
+               "width over the window width.  The faded color is opaque, so "
+               "overlapping triangles do not stack back up to full color. "
+               "Gated by browser.quickLiftMuteTriangles, cart first and then "
+               "hg.conf, off by default.  refs #38693.  Needs a description "
+               "and a gate or knob call."),
     ],
 }
 
@@ -2019,7 +2119,9 @@ def gate_lifecycle(cat, ages):
         tickets, ticket_from = ([], None)
         if hh and hasattr(hh, "ticket_for"):
             tickets, ticket_from = hh.ticket_for(name, ages)
-        shipped = v.get("default") == "TRUE"
+        # A gate that is not a flag has no default to flip.  Its code is
+        # already live, so it counts as shipped and waits for its sunset.
+        shipped = v.get("default") == "TRUE" or v.get("kind") != "flag"
         # A flip date with a FALSE default now means the flip was reverted, so
         # the flag is back to gating and the flip date must not drive a
         # deadline.
@@ -2543,8 +2645,10 @@ def check(cat, out=sys.stderr):
             print("    %-34s %s" % (n, ", ".join(s)), file=out)
 
     for v in all_vars(cat):
-        if v.get("role") == "gate" and v.get("kind") != "flag":
-            print("gate not of kind flag: %s" % v["name"], file=out)
+        if (v.get("role") == "gate" and v.get("kind") != "flag"
+                and not v.get("sunset")):
+            print("gate not of kind flag needs a sunset=: %s" % v["name"],
+                  file=out)
             problems += 1
         if v.get("sunset") and not v.get("role") == "gate":
             print("sunset on a non-gate: %s" % v["name"], file=out)

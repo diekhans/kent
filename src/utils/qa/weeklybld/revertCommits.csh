@@ -7,7 +7,7 @@ endif
 
 cd $WEEKLYBLD
 
-set table=RevertCommits.conf
+set table=$BUILDSTATE/RevertCommits.conf
 if ( ! -e $table ) then
     echo "error: $table not found."
     exit 1
@@ -117,7 +117,7 @@ while ( $#list > 0 )
 	# email the revert
 	echo "emailing the revert"
 	set mailMsg = "Commit $c has been reverted on v${BRANCHNN} branch"
-	git show --stat $c | mail -s "$mailMsg" ${BUILDMEISTEREMAIL} galt@soe.ucsc.edu browser-qa@soe.ucsc.edu
+	git show --stat $c | mail -s "$mailMsg" ${BUILDMEISTEREMAIL} browser-qa@soe.ucsc.edu
 
 	if (-d $BUILDDIR/v${BRANCHNN}_branch) then
 	    # do git pull in 64-bit build repo	
@@ -131,7 +131,7 @@ while ( $#list > 0 )
     	    popd 
 	endif
 
-	if (-e pushedToRR.flag ) then
+	if (-e $BUILDSTATE/pushedToRR.flag ) then
 	    # TODO when all is working smoothly: move the beta branch to this week's branch.
 	    # maybe we can run tagBeta.csh?
 	    echo "TODO: You will need to run tagBeta.csh to update the beta branch."

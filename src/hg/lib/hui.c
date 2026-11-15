@@ -3079,7 +3079,7 @@ if (members->count == 0)
 // First tally all subtrack counts
 int ixIn=0;
 struct slRef *subtrackRef, *subtrackRefList =
-				    trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
+			    trackDbListGetRefsToDescendantLeavesOrContainers(parentTdb->subtracks);
 struct trackDb *subtrack;
 members->subtrackCount    = needMem(members->count * sizeof(int));
 members->currentlyVisible = needMem(members->count * sizeof(int));
@@ -3359,7 +3359,9 @@ if (filtering && !sameWord(filtering,"off"))
 	    for (;abcIx < membersForAll->dimMax && membersForAll->letters[abcIx] != letter;abcIx++)
 		; // Advance to correct letter
 	    if (abcIx >= membersForAll->dimMax)
-		errAbort("Invalid 'filterComposite' trackDb setting. Dimension '%s' not found.",
+		errAbort("Invalid 'filterComposite' trackDb setting. Dimension '%s' not found: "
+			 "it must be declared in the 'dimensions' setting, and at least one "
+			 "subtrack's 'subGroups' setting must use that dimension's subgroup.",
 			 dim);
 	    if (sameWord(filterGroups[ix],"one"))
 		membersForAll->members[abcIx]->fcType = fctOne;
@@ -4436,7 +4438,7 @@ jsInlineF("$(function () { "
     "$('#filterClearButton').click( "
        "     function(ev) { ev.preventDefault(); "
        "     $('.filterBy option[value=\"All\"]').removeAttr(\"selected\");"
-       "     $('.filterBy option[Value=\"All\"]').attr('selected', 'selected');"
+       "     $('.filterBy option[Value=\"All\"]').prop('selected', true);"
        "     $('.filterBy').dropdownchecklist('refresh'); "
        " }); "
 "});");
@@ -5493,6 +5495,11 @@ for (subtrackRef = subtrackRefList; subtrackRef != NULL; subtrackRef = subtrackR
 	     && cfgTypeFromTdb(parentTdb,FALSE) != cfgNone) // but the composite is configurable.
 	    cType = cfgNone;
 	}
+    // A container (multiWig) subtrack is configured on its own hgTrackUi page, which also lists
+    // its children, so it gets a link there instead of an embedded cfg dialog.
+    boolean isContainer = (subtrack->subtracks != NULL);
+    if (isContainer)
+	cType = cfgNone;
 
     if (sortOrder == NULL && !useDragAndDrop)
 	{
@@ -5607,6 +5614,15 @@ for (subtrackRef = subtrackRefList; subtrackRef != NULL; subtrackRef = subtrackR
                     "<span class='link'>&nbsp;Configure</span></span>\n"
 	    printf(SUBTRACK_CFG_WRENCH,id, (visibleCB ? "":" disabled"));
 	    jsOnEventByIdF("click", id, "return subCfg.cfgToggle(this,\"%s\");", subtrack->track);
+	    }
+	else if (isContainer)  // a link to the container's own page; submitting the form on the
+	    {                  // way keeps any unsaved changes made here, as on supertrack pages
+	    safef(id, sizeof id, "%s_cfgLink", subtrack->track);
+	    printf("<a id='%s' href='%s?db=%s&g=%s&%s' title='Configure this track and its subtracks'>"
+		   "<img src='../images/wrench.png'>&nbsp;Configure</a>\n",
+		   id, hTrackUiForTrack(subtrack->track), db, cgiEncode(subtrack->track),
+		   cartSidUrlString(cart));
+	    jsOnEventById("click", id, "return superT.submitAndLink(this);");
 	    }
 	}
     printf("</TD>");
@@ -5732,7 +5748,7 @@ for (subtrackRef = subtrackRefList; subtrackRef != NULL; subtrackRef = subtrackR
     puts("</TD></TR>\n");
 
     boolean showCfg = trackDbSettingOn(subtrack, "showCfg");
-    if (showCfg)
+    if (showCfg && !isContainer)
         jsInlineF(" subCfg.cfgToggle(document.getElementById(\"%s_toggle\"),\"%s\");",  subtrack->track, subtrack->track);
 
     }
@@ -5894,8 +5910,10 @@ static void compositeUiSubtracks(char *db, struct cart *cart, struct trackDb *pa
 char buffer[SMALLBUF];
 struct trackDb *subtrack;
 
-// Get list of leaf subtracks to work with
-struct slRef *subtrackRef, *subtrackRefList = trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
+// Get list of leaf subtracks to work with.  Container (multiWig) subtracks are listed as a
+// single subtrack rather than as their individual children.
+struct slRef *subtrackRef, *subtrackRefList =
+                    trackDbListGetRefsToDescendantLeavesOrContainers(parentTdb->subtracks);
 
 membersForAll_t* membersForAll = membersForAllSubGroupsGet(parentTdb,NULL);
 sortOrder_t* sortOrder = sortOrderGet(cart, parentTdb);
@@ -5973,7 +5991,8 @@ assert(primarySubtrack != NULL);
 char *primaryType = getPrimaryType(primarySubtrack, parentTdb);
 char htmlIdentifier[SMALLBUF];
 
-// Get list of leaf subtracks to work with and sort them
+// Get list of leaf subtracks to work with and sort them.  Unlike compositeUiSubtracks, this
+// (used by hgTables) descends into container multiWigs, as hgTables works on individual tables.
 struct slRef *subtrackRef, *subtrackRefList =
 			    trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
 if (NULL != trackDbSetting(parentTdb, "sortOrder")
@@ -6078,9 +6097,6 @@ if (boxed)
 void snakeOption(struct cart *cart, char *name, char *title, struct trackDb *tdb)
 /* let the user choose to see the track in snake mode */
 {
-if (!cfgOptionBooleanDefault("canSnake", TRUE))
-    return;
-
 printf("<BR><B>Display data as a rearrangement graph:</B> ");
 boolean option = cartOrTdbBoolean(cart, tdb, "doSnake", FALSE);
 
@@ -6850,7 +6866,8 @@ if (max && limitMin
 static boolean showScoreFilter(struct cart *cart, struct trackDb *tdb, boolean *opened,
                                boolean boxed, boolean parentLevel,char *name, char *title,
                                char *label, char *scoreName, boolean isHighlight)
-// Shows a score filter control with minimum value and optional range
+// Shows a score filter control with minimum value and optional range.
+// label is HTML: callers must encode any text that came from a hub or a file.
 {
 char *setting = trackDbSetting(tdb, scoreName);
 if (setting)
@@ -6874,14 +6891,15 @@ if (setting)
     filterName = getScoreNameAdd(tdb, scoreName, filterByRange ? _MIN:"");
     safef(varName, sizeof(varName), "%s.%s", name, filterName);
     safef(altLabel, sizeof(altLabel), "%s%s", (filterByRange ? "Minimum " : ""),
-          htmlEncode(htmlTextStripTags(label)));
+          htmlTextStripTags(label));
     cgiMakeDoubleVarWithLimits(varName,minVal, altLabel, 0,minLimit, maxLimit);
     if (filterByRange)
         {
         printf("<TD align='left'>to<TD align='left'>");
         filterName = getScoreNameAdd(tdb, scoreName, _MAX);
         safef(varName, sizeof(varName), "%s.%s", name, filterName);
-        safef(altLabel, sizeof(altLabel), "%s%s", (filterByRange?"Maximum ":""), label);
+        safef(altLabel, sizeof(altLabel), "%s%s", (filterByRange?"Maximum ":""),
+              htmlTextStripTags(label));
         cgiMakeDoubleVarWithLimits(varName,maxVal, altLabel, 0,minLimit, maxLimit);
         }
     safef(altLabel, sizeof(altLabel), "%s", (filterByRange?"": "colspan=3"));
@@ -7119,7 +7137,8 @@ if (trackDbFilters)
 
         if (isHighlight && count == 0)
             printHighlightColorPicker(cart, tdb);
-        showScoreFilter(cart,tdb,opened,boxed,parentLevel,name,title,label,scoreName,isHighlight);
+        showScoreFilter(cart,tdb,opened,boxed,parentLevel,name,title,htmlEncode(label),scoreName,
+                        isHighlight);
         count++;
         }
     if (as != NULL)
@@ -7266,7 +7285,8 @@ if (trackDbFilters)
         if (isHighlight && count == 0)
             printHighlightColorPicker(cart, tdb);
         count++;
-        printf("<P><B>%s items in '%s' field:</B> ", isHighlight ? "Highlight": "Filter", trackDbLabel);
+        printf("<P><B>%s items in '%s' field:</B> ", isHighlight ? "Highlight": "Filter",
+               htmlEncode(trackDbLabel));
 
         char cgiVar[128];
         safef(cgiVar,sizeof(cgiVar),"%s.%s",tdb->track,filter->name);
@@ -9505,7 +9525,7 @@ memset(chked, 0, sizeof(chked));
 memset(enabd, 0, sizeof(chked));
 
 struct slRef *subtrackRef, *subtrackRefList =
-                                    trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
+                            trackDbListGetRefsToDescendantLeavesOrContainers(parentTdb->subtracks);
 struct trackDb *subtrack;
 if (dimensionX || dimensionY) // Must be an X or Y dimension
     {
@@ -9776,7 +9796,8 @@ else
 button = cgiOptionalString(buttonVar);
 if (isNotEmpty(button))
     {
-    struct slRef *tdbRefList = trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
+    struct slRef *tdbRefList =
+                    trackDbListGetRefsToDescendantLeavesOrContainers(parentTdb->subtracks);
     struct slRef *tdbRef;
     for (tdbRef = tdbRefList; tdbRef != NULL; tdbRef = tdbRef->next)
         {
@@ -9827,7 +9848,8 @@ for (i = 0; i < MAX_SUBGROUP; i++)
         button = cgiOptionalString(buttonVar);
         if (isEmpty(button))
             continue;
-	struct slRef *tdbRefList = trackDbListGetRefsToDescendantLeaves(parentTdb->subtracks);
+	struct slRef *tdbRefList =
+                    trackDbListGetRefsToDescendantLeavesOrContainers(parentTdb->subtracks);
 	struct slRef *tdbRef;
 	for (tdbRef = tdbRefList; tdbRef != NULL; tdbRef = tdbRef->next)
             {
@@ -11064,8 +11086,6 @@ sr = sqlGetResult(conn, query);
 row = sqlNextRow(sr);
 if (row != NULL)
     {
-    puts("<b>Related tracks</b>\n");
-    puts("<ul>\n");
     struct hash *otherTracksAndDesc = hashNew(0);
     char *why, *otherTrack;
     for (; row != NULL; row = sqlNextRow(sr))
@@ -11077,6 +11097,7 @@ if (row != NULL)
         }
 
     struct hashEl *hel, *helList = hashElListHash(otherTracksAndDesc);
+    boolean printedAny = FALSE;
     for (hel = helList; hel != NULL; hel = hel->next)
         {
         char *otherTrack = (char *)hel->name;
@@ -11087,12 +11108,19 @@ if (row != NULL)
             otherTdb = tdbForTrack(database, otherTrack, NULL);
         if (otherTdb)
             {
+            if (!printedAny)
+                {
+                puts("<b>Related tracks</b>\n");
+                puts("<ul>\n");
+                printedAny = TRUE;
+                }
             puts("<li>");
             printf("<a href=\"%s?db=%s&g=%s&%s\">%s</a>", hTrackUiForTrack(otherTdb->track), database, otherTdb->track, cartSidUrlString(cart), otherTdb->shortLabel);
             puts(": ");
             puts(why);
             }
         }
+    if (printedAny)
         puts("</ul>\n");
     }
 sqlFreeResult(&sr);

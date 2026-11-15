@@ -69,6 +69,11 @@ void cartParseOverHashExt(struct cart *cart, char *contents, boolean merge);
  * values which will be in separate hashEl's). If merge is TRUE, we
  * replace existing values with new values */
 
+void cartSetHubDatabase(struct cart *cart, struct hash *oldVars, char *newDatabase);
+/* Put the database that hubConnectLoadHubs chose into the cart.  If that is a change of
+ * assembly, set db in oldVars to "none", which getDbAndGenome reads as a switch: the position
+ * goes to the assembly default and the multi-region variables are dropped. */
+
 struct cart *cartNew(char *userId, char *sessionId,
 	char **exclude, struct hash *oldVars);
 /* Load up cart from user & session id's.  Exclude is a null-terminated list of
@@ -738,8 +743,17 @@ char *cartOrCfgOption(struct cart *cart, char *name);
 
 /* The user's recent hgsids, as "hgsid=unixTime ..." with the newest first.  Kept in userDb only. */
 #define RECENT_SESSIONS_VAR "recentSessions"
-/* Set when a session load happens, so hgTracks can offer the recent sessions. */
-#define hgsDidSessionLoad hgSessionPrefix "didSessionLoad"
+/* Only in a copy of the cart made just before a session load replaced it: the name of the
+ * session that was loaded, so the list of recent views can say what the copy is. */
+#define hgsPrevViewOf hgSessionPrefix "prevViewOf"
+/* Asks hgTracks to open the list of recent views, used by the My Data menu. */
+#define hgsShowRecentViews hgSessionPrefix "showRecentViews"
+/* hgsid of a copy on the recent views list: its tracks and settings go into this request's cart,
+ * a new one, so the copy itself stays as it is and stays on the list. */
+#define hgsOpenCopy hgSessionPrefix "openCopy"
+/* Value of hgsSessionJustLoaded when a session load made no copy, because the cart already had
+ * the tracks and settings of that session. */
+#define hgsNoCopyNeeded "noCopy"
 
 boolean cartRecentSessionsEnabled();
 /* Return TRUE if hg.conf turns on recent session tracking. */
@@ -747,6 +761,14 @@ boolean cartRecentSessionsEnabled();
 char *cartContentsVal(char *contents, char *var);
 /* Return the CGI-decoded value of var from a CGI-encoded cart contents string,
  * or NULL if not present.  Free the result when done. */
+
+char *cartRecentViewsJson(struct cart *cart, int *retCount);
+/* Return the list of recent views, the copies of the cart made just before a session load
+ * replaced it, as a JSON list of {hgsid, db, position, timestamp, prevViewOf}, newest first.
+ * Set *retCount to the number of copies.  Free the result when done. */
+
+/* Asks hgSession for the list of recent views as JSON, for the My Data menu on hgTracks */
+#define hgsRecentViewsJson hgSessionPrefix "recentViewsJson"
 
 struct cartDb *cartDbLoadFromId(struct sqlConnection *conn, char *table, char *secureId);
 /* Load up cartDb entry for particular ID.  Returns NULL if no such id. */

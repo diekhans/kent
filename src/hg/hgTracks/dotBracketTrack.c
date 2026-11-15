@@ -11,11 +11,18 @@
  * rnaSecStr table.  No code is shared: those items are struct rnaSecStr covering one
  * contiguous span, these are struct linkedFeatures with blocks.
  *
- * Bad data warns and falls back to drawing a plain bed rather than aborting.  Both load
- * paths in hgTracks.c do catch an errAbort out of loadItems, but the message it leaves
- * is whatever text happened to abort, the rest of the rows are lost with it, and
- * nothing catches an errAbort raised while drawing.  Reporting through networkErrMsg
- * keeps the message specific, keeps the other items, and works on either path.
+ * Bad data takes the track down and says why in its place: a row whose string does not
+ * match its blocks, a dotBracketField naming a column the file does not have, or a
+ * dotBracketColor that is not a color.  None of it is drawn around, since a structure
+ * that is quietly missing from some items is worse than a track that says what is wrong
+ * with it.  The way back to the data is the overlay checkbox on the track's configure
+ * page: with it off nothing here reads the column at all and the track draws as the
+ * plain bed it is.
+ *
+ * The report goes through networkErrMsg rather than errAbort where the message names an
+ * item, so that it can name the item rather than being whatever text happened to abort.
+ * Either way both load paths in hgTracks.c end up printing it across the track.  Nothing
+ * here reports while drawing: an errAbort raised there is caught by nobody.
  */
 
 /* Copyright (C) 2026 The Regents of the University of California
@@ -24,6 +31,8 @@
 #include "common.h"
 #include "dystring.h"
 #include "bigBed.h"
+#include "basicBed.h"
+#include "colorSpec.h"
 #include "hgTracks.h"
 #include "dotBracketTrack.h"
 
@@ -110,29 +119,6 @@ dotBracketError(tg, "track %s: %s names the column '%s', which %s.  Set %s to on
 dyStringFree(&names);
 }
 
-static boolean dotBracketParseColor(char *setting, unsigned char *r, unsigned char *g,
-                                    unsigned char *b)
-/* Read an r,g,b setting.  FALSE rather than errAbort when it is not three numbers in
- * range, so a mistyped colour is reported on the track like any other bad data instead
- * of taking the page down, which is what parseColor in trackDbCustom.c would do. */
-{
-char dupe[64], *words[4];
-int i;
-if (strlen(setting) >= sizeof dupe)
-    return FALSE;
-safecpy(dupe, sizeof dupe, setting);
-if (chopString(dupe, ", \t", words, ArraySize(words)) != 3)
-    return FALSE;
-for (i = 0; i < 3; i++)
-    {
-    if (!isAllDigits(words[i]) || (atoi(words[i]) > 255))
-        return FALSE;
-    }
-*r = atoi(words[0]);
-*g = atoi(words[1]);
-*b = atoi(words[2]);
-return TRUE;
-}
 
 static int dotBracketRestIx(struct track *tg, struct bbiFile *bbi)
 /* Index into bb->rest of the column named by the dotBracketField setting, or -1 when
@@ -199,8 +185,7 @@ return dotBracket;
 
 static void dotBracketParseItems(struct track *tg)
 /* Hang the genomic order dot-bracket string on each item.  Items merged by mergeSpan
- * are built without a bigBedInterval, so they have no string and draw as plain beds,
- * and so does any item whose string does not check out. */
+ * are built without a bigBedInterval, so they have no string and draw as plain beds. */
 {
 struct linkedFeatures *lf;
 for (lf = tg->items; lf != NULL; lf = lf->next)
@@ -210,15 +195,28 @@ for (lf = tg->items; lf != NULL; lf = lf->next)
     }
 }
 
+static boolean dotBracketWanted(struct track *tg)
+/* Is the overlay switched on for this track?  Asked at load as well as at draw: a track
+ * whose data is bad reports in place of itself, and turning the overlay off has to put
+ * the track back, not leave hiding it as the only way out. */
+{
+return cartUsualBooleanClosestToHome(cart, tg->tdb, FALSE, DOT_BRACKET_SHOW_SUFFIX, TRUE);
+}
+
 static void dotBracketLoadItems(struct track *tg)
 /* Load as a gapped bed, resolving the dot-bracket column while the bigBed is open. */
 {
 char *colorSetting = trackDbSetting(tg->tdb, DOT_BRACKET_COLOR);
-unsigned char r, g, b;
-if ((colorSetting != NULL) && !dotBracketParseColor(colorSetting, &r, &g, &b))
-    dotBracketError(tg, "track %s: %s is '%s', which is not three numbers from 0 to 255.  "
-                    "Write it the way the color setting is written, for example 0,0,255.",
-                    tg->track, DOT_BRACKET_COLOR, colorSetting);
+unsigned rgb;
+if (!dotBracketWanted(tg))
+    {
+    loadGappedBed(tg);   /* overlay off, so nothing here looks at the column or the color */
+    return;
+    }
+if ((colorSetting != NULL) && !colorSpecMayParse(colorSetting, &rgb))
+    errAbort("track %s: %s is '%s', which is not a color.  Write it as r,g,b, for example "
+             "0,0,255, or as #0000ff, or as an HTML color name.",
+             tg->track, DOT_BRACKET_COLOR, colorSetting);
 tg->customInt = dotBracketRestIx(tg, fetchBbiForTrack(tg));
 loadGappedBed(tg);
 if (tg->customInt >= 0)
@@ -252,9 +250,12 @@ static Color dotBracketColor(struct track *tg, struct hvGfx *hvg, Color itemColo
  * otherwise whatever stands out against the item. */
 {
 char *setting = trackDbSetting(tg->tdb, DOT_BRACKET_COLOR);
-unsigned char r, g, b;
-if ((setting != NULL) && dotBracketParseColor(setting, &r, &g, &b))
-    return hvGfxFindColorIx(hvg, r, g, b);
+unsigned rgb;
+if ((setting != NULL) && colorSpecMayParse(setting, &rgb))
+    {
+    struct rgbColor color = bedColorToRgb(rgb);
+    return hvGfxFindColorIx(hvg, color.r, color.g, color.b);
+    }
 return hvGfxContrastingColor(hvg, itemColor);
 }
 
@@ -324,12 +325,14 @@ return width;
 static boolean dotBracketShowing(struct track *tg, struct linkedFeatures *lf,
                                  enum trackVisibility vis)
 /* Is this item's structure on?  That is a separate question from whether there is room
- * to draw it: an item whose structure is on but too small to read is drawn as a plain
- * box, never with the direction arrows, which look like brackets of their own. */
+ * to draw it, in the row or along the bases: an item whose structure is on but too small
+ * to read is drawn as a plain box, never with the direction arrows, which look like
+ * brackets of their own.  Squish is the case that makes the two questions separate.  The
+ * row is too short there for a character, so the structure is never drawn, but the arrows
+ * have to go all the same, since a squished row of them reads as a structure. */
 {
 return (lf->extra != NULL) && (lf->components != NULL) && (vis != tvDense)
-    && (tg->heightPer >= tl.fontHeight)
-    && cartUsualBooleanClosestToHome(cart, tg->tdb, FALSE, DOT_BRACKET_SHOW_SUFFIX, TRUE);
+    && dotBracketWanted(tg);
 }
 
 static boolean dotBracketRoomForChars(struct linkedFeatures *lf, double scale, MgFont *font)
@@ -352,7 +355,8 @@ static void dotBracketDrawItemAt(struct track *tg, void *item, struct hvGfx *hvg
 {
 struct linkedFeatures *lf = item;
 boolean showing = dotBracketShowing(tg, lf, vis);
-boolean drawChars = showing && dotBracketRoomForChars(lf, scale, font);
+boolean drawChars = showing && (tg->heightPer >= tl.fontHeight)
+                    && dotBracketRoomForChars(lf, scale, font);
 boolean exonArrows = tg->exonArrows, exonArrowsAlways = tg->exonArrowsAlways;
 struct simpleFeature **exons;
 Color structColor;

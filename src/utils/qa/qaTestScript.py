@@ -414,7 +414,8 @@ driver.find_element(By.NAME, "userSeq").clear()
 driver.find_element(By.NAME, "userSeq").send_keys("AACAAAATCAAACTGTTTTTGTTGGACAATTCTCTGTTAAGCAGCTATAA\\nGCTGAATGACATTAACCGCAAAATGTAACCATAAAGGCCATAAACCCGAC\\nATTGTTAATTAATTAAATGCCTCATTAACTTTTTTAAAAACATGATTTAT\\nTCGATTCATAGAAAACTTAACCATCACTACTAAATGCACACACATGCGGT\\nTCCACATTGGCATCTTAGCCTAAGAACAGACAGGTTCAACTGTAACTGGC\\nCTTTCAGGTGGTCTATTACAGATCTGAAGACAGAGGGTGTTTCTAAACCT\\nCAAGAACCAGATTAACAGAAAACAAAGCTTGAGCAGCCTTTTTATTGCAT\\nGTGGTATCTTTTTAGCTAAGCAGAAGACAATGATAAAGAGGGGTTTTGGG\\nAAACCTCTCCCAAAGCTGTGCATTCATACCGTACCTTATCCTGTTAAGCA\\nAACTGTTCTTTTATTTTAAAGGGTTTACACTGCCACATCTGAATGGACTA")
 driver.find_element(By.NAME, "Submit").click()
 time.sleep(3)
-driver.find_element(By.LINK_TEXT, "browser").click()
+#driver.find_element(By.LINK_TEXT, "browser").click()
+driver.find_element(By.XPATH, "//a[text()='browser' or @class='blatPos']").click() # new BLAT results page links each hit's position instead of "browser"
 #driver.find_element(By.XPATH, "//td[@id='td_data_ct_blatYourSeq_5589']/div[2]/map/area").click()
 driver.find_element(By.XPATH, "//td[starts-with(@id,'td_data_ct_')]/div[2]/map/area").click() # BLAT track is now named after the gene it hits
 #driver.find_element(By.XPATH, "//div[@id='firstSection']/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[2]/td[2]/div[2]/pre/a").click()
@@ -434,10 +435,12 @@ driver.find_element(By.NAME, "userSeq").send_keys("CACACTGTGGATGACATCCAGCAGATCGC
 driver.find_element(By.NAME, "Submit").click()
 time.sleep(3)
 #driver.find_element(By.LINK_TEXT, "browser").click()
-driver.find_element(By.XPATH, "//a[text()='browser' and contains(@href,'chr16_KI270853v1_alt')]").click() # main chr16 hit is now listed before the alt hit
+#driver.find_element(By.XPATH, "//a[text()='browser' and contains(@href,'chr16_KI270853v1_alt')]").click() # main chr16 hit is now listed before the alt hit
+driver.find_element(By.XPATH, "//a[(text()='browser' or @class='blatPos') and contains(@href,'chr16_KI270853v1_alt')]").click() # new BLAT results page links each hit's position instead of "browser"
 #driver.find_element(By.XPATH, "//div[@id='firstSection']/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[2]/td[2]/div[2]/pre/a").click()
 time.sleep(3)
-driver.find_element(By.XPATH, "//td[@id='td_data_altSeqLiftOverPsl']/div[2]/map/area[3]").click()
+#driver.find_element(By.XPATH, "//td[@id='td_data_altSeqLiftOverPsl']/div[2]/map/area[3]").click()
+driver.find_element(By.XPATH, "//td[@id='td_data_altSeqLiftOverPsl']/div[2]/map/area[contains(@href,'hgc')][last()]").click() # alignment gap/insertion mouseovers now come before the item in the map
 time.sleep(3)
 driver.find_element(By.LINK_TEXT, "Show chr16_KI270853v1_alt placed on its chromosome").click()
 time.sleep(3)
@@ -451,15 +454,19 @@ driver.find_element(By.NAME, "userSeq").send_keys("GTTTTTTCTCCTATGGCATGCAGGCGACA
 driver.find_element(By.NAME, "Submit").click()
 time.sleep(3)
 #driver.find_element(By.LINK_TEXT, "browser").click()
-driver.find_element(By.XPATH, "//a[text()='browser' and contains(@href,'chr1_MU273333v1_fix')]").click() # click the fix hit, not whichever hit is listed first
+#driver.find_element(By.XPATH, "//a[text()='browser' and contains(@href,'chr1_MU273333v1_fix')]").click() # click the fix hit, not whichever hit is listed first
+driver.find_element(By.XPATH, "//a[(text()='browser' or @class='blatPos') and contains(@href,'chr1_MU273333v1_fix')]").click() # new BLAT results page links each hit's position instead of "browser"
 #driver.find_element(By.XPATH, "//div[@id='firstSection']/table/tbody/tr/td/table/tbody/tr/td/table/tbody/tr[2]/td[2]/div[2]/pre/a").click()
 time.sleep(3)
 #driver.find_element(By.XPATH, "//td[@id='td_data_fixSeqLiftOverPsl']/div[2]/map/area[4]").click()
-driver.find_element(By.XPATH, "//td[@id='td_data_fixSeqLiftOverPsl']/div[2]/map/area[3]").click()
+#driver.find_element(By.XPATH, "//td[@id='td_data_fixSeqLiftOverPsl']/div[2]/map/area[3]").click()
+driver.find_element(By.XPATH, "//td[@id='td_data_fixSeqLiftOverPsl']/div[2]/map/area[contains(@href,'hgc')][last()]").click() # alignment gap/insertion mouseovers now come before the item in the map
+time.sleep(3)
 driver.find_element(By.LINK_TEXT, "Show chr1_MU273333v1_fix placed on its chromosome").click()
 time.sleep(3)
 
 # Tests hgPcr for hg38
+driver.get(machine + "/cgi-bin/cartReset")
 driver.get(machine + "/cgi-bin/hgGateway?db=hg38")
 time.sleep(2)
 hover_and_click(driver, "tools3", "ispMenuLink")

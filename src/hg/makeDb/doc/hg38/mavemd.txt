@@ -26,36 +26,35 @@
 # Request pacing is what MaveDB asked us for directly (Benjamin Capodanno, 21 Aug 2026 email):
 # metadata at no more than two concurrent requests, score and variant endpoints sequential,
 # page at 100k variants, and back off rather than retry immediately on a 504, because the
-# gateway gives up while their query keeps running. fetchMaveMd.py implements all of this.
+# gateway gives up while their query keeps running. mavemdFetch.py implements all of this.
 
-mkdir -p /hive/data/outside/mavemd/2026-09-17
-mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
-
-# Download: the collection, one metadata record per score set, and one flat CSV per score set
-# from score-sets/{urn}/variants/data. The CSV joins the assay score to the post-mapped HGVS
-# terms, ClinGen allele IDs, gnomAD frequencies, the most recent ClinVar release, and every
-# calibration's functional class and ACMG call. All calibrations are requested, research-use-only
-# ones included; only the newest of the twelve available ClinVar releases is requested.
-~/kent/src/hg/makeDb/scripts/mavemd/fetchMaveMd.py /hive/data/outside/mavemd/2026-09-17
-
-#   MaveDB API 2026.2.7.2
-#   Collection MaveMD: 84 score sets, modified 2026-04-30
-#   Downloaded 242.1 MB in 257 seconds
-
-# Build both tracks: the per-variant bigBed and the per-score-set heatmap.
-~/kent/src/hg/makeDb/scripts/mavemd/runBuild.sh \
-    /hive/data/outside/mavemd/2026-09-17 \
-    /hive/data/genomes/hg38/bed/mavemd/2026-09-17
-
-# Scripts (all in ~/kent/src/hg/makeDb/scripts/mavemd/):
-#   fetchMaveMd.py         download the collection from the API
+# OTTO JOB. The track is rebuilt weekly by ~/kent/src/hg/utils/otto/mavemd/, which also
+# holds the converters; there are no build scripts under makeDb/scripts any more. The
+# job's own README.md is the reference for what makes a release, what the checks are, and
+# how to run it by hand. In outline:
 #
-#   mavemdLib.py           calibration choice and color tables; also puts
-#                          utils/otto/mavedb on sys.path for mavedbPlace
+#   mavemdOtto.py          lock, fetch, decide, build, check, move the /gbdb links
+#   mavemdFetch.py         the cache; downloads only score sets whose fingerprint changed
+#   mavemdBuild.py         runs the two converters and makes the bigBeds
+#   mavemdLib.py           calibration choice and color tables; also puts the sibling
+#                          directory ../mavedb on sys.path for mavedbPlace
 #   makeMaveMdVariants.py  per-variant bed12+35 -> mavemdVar.bb
 #   makeMaveMdHeatmap.py   per-score-set bed12+20 -> mavemdMap.bb
 #   mavemdVariants.as, mavemdHeatmap.as
-#   runBuild.sh            driver for the two converters plus bedToBigBed
+#
+# Live copy /hive/data/outside/otto/mavemd/, with cache/ releases/ logs/ under it, and
+# /gbdb/hg38/mavemd/{mavemdVar.bb,mavemdMap.bb,version.txt} linked into the newest
+# release. Installing the MaveDB job also replaces the placement code this job runs, so a
+# mavedbPlace.py change wants a MaveMD rebuild check before `make install` in mavedb/.
+#
+# To run it by hand, in the live directory:
+#   mavemdOtto.py -n                     # say what a run would do, write nothing
+#   mavemdOtto.py --force                # build a release even if nothing changed
+#   mavemdOtto.py --refetch              # download everything again
+#   mavemdOtto.py --outDir <dir> --force # development run, /gbdb links under <dir>/gbdb
+#
+# The sections below describe how the data is turned into the two tracks. They were
+# written against the 2026-09-17 hand build, which is what the counts refer to.
 
 # COORDINATES. Placement is not in this directory: it is mavedbPlace.py, in
 # ~/kent/src/hg/utils/otto/mavedb, shared with the MaveDB track (#38396) so that a variant
@@ -73,7 +72,8 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 # Placed, 462,486 of 481,717 measurements (96.0%), by where the offset came from:
 #   430,133  MaveDB, at the position it mapped
 #    18,513  MaveDB's offset did not fit the experiment's residues; ours did
-#     6,519  MaveDB named another isoform of the same protein
+#     6,519  placed at MaveDB's offset, but its mapped term for the row disagreed with it
+#            or was missing
 #     7,321  MaveDB did not map it at all; the experiment's own term is on a reference
 #            sequence (NM_/NC_), placed through kent's hgvsToVcf with a reference-base check
 #
@@ -94,9 +94,22 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 #                 full-protein positions, so both score sets drew at codons 1-42. Offsets
 #                 +289 and +331.
 # Reported to the MaveDB authors 2026-10; see the draft in /hive/users/lrnassar/claude/RM37800.
+# Their reply: NDUFAF6 is worse than the mapping. Every hgvs_nt in that score set starts two
+# bases downstream of the codon its hgvs_pro names, so the submitted nucleotide coordinates
+# are wrong and MaveDB's mapper faithfully followed them. Being corrected upstream. We place
+# from the p. term, the score set is not on the reference-term route, and its post-mapped
+# terms are suppressed, so none of it reaches the track; when the fix lands our label for
+# those items should simply change from "UCSC: corrected MaveDB offset" to "MaveDB".
+# mavedbPlace.codonPhases() counts, per score set, the submitted three-base
+# delins terms that do not start on a codon boundary, which is the only check that would
+# have caught this on our own. It reports and does not abort: an occasional misaligned term
+# is ordinary, because a three-base change really can straddle two codons. This build:
+#   00000663-a-1   5714 of 5714   the whole score set, the real thing
+#   00000662-0-1      1 of 2860   c.1722_1724delinsACG, a genuine straddling change
 #
-# Our own search also wins on 00000665-a/b/c/d-1 (HBB, NP_000271.1), at offset 0, where
-# MaveDB mapped nothing to disagree with.
+# Our own search also wins on 00000665-a/b/c/d-1 (PAX6, NP_000271.1), at offset 0. MaveDB
+# mapped about a third of each of those score sets, 2,832 to 2,857 rows apiece, but onto
+# another PAX6 isoform, NP_001355823.1, so its offset is not one we can use on ours.
 #
 # Score sets numbered on a domain rather than the whole protein, where MaveDB's offset fits
 # the stated residues exactly: 00000098-a-2 (+1619), 00001222-a-2 (+1672), 00001229-a-2
@@ -130,7 +143,9 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 #
 # CHECKS. All of these are in mavedbPlace.py and run on every build:
 #   - every placed row's wild-type residue must match the genome translation of its codon;
-#     an accession failing on more than 25% of its rows is dropped whole (0 accessions)
+#     an accession failing on more than 25% of its rows is dropped whole (0 accessions).
+#     accessionGate() then fails the build, because every measurement on that accession
+#     has silently gone; that is what a moved transcript or a changed GENCODE looks like.
 #   - MaveDB's genomic term, where the row also has a protein placement, must fall inside
 #     that codon. 124,335 rows carry both; 0 disagreed. crossCheckGate() stops the build
 #     above 0.5%, which is what a drift in RefSeq or in MaveDB's mapper would look like.
@@ -205,16 +220,16 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 # NON-ASCII. MaveDB free text carries en dashes and accented author names (Gronbaek-Thygesen
 # and Olvera-Leon are spelled with o-slash, ae and o-acute upstream). The browser does not
 # transcode UTF-8, so these reach the details page as
-# mojibake. mavemdLib.bedField() converts every non-ASCII character to a numeric HTML entity;
+# mojibake. mavedbPlace.bedField() converts every non-ASCII character to a numeric HTML entity;
 # 35,695 variant rows and 6 heatmap rows needed it. Re-check after any rebuild with:
 #   LC_ALL=C grep -cP '[^\x00-\x7F]' mavemdVar.bed mavemdMap.bed     # must be 0
 
 # EMPTY FIELDS IN THE MOUSEOVER. The trackDb mouseOver pattern substitutes ${field}
 # unconditionally, so an empty value leaves a dangling label ("ACMG evidence:" with nothing
 # after it). Three fields can legitimately be empty, so the converter writes a readable
-# placeholder rather than an empty string: acmgOutcome "none assigned" (63,338 items, score
+# placeholder rather than an empty string: acmgOutcome "none assigned" (167,641 items, score
 # sets that classify variants without assigning an ACMG code), funcClass "not classified"
-# (3,896 items, all from urn:mavedb:00001267-a-2, which carries no calibration at all) and
+# (3,950 items, all from urn:mavedb:00001267-a-2, which carries no calibration at all) and
 # funcScore "not reported" (5,124 items MaveDB reports as NA, all of them indeterminate).
 # The placeholders are set after the color and the BED score are computed from the raw
 # values, so neither changes, and both label fields go into their filter menus as real
@@ -236,17 +251,38 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 
 # WHICH CALIBRATION IS SHOWN. A score set can carry up to six calibrations. MaveDB curates a
 # `primary` flag with its own promote and demote API endpoints, so where that primary actually
-# classifies the variant it is their editorial choice and is used as-is: 171,467 items.
+# classifies the variant it is their editorial choice and is used as-is: 171,664 items.
 #
 # Two traps. 21 score sets have no primary at all (one of them has no calibration whatsoever).
 # A further 35 designate one that carries no
 # functionalClassifications, so it says nothing about any variant and arrives as NA on every
 # CSV row - it exists but cannot be displayed. Those are different situations and the item's
 # "Calibration chosen by" field distinguishes them, because telling a user "no primary
-# designated" about a score set that has one is simply false. 172,287 items are in that second
+# designated" about a score set that has one is simply false. 172,235 items are in that second
 # case; an earlier build mislabelled all of them.
 #
 # Every calibration's call is listed on the details page regardless of which one is displayed.
+#
+# Where no primary is available the choice follows MaveDB's own variant page, whose rule
+# Benjamin Capodanno gave us in October 2026: only a calibration that classifies the variant
+# can supply the call; prefer one that is not research use only, investigator-provided before
+# the rest; and take the strongest evidence within a tier rather than across all of them. A
+# research-use-only calibration is used only where nothing else classifies the variant,
+# 152,808 items, and those say so on the item.
+#
+# Tiering before strength is what makes this differ from ranking on evidence alone, and it
+# costs evidence codes. In 16 score sets the investigator-provided calibration gives a
+# functional class and no ACMG code while ExCALIBR, which is research use only, gives both.
+# Ranking on strength picked ExCALIBR for 104,244 items; tiering picks the investigator call,
+# so those items show no ACMG code (53,460 of them were PS3_not_met, which was already drawn
+# as no evidence, so 50,784 change colour). The two calibrations also disagree about the call
+# itself on 47,876 of them, mostly indeterminate becoming normal, which moves the functional
+# class filter and recolours all 16 of those heatmaps.
+#
+# pickDisplayCall() takes primaryEmpty so the item can say whether a primary exists but
+# classifies nothing, or exists and simply does not classify this variant. The second case
+# does not occur in this build; it is distinguished because the first is a curation gap and
+# saying "no primary designated" about either one is false.
 
 # Build results:
 #   mavemdVar.bb   462,486 items, 47 fields (bed12+35)
@@ -254,9 +290,9 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 # PROVENANCE OF THE ANNOTATIONS. clinvarRelease and gnomadVersion ride on each item that has a
 # ClinVar or gnomAD annotation (60,666 and 3,978 respectively), so a stale annotation is visible
 # rather than silent. This build is mixed: 79 score sets served ClinVar 2026-01 and 4 served
-# 2025-01 (57,182 and 3,555 items respectively), on gnomAD v4.1 throughout. A single release
+# 2025-01 (57,111 and 3,555 items respectively), on gnomAD v4.1 throughout. A single release
 # per build is not something to expect;
-# fetchMaveMd.py always asks for the newest ClinVar namespace the score set offers, so the
+# mavemdFetch.py always asks for the newest ClinVar namespace the score set offers, so the
 # release moves on its own between builds and is not pinned anywhere.
 
 # LINKOUTS. The urls setting linkifies publicationUrl, scoreSet (to its MaveDB page) and
@@ -274,12 +310,12 @@ mkdir -p /hive/data/genomes/hg38/bed/mavemd/2026-09-17
 #   mavemdMap.bb        84 items, 32 fields (bed12+20)
 #
 # Install: the bigDataUrl and dataVersion settings point at /gbdb, so the links have to be
-# repointed at each new dated build directory. runBuild.sh does not do this.
-mkdir -p /gbdb/hg38/mavemd
-cd /gbdb/hg38/mavemd
-ln -sf /hive/data/genomes/hg38/bed/mavemd/2026-09-17/mavemdVar.bb mavemdVar.bb
-ln -sf /hive/data/genomes/hg38/bed/mavemd/2026-09-17/mavemdMap.bb mavemdMap.bb
-ln -sf /hive/data/genomes/hg38/bed/mavemd/2026-09-17/version.txt  version.txt
+# repointed at each new build. The otto job does this itself, writing each link to a temp
+# name and renaming it, so there is no moment when a link is missing. These are the three
+# names it writes, and the only ones it touches:
+#   /gbdb/hg38/mavemd/mavemdVar.bb
+#   /gbdb/hg38/mavemd/mavemdMap.bb
+#   /gbdb/hg38/mavemd/version.txt
 
 # Load trackDb. "make DBS=hg38" writes the per-user sandbox tables (trackDb_$USER); the track
 # is gated "include mavemd.ra alpha" so "make alpha DBS=hg38" is what puts it on dev.
@@ -292,18 +328,17 @@ make DBS=hg38
 # has no usable single-substitution protein term, and 7,321 from the experiment's own
 # reference term.
 
-# Version file for the dataVersion trackDb setting.
-cd /hive/data/genomes/hg38/bed/mavemd/2026-09-17
-python3 -c "
-import json
-c=json.load(open('/hive/data/outside/mavemd/2026-09-17/collection.json'))
-api=open('/hive/data/outside/mavemd/2026-09-17/apiVersion.txt').read().split()[-1]
-open('version.txt','w').write('MaveDB collection modified %s (MaveDB API %s)\n'%(c['modificationDate'],api))
-"
+# Version file for the dataVersion trackDb setting: written by the otto job at release
+# time, as "MaveDB API <version>, data retrieved <date>, converted at UCSC".
 
 # trackDb: human/hg38/mavemd.ra, included from trackDb.ra as "include mavemd.ra alpha".
 # The filterValues blocks in that file are generated by makeMaveMdVariants.py --raFragment;
-# paste mavemdFilters.ra in rather than maintaining the value lists by hand. Paste it INSIDE
+# paste mavemdFilters.ra in rather than maintaining the value lists by hand. otto cannot do
+# this, because trackDb is in git, so each release compares the values the data now has
+# against the committed stanza and names anything missing in the cron mail
+# (mavemdBuild.filterDrift). Note that a value containing a comma is escaped by doubling
+# the comma, which the ClinVar term "Pathogenic/Likely pathogenic/Pathogenic, low
+# penetrance" relies on. Paste it INSIDE
 # the stanza with no blank lines: a blank line ends a .ra stanza, so blank separators between
 # the filter groups silently orphan every setting after the first one. hgTrackDb loads without
 # complaint and the filters just never appear in hgTrackUi. Check after a make with:

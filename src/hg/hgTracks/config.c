@@ -198,6 +198,48 @@ char *fontName = NULL;
 return chosenFreeTypeFont(&fontName) != NULL;
 }
 
+/* Cart variables behind the FreeType tuning controls.  They only do anything while
+ * hg.conf freeTypeTuneUI is on, so a value left behind by an experiment cannot change
+ * what a server without that setting draws. */
+#define ftTuneSizeScaleVar  "freeTypeTune.sizeScale"
+#define ftTuneBaselineVar   "freeTypeTune.baselineDelta"
+#define ftTuneGammaVar      "freeTypeTune.gamma"
+#define ftTuneBoxScaleVar   "freeTypeTune.boxScale"
+#define ftTuneHintingVar    "freeTypeTune.hinting"
+#define ftTuneAntiAliasVar  "freeTypeTune.antiAlias"
+#define ftTunePrefix        "freeTypeTune."
+
+boolean freeTypeTuneUiOn()
+/* Is the FreeType tuning section switched on?  It is a debugging aid, off everywhere
+ * until someone puts freeTypeTuneUI=on in hg.conf. */
+{
+return cfgOptionBooleanDefault("freeTypeTuneUI", FALSE);
+}
+
+void freeTypeTuneResetCart()
+/* Drop the FreeType tuning variables, returning the rendering to the stock settings. */
+{
+cartRemovePrefix(cart, ftTunePrefix);
+}
+
+static void applyFreeTypeTuning()
+/* Push the tuning from the cart into the FreeType code.  Defaults reproduce the stock
+ * rendering, so this is a no-op until someone moves a control. */
+{
+struct ftTuning tuning;
+ftTuningDefaults(&tuning);
+if (freeTypeTuneUiOn())
+    {
+    tuning.sizeScale = cartUsualDouble(cart, ftTuneSizeScaleVar, tuning.sizeScale);
+    tuning.baselineDelta = cartUsualInt(cart, ftTuneBaselineVar, tuning.baselineDelta);
+    tuning.gamma = cartUsualDouble(cart, ftTuneGammaVar, tuning.gamma);
+    tuning.boxScale = cartUsualDouble(cart, ftTuneBoxScaleVar, tuning.boxScale);
+    tuning.hinting = cartUsualInt(cart, ftTuneHintingVar, tuning.hinting);
+    tuning.antiAlias = cartUsualInt(cart, ftTuneAntiAliasVar, tuning.antiAlias);
+    }
+ftSetTuning(&tuning);
+}
+
 void initFontEngine()
 /* Load the text engine the user has picked, before anything measures a string.
  * Pack mode reserves room for an item by measuring its label, and
@@ -209,6 +251,7 @@ char *fontName = NULL;
 char *fontFile = chosenFreeTypeFont(&fontName);
 if (fontFile != NULL)
     mgLoadFontEngine(FONT_METHOD_FREETYPE, fontFile);
+applyFreeTypeTuning();
 }
 
 void maybeNewFonts(struct hvGfx *hvg)
@@ -218,6 +261,62 @@ char *fontName = NULL;
 char *fontFile = chosenFreeTypeFont(&fontName);
 if (fontFile != NULL)
     hvGfxSetFontMethod(hvg, FONT_METHOD_FREETYPE, fontName, fontFile);
+applyFreeTypeTuning();
+}
+
+static void freeTypeTuneUi()
+/* Rough controls for experimenting with the FreeType rendering, shown only when hg.conf
+ * freeTypeTuneUI is on.  Every control's default is the stock rendering. */
+{
+struct ftTuning stock;
+ftTuningDefaults(&stock);
+
+hPrintf("<TR><TD colspan=4><HR>FreeType tuning (debugging, hg.conf freeTypeTuneUI)</TD></TR>");
+
+hPrintf("<TR><TD>Size scale:<TD style=\"text-align: right\">");
+hDoubleVar(ftTuneSizeScaleVar, cartUsualDouble(cart, ftTuneSizeScaleVar, stock.sizeScale), 6);
+hPrintf("<TD>multiplies the pixel size picked for the text size, stock %g</TD></TR>",
+        stock.sizeScale);
+
+hPrintf("<TR><TD>Baseline shift:<TD style=\"text-align: right\">");
+hIntVar(ftTuneBaselineVar, cartUsualInt(cart, ftTuneBaselineVar, stock.baselineDelta), 6);
+hPrintf("<TD>pixels added to the baseline, stock %d</TD></TR>", stock.baselineDelta);
+
+hPrintf("<TR><TD>Coverage gamma:<TD style=\"text-align: right\">");
+hDoubleVar(ftTuneGammaVar, cartUsualDouble(cart, ftTuneGammaVar, stock.gamma), 6);
+hPrintf("<TD>exponent on a pixel's coverage, under 1 is heavier, stock %g</TD></TR>",
+        stock.gamma);
+
+hPrintf("<TR><TD>Box size scale:<TD style=\"text-align: right\">");
+hDoubleVar(ftTuneBoxScaleVar, cartUsualDouble(cart, ftTuneBoxScaleVar, stock.boxScale), 6);
+hPrintf("<TD>the multiplier text drawn to fit a box uses, stock %g</TD></TR>",
+        stock.boxScale);
+
+static char *hintLabels[] = {"default", "none", "force autohint"};
+static char *hintValues[] = {"0", "1", "2"};
+char hintNow[16];
+safef(hintNow, sizeof hintNow, "%d", cartUsualInt(cart, ftTuneHintingVar, stock.hinting));
+hPrintf("<TR><TD>Hinting:<TD style=\"text-align: right\">");
+cgiMakeDropListFull(ftTuneHintingVar, hintLabels, hintValues, ArraySize(hintValues),
+                    hintNow, NULL, NULL);
+hPrintf("<TD>what to ask FreeType for, stock default</TD></TR>");
+
+static char *aaLabels[] = {"Normal", "Light", "Light (Sub Pixel)", "LCD (RGB)",
+                           "LCD (BGR)", "LCD (vert. RGB)", "LCD (vert. BGR)"};
+static char *aaValues[] = {"0", "1", "2", "3", "4", "5", "6"};
+char aaNow[16];
+safef(aaNow, sizeof aaNow, "%d", cartUsualInt(cart, ftTuneAntiAliasVar, stock.antiAlias));
+hPrintf("<TR><TD>Anti-aliasing:<TD style=\"text-align: right\">");
+cgiMakeDropListFull(ftTuneAntiAliasVar, aaLabels, aaValues, ArraySize(aaValues),
+                    aaNow, NULL, NULL);
+hPrintf("<TD>the render target, stock Normal.  The LCD modes need auto-hinting to be "
+        "worth looking at.</TD></TR>");
+
+hPrintf("<TR><TD colspan=2>");
+cgiMakeButton(configFreeTypeReset, "Reset FreeType");
+hPrintf("<TD>puts every control above back to the stock setting</TD></TR>");
+
+hPrintf("<TR><TD colspan=4><HR></TD></TR>");
 }
 
 static void textFontDropDown()
@@ -733,6 +832,8 @@ if (freeTypeOn())
     textStyleDropDown();
     hPrintf("</TR>");
     hPrintf("</TR>");
+    if (freeTypeTuneUiOn())
+        freeTypeTuneUi();
     }
 
 if (cfgOptionBooleanDefault("showMouseovers", FALSE))
@@ -865,36 +966,72 @@ if (cfgOptionBooleanDefault("canDoHgcInPopUp", TRUE))
     hPrintf("<td>Enable pop-up when clicking items</td></tr>\n");
     }
 
-// My Variants navigation preference reset - stored in localStorage
+hTableEnd();
+
+// My Annotations preferences.  They are stored in localStorage, so the controls
+// have no name, stay out of the cart, and are read and written in the browser.
 if (cfgOptionBooleanDefault("doMyVariants", FALSE))
     {
-    hPrintf("<TR><TD>");
-    hPrintf("<input type='checkbox' id='resetMyVariantsNav' name='resetMyVariantsNav'>");
-    hPrintf("</TD><TD>");
-    hPrintf("Reset 'My Annotations' navigation preference (currently: <span id='myVariantsNavPrefDisplay'>not set</span>)");
+    hPrintf("<P><B>My Annotations</B></P>\n");
+
+    hPrintf("<TABLE style=\"border:0px; \">\n");
+    hPrintf("<TR><TD COLSPAN=2>");
+    hPrintf("<input type='checkbox' id='myVariantsDeleteAsk'> ");
+    hPrintf("Ask before deleting an annotation");
     hPrintf("</TD></TR>\n");
-    // Display current preference and clear localStorage on form submit if checkbox is checked
+
+    hPrintf("<TR><TD>After adding an annotation outside the current view:</TD>");
+    hPrintf("<TD><select id='myVariantsNavPref'>"
+            "<option value=''>Ask</option>"
+            "<option value='jump'>Go to the annotation</option>"
+            "<option value='stay'>Stay here</option>"
+            "</select></TD></TR>\n");
+
+    hPrintf("<TR><TD>After a search:</TD>");
+    hPrintf("<TD><select id='myVariantsSearchSavePref'>"
+            "<option value=''>Ask whether to save</option>"
+            "<option value='save'>Save without asking</option>"
+            "<option value='skip'>Do not save</option>"
+            "</select></TD></TR>\n");
+    hPrintf("</TABLE>\n");
+
+    // Show what each preference is set to now, and store what the controls say
+    // when the page is submitted.  An empty value means ask, the default.
     jsInlineF(
         "document.addEventListener('DOMContentLoaded', function() {"
-        "    var prefSpan = document.getElementById('myVariantsNavPrefDisplay');"
-        "    if (prefSpan) {"
-        "        var pref = localStorage.getItem('myVariants_navPref');"
-        "        prefSpan.textContent = pref ? pref : 'not set';"
-        "    }"
-        "    var form = document.forms['TrackForm'] || document.forms['TrackHeaderForm'];"
+        "    var prefs = [['myVariantsNavPref', 'myVariants_navPref'],"
+        "                 ['myVariantsSearchSavePref', 'myVariants_searchSavePref']];"
+        "    var delCb = document.getElementById('myVariantsDeleteAsk');"
+        "    if (delCb)"
+        "        delCb.checked = localStorage.getItem('myVariants_deleteNoConfirm') !== 'yes';"
+        "    prefs.forEach(function(p) {"
+        "        var sel = document.getElementById(p[0]);"
+        "        if (sel)"
+        "            sel.value = localStorage.getItem(p[1]) || '';"
+        "    });"
+        "    var form = document.forms['mainForm'];"
         "    if (form) {"
         "        form.addEventListener('submit', function() {"
-        "            var cb = document.getElementById('resetMyVariantsNav');"
-        "            if (cb && cb.checked) {"
-        "                localStorage.removeItem('myVariants_navPref');"
+        "            if (delCb) {"
+        "                if (delCb.checked)"
+        "                    localStorage.removeItem('myVariants_deleteNoConfirm');"
+        "                else"
+        "                    localStorage.setItem('myVariants_deleteNoConfirm', 'yes');"
         "            }"
+        "            prefs.forEach(function(p) {"
+        "                var sel = document.getElementById(p[0]);"
+        "                if (!sel)"
+        "                    return;"
+        "                if (sel.value)"
+        "                    localStorage.setItem(p[1], sel.value);"
+        "                else"
+        "                    localStorage.removeItem(p[1]);"
+        "            });"
         "        });"
         "    }"
         "});"
     );
     }
-
-hTableEnd();
 
 
 cgiDown(0.9);

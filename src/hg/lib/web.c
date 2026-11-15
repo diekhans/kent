@@ -1606,6 +1606,18 @@ webIncludeResourceFile("nice_menu.css");
 
 webIncludeLocalJs();
 
+// Links that leave the cart (Share a link and the like) cannot carry a hub assembly as
+// db=hub_<id>_<name>, see hubConnectDbUrlArgs().  Give the page's JavaScript the arguments to use
+// instead; utils.js dbUrlArgs() reads them.  Only for hub assemblies, where it costs up to four
+// hgcentral queries; the answer is kept, so the page asking again is free.
+if (db != NULL && startsWith("hub_", db))
+    {
+    char *dbArgs = hubConnectDbUrlArgs(db);
+    jsInlineF("window.hubDbUrlArgs = {db: \"%s\", args: \"%s\"};\n",
+              jsonStringEscape(db), jsonStringEscape(dbArgs));
+    freeMem(dbArgs);
+    }
+
 // Read in menu bar html
 safef(buf, sizeof(buf), "%s/%s", docRoot, navBarFile);
 fd = mustOpen(buf, "r");
@@ -1656,7 +1668,9 @@ if(scriptName)
 // back to the page they are on now.
     {
     char *loginLi = "";
-    if (loginSystemEnabled() || wikiLinkEnabled())
+    // The background process of hgSession/hgTables has no Apache environment, so the
+    // link would have no host and no /cgi-bin/, refs #38600
+    if ((loginSystemEnabled() || wikiLinkEnabled()) && !cgiVarExists("backgroundExec"))
         {
         char *userName = wikiLinkUserName();
         struct dyString *dy = dyStringNew(512);
@@ -1735,6 +1749,22 @@ if (cfgOptionBooleanDefault("pangenomeTools", FALSE))
     {
     menuStr = replaceChars(menuStr, "<!-- OPTIONAL_PANGENOME_MENU_START", "");
     menuStr = replaceChars(menuStr, "OPTIONAL_PANGENOME_MENU_END -->", "");
+    }
+
+// My Data > Restore Previous Session: the copies of the cart made in this web browser in the
+// last days just before a session or settings load replaced it, see cartKeepCopyBeforeLoad()
+// The link carries the hgsid like the other menu links, so it does not start a new cart.
+if (cartRecentSessionsEnabled())
+    {
+    struct dyString *dy = dyStringCreate("<li><a id='recentViewsMenuLink' "
+        "title='Go back to the tracks and settings you had before you opened a session or "
+        "loaded settings, in this web browser in the last 7 days' "
+        "href='../cgi-bin/hgTracks?" hgsShowRecentViews "=1");
+    if (cart)
+        dyStringPrintf(dy, "&%s=%s", cartSessionVarName(), cartSessionId(cart));
+    dyStringAppend(dy, "'>Restore Previous Session</a></li>");
+    menuStr = replaceChars(menuStr, "<!-- RECENT_VIEWS_LINK -->", dy->string);
+    dyStringFree(&dy);
     }
 
 if(scriptName)

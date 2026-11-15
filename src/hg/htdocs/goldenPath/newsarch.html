@@ -64,6 +64,281 @@ credits page</a> for acknowledgments of the data we host.</p>
 
 <a name="2026"></a>
 
+<a name="111326"></a>
+<h2>Nov. 13, 2026 &nbsp;&nbsp; New ways to sign in to the Genome Browser</h2>
+<p>
+We are excited to announce new ways to sign in to the
+<a href="/cgi-bin/hgLogin?hgLogin.do.displayLoginPage=1" target="_blank">Genome Browser</a>,
+along with new options for managing the email addresses on an account.
+</p>
+<div class="text-center">
+<img alt="Screenshot of the Genome Browser login page with the sign-in buttons: Email me a
+sign-in link, Sign in with Google, Sign in with GitHub, and Sign in with CILogon"
+src="../images/newsArchImages/hgLoginSignIn.png" width='30%'
+style="min-width: 300px; max-width: 538px; margin-left: 0;">
+<p class="gbsCaption"
+style="width: 30%; min-width: 300px; max-width: 538px; margin: 5px auto 0;"><em>The Genome
+Browser login page with the new sign-in options: Email me a sign-in link, Sign in with Google,
+Sign in with GitHub, and Sign in with CILogon.</em></p>
+</div>
+<p>
+<b>Email me a sign-in link:</b>
+The login page now offers a one-time sign-in link, sent to an account's email address or
+confirmed recovery email address. The link expires after one hour.
+</p>
+<p>
+<b>Sign in with Google, GitHub, or CILogon:</b>
+The login page also offers sign-in options for Google, GitHub, and CILogon. CILogon allows
+signing in through a university or research institution. The first time one of these options is
+used, the email address from that service is compared with existing Genome Browser accounts. If
+it matches an account's email address or confirmed recovery email address, that account is used
+to sign in. If it matches more than one account, a list of those accounts is shown to choose
+from. If there is no match, a new account can be created by choosing a username.
+</p>
+<p>
+<b>Change email and Change recovery email:</b>
+When signed in, the new &quot;Change email&quot; and &quot;Change recovery email&quot; options are
+listed in the &quot;Account&quot; pop-up, which opens when the username at the top right of the
+blue bar is clicked. They are also listed
+under &quot;Your Account Information&quot; on the
+<a href="/cgi-bin/hgSession" target="_blank">My Sessions</a> page (My Data &gt; My Sessions).
+When an email address is changed, a confirmation link is sent to the new address. Recovery email
+addresses given at sign-up are now also confirmed by email before they can be used to sign in or
+to recover an account.
+</p>
+<p>
+We welcome your feedback. Please contact our
+<a href="/contacts.html" target="_blank">mailing list</a> with any issues, suggestions, or
+feature requests.
+</p>
+
+<a name="episignatures"></a>
+<a name="110326"></a>
+<h2>Nov. 3, 2026 &nbsp;&nbsp; Episignatures: DNA methylation signatures of rare developmental
+disorders (hg38)</h2>
+<p>
+We are pleased to announce a new
+<a href="/cgi-bin/hgTrackUi?db=hg38&g=episignatures&position=default"
+target="_blank"><b>Episignatures</b></a> track collection on the human GRCh38/hg38 assembly. An
+episignature is a pattern of DNA methylation in blood that is specific to a genetic disorder. Many
+rare developmental disorders are caused by variants in genes that regulate chromatin, and
+individuals who carry them share a characteristic set of CpG sites that are more or less methylated
+than in unaffected people. Clinical labs use these signatures to classify variants of uncertain
+significance, by testing whether a patient's methylation array profile matches a known signature.
+The new tracks show the individual CpG sites that published episignatures are built from, so they
+can be viewed next to genes, regulatory elements and the methylation arrays themselves.
+</p>
+
+<p>
+The collection contains two tracks:
+</p>
+
+<ul>
+  <li>
+  <a href="/cgi-bin/hgTrackUi?db=hg38&g=methaDory&position=default"
+  target="_blank"><b>MethaDory</b></a> shows more than 260,000 CpG sites from 189 published
+  episignatures for about 100 rare disorders. The episignatures come from 74 studies and were
+  compiled by the authors of MethaDory, an open-source episignature classifier available on
+  <a href="https://github.com/f-ferraro/MethaDory" target="_blank">GitHub</a>. The track can be
+  filtered by disorder, gene, study, direction, effect size and number of episignatures, and
+  searched by Illumina probe ID. Each site is colored by the strongest effect reported there:
+  <table class="stdTbl">
+    <tr><th style="background-color:#D55E00;width:2em">&nbsp;</th>
+        <td>Strong hypermethylation &mdash; delta-beta of 0.10 or more</td></tr>
+    <tr><th style="background-color:#E69F00;width:2em">&nbsp;</th>
+        <td>Weak hypermethylation &mdash; delta-beta between 0 and 0.10</td></tr>
+    <tr><th style="background-color:#56B4E9;width:2em">&nbsp;</th>
+        <td>Weak hypomethylation &mdash; delta-beta between -0.10 and 0</td></tr>
+    <tr><th style="background-color:#0072B2;width:2em">&nbsp;</th>
+        <td>Strong hypomethylation &mdash; delta-beta of -0.10 or less</td></tr>
+    <tr><th style="background-color:#CC79A7;width:2em">&nbsp;</th>
+        <td>Conflicting &mdash; episignatures at the site disagree in direction</td></tr>
+  </table>
+  </li>
+  <li>
+  <a href="/cgi-bin/hgTrackUi?db=hg38&g=epigenCentral&position=default"
+  target="_blank"><b>EpigenCentral</b></a> shows 15,035 CpG sites from 24 episignatures for 23
+  rare disorders. The episignatures come from the
+  <a href="https://epigen.ccm.sickkids.ca/" target="_blank">EpigenCentral web portal</a> at the
+  Hospital for Sick Children in Toronto, where a methylation array sample can be classified
+  against them. The track can be filtered by episignature, direction, effect size and number of
+  episignatures. Each site is colored by the direction of the strongest effect reported there:
+  <table class="stdTbl">
+    <tr><th style="background-color:#FF5F01;width:2em">&nbsp;</th>
+        <td>Gain of methylation &mdash; positive delta-beta</td></tr>
+    <tr><th style="background-color:#0072EB;width:2em">&nbsp;</th>
+        <td>Loss of methylation &mdash; negative delta-beta</td></tr>
+  </table>
+  </li>
+</ul>
+
+<p>
+Because a CpG site is often part of the signature of several disorders, both tracks show one item
+per site, and clicking it opens a table of every episignature at that site with its disorder,
+methylation difference and p-value. The two sets were compiled independently and overlap heavily,
+but neither contains the other.
+</p>
+
+<p>
+We would like to thank Federico Ferraro and Dmitrijs Rots at Erasmus MC, University Medical Center
+Rotterdam, for compiling the MethaDory episignature sites and providing them for open release, and
+the Centre for Computational Medicine and the Weksberg lab at the Hospital for Sick Children for
+curating the EpigenCentral episignatures and building the track hub the EpigenCentral track is
+based on. The EpigenCentral track was built by Eliza Alde and Barali Kitiyakara during their
+summer internship with the Genome Browser team. We also thank Max Haeussler, Lou Nassar and Jairo
+Navarro for the development and release of these tracks.
+</p>
+
+<a name="fiberSeq"></a>
+<a name="103026"></a>
+<h2>Oct. 30, 2026 &nbsp;&nbsp; Fiber-seq chromatin accessibility and CpG methylation for 41 samples (hg38)</h2>
+<p>
+We are thrilled to announce a new
+<a href="/cgi-bin/hgTrackUi?db=hg38&g=fiberSeq&position=default" target="_blank"><b>Fiber-seq</b></a>
+track collection on the human
+<a href="/cgi-bin/hgTrackUi?db=hg38&g=fiberSeq&position=default" target="_blank">GRCh38/hg38</a>
+assembly, from the <a href="https://stergachislab.org/" target="_blank">Stergachis</a> and
+<a href="https://www.vollgerlab.com/" target="_blank">Vollger</a> labs. Fiber-seq treats
+permeabilized cells with an enzyme that adds a methyl group to any adenine it can reach, so
+nucleosomes and other bound proteins leave an unmethylated footprint on the DNA molecule
+underneath them. The molecules are
+then read on a PacBio instrument, which reports the base sequence, the added mark and the cell's
+own CpG methylation from the same read. This is the same property that DNase-seq and ATAC-seq
+measure, but it is recorded one molecule at a time, and the reads are long enough to span
+heterozygous variants. Each read can therefore be assigned to one haplotype or the other, and
+chromatin can be shown for each haplotype on its own rather than averaged across both.
+</p>
+
+<div class="text-center" style="margin-top: 1.5em;">
+<a href="https://genome.ucsc.edu/s/Lou/fiberSeqRelease" target="_blank">
+<img alt="Fiber-seq accessibility and CpG methylation at the KCNQ1OT1 imprinting control region
+on chromosome 11 in K562, where one haplotype is methylated and closed and the other is
+unmethylated and open"
+src="/images/newsArchImages/fiberSeq.png" width='95%'></a>
+<p class="gbsCaption"><em>The imprinting control region of the KCNQ1OT1 long non-coding RNA on
+chromosome 11, in K562. Across the highlighted region the CpGs on one haplotype are nearly
+all methylated and those on the other are nearly all unmethylated, and it is the unmethylated
+haplotype that is open. The bottom track plots the difference between the two, red where it is
+most significant. Loss of methylation here has been associated with Beckwith-Wiedemann
+syndrome.</em></p>
+</div>
+
+<p>
+The collection covers 41 samples: 20 lymphoblastoid lines from individuals sequenced by the
+<a href="https://humanpangenome.org/" target="_blank">Human Pangenome Reference Consortium</a>,
+16 widely used laboratory cell lines, and five rare disease cases. The container is comprised of
+two tracks:
+</p>
+
+<ul>
+  <li>
+  <a href="/cgi-bin/hgTrackUi?db=hg38&g=fiberSeqAcc&position=default"
+  target="_blank"><b>Fiber-seq Accessible</b></a> draws percent-accessible chromatin for seven
+  common cell lines on one row, a color each, so cell types can be compared at a glance. The
+  seven are GM12878, K562, HepG2, H1, HEK293T, Jurkat and the near-haploid line Hap1.
+  </li>
+  <li>
+  <a href="/cgi-bin/hgTrackUi?db=hg38&g=fiberSeqCompendium&position=default"
+  target="_blank"><b>Fiber-seq Compendium</b></a> holds everything for all 41 samples, which are
+  picked from a searchable table. For each one there is the percent-accessible signal, the FIRE
+  regulatory elements called from single molecules, CpG methylation, the same two signals split
+  by haplotype, and the methylation gap between haplotypes.
+  </li>
+</ul>
+
+<p>
+Accessibility and methylation are scaled 0 to 100 percent everywhere, so a bar height means the
+same thing in every track and every sample. The one exception is the methylation gap between
+haplotypes, which is a difference between two percentages and runs from -100 to +100.
+</p>
+
+<p>
+We thank Andrew Stergachis and Shane Neph at the University of Washington, and Mitchell Vollger
+at the University of Utah, for generating this data, for packaging it for the browser and for
+their help in arranging the tracks. Thanks to Max Haeussler and Lou Nassar for the development
+and release of these tracks.
+</p>
+
+<a name="mei"></a>
+<a name="102326"></a>
+<h2>Oct. 23, 2026 &nbsp;&nbsp; Mobile Element Insertions track collection for human (hg38, hg19 and hs1)</h2>
+<p>
+We are happy to announce a new
+<a href="/cgi-bin/hgTrackUi?db=hg38&g=mei&position=default" target="_blank"><b>Mobile
+Element Insertions</b></a> container track on
+<a href="/cgi-bin/hgTrackUi?db=hg38&g=mei&position=default" target="_blank">GRCh38/hg38</a>,
+<a href="/cgi-bin/hgTrackUi?db=hg19&g=mei&position=default" target="_blank">GRCh37/hg19</a> and
+<a href="/cgi-bin/hgTracks?db=hs1&position=default" target="_blank">T2T-CHM13/hs1</a>.
+Mobile elements are stretches of DNA that copy themselves into new genomic locations,
+and a few families remain active in people today. A site where some individuals carry
+the element and others do not is polymorphic: an important source of structural
+variation that can disrupt genes or alter their expression, and one easy to miss,
+because the inserted sequence is absent from the reference genome. The collection
+gathers callsets from long-read assemblies, short-read cohorts, and a curated
+aggregation of published studies, so you can compare them at a locus.
+</p>
+
+<br>
+
+<div class="text-center">
+  <a href="https://genome.ucsc.edu/s/Lou/MEIrelease" target="_blank">
+  <img src="../images/meiAnnouncementImage.png"
+       alt="The Mobile Element Insertions container track on hg38 at SCFD1, where a
+       full-length L1 insertion of about 6 kb is called independently by the HGSVC3,
+       HMEID, SweGen and euL1db tracks, with a fixed reference L1HS copy nearby."
+       width='95%'></a>
+  <p class="gbsCaption"><em>The collection at
+  <a href="https://genome.ucsc.edu/s/Lou/MEIrelease" target="_blank">SCFD1</a>
+  (chr14). A full-length L1 of about 6 kb is called independently from long reads
+  (HGSVC3, 11.5%), from two short-read cohorts (HMEID 12.2%, SweGen 16.9%), and is
+  recorded in euL1db from seven published studies. The euL1db Ref L1HS track shows a
+  fixed, full-length L1HS copy about 3 kb away.</em></p>
+</div>
+
+<p>
+In the HGSVC3, HMEID and SweGen tracks each insertion is drawn as a single base anchor
+block where the element attaches to the reference, colored by class:
+<b style="color:rgb(0,114,178)">Alu</b>,
+<b style="color:rgb(213,94,0)">L1</b>,
+<b style="color:rgb(0,158,115)">SVA</b>,
+<b style="color:rgb(204,121,167)">HERV-K</b> and <b>snRNA</b> in black. Filters narrow
+by class, length, allele frequency and carrier count, plus caller support and repeat
+overlap where available.
+</p>
+
+<p>
+The two euL1db tracks work differently. Items span real intervals, are colored by the
+lineage of the contributing calls, and report how many studies support them, separating
+repeatedly observed insertions from one-off reports; the companion track shows the L1-HS
+copies already in the reference genome.
+</p>
+
+<table class="stdTbl">
+  <tr><th>Track</th><th>Source</th><th>Samples</th><th>Insertions</th><th>Assemblies</th></tr>
+  <tr><td>HGSVC3 65 MEIs</td>
+      <td><a href="https://www.ncbi.nlm.nih.gov/pubmed/40702183" target="_blank">Logsdon <em>et al</em>. 2025</a></td>
+      <td>65 long-read assemblies</td><td>12,642 (hg38), 12,919 (hs1)</td><td>hg38, hs1</td></tr>
+  <tr><td>HMEID 5675 MEIs</td>
+      <td><a href="https://www.ncbi.nlm.nih.gov/pubmed/35212372" target="_blank">Niu <em>et al</em>. 2022</a></td>
+      <td>5,675 (NyuWa Chinese cohort and 1000 Genomes)</td><td>36,699</td><td>hg38</td></tr>
+  <tr><td>SweGen 1000 MEIs</td>
+      <td><a href="https://www.ncbi.nlm.nih.gov/pubmed/28832569" target="_blank">Ameur <em>et al</em>. 2017</a></td>
+      <td>1,000 Swedish</td><td>18,090</td><td>hg38</td></tr>
+  <tr><td>euL1db Insertions</td>
+      <td><a href="https://www.ncbi.nlm.nih.gov/pubmed/25352549" target="_blank">Mir <em>et al</em>. 2015</a></td>
+      <td>943 across 32 published studies</td><td>8,988 (hg38), 8,991 (hg19)</td><td>hg38, hg19</td></tr>
+  <tr><td>euL1db Ref L1HS</td>
+      <td><a href="https://www.ncbi.nlm.nih.gov/pubmed/25352549" target="_blank">Mir <em>et al</em>. 2015</a></td>
+      <td>reference genome</td><td>1,540 (hg38), 1,544 (hg19)</td><td>hg38, hg19</td></tr>
+</table>
+
+<p>
+We thank the participants who donated samples and the groups behind these callsets: the
+Human Genome Structural Variation Consortium, the HMEID team and the NyuWa and 1000
+Genomes cohorts it draws on, the SweGen project, and the euL1db curators. The tracks
+were developed by Maximilian Haeussler with QA by Lou Nassar.
+</p>
+
 <a name="newBLAT"></a>
 <a name="100726"></a>
 <h2>Oct. 7, 2026 &nbsp;&nbsp; Redesigned BLAT search and results pages</h2>
@@ -71,7 +346,7 @@ credits page</a> for acknowledgments of the data we host.</p>
 We are happy to announce a redesign of our
 <a href="/cgi-bin/hgBlat" target="_blank">BLAT</a> sequence search tool. You can
 reach the new pages from the banner on the current BLAT pages now, and they will
-become the default on <b>October 28</b>. You will be able to opt out of the new page
+become the default on <b>November 18</b>. You will be able to opt out of the new page
 and continue to use the classic interface after the change.
 </p>
 

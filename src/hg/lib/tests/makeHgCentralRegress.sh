@@ -10,7 +10,8 @@
 # use it, and anything in it may be deleted by the next run, so a test must create the rows it
 # needs and clean up after itself rather than expect to find anything.
 #
-# IT NEEDS A GRANT BEFORE ANY TEST CAN USE IT, and this script cannot make one.  The account
+# IT NEEDS A GRANT BEFORE ANY TEST CAN USE IT, and this script cannot make one.  On hgwdev
+# hgtestuser has had it since 2026-10-24; any other account needs its own.  The account
 # the browser uses for the central holds global SELECT, INSERT, CREATE and DROP, but UPDATE
 # and DELETE only on the databases it has been granted them on one at a time.  So a test can
 # create this database and insert into it, and cannot clean up after itself: the delete comes
@@ -21,8 +22,8 @@
 #
 #     GRANT UPDATE, DELETE ON hgcentralregress.* TO '<central.user>'@'localhost';
 #
-# Until that exists, a test pointed here can set rows up but not take them down, so the tests
-# that need it are held back rather than left failing.
+# Without it, a test pointed here can set rows up but not take them down, and
+# hubSpaceKeysTest fails.
 #
 # Schemas are copied from the central the caller's hg.conf already names, with CREATE TABLE
 # LIKE, rather than kept as a second copy of the schema in the tree.  A column added to
@@ -46,29 +47,20 @@ if [ ! -r "$conf" ]; then
     exit 1
 fi
 
-# An hg.conf may include another one, so follow one level of include to find the settings.
-# Later lines win in hg.conf, and so they do here.
-confValue() {
-    local key="$1"
-    local value=""
-    local inc
-    while read -r inc; do
-        if [ -r "$inc" ]; then
-            local v
-            v=$(grep "^$key=" "$inc" 2>/dev/null | tail -1 | cut -d= -f2-)
-            [ -n "$v" ] && value="$v"
-        fi
-    done < <(grep '^include ' "$conf" 2>/dev/null | sed 's/^include //')
-    local own
-    own=$(grep "^$key=" "$conf" 2>/dev/null | tail -1 | cut -d= -f2-)
-    [ -n "$own" ] && value="$own"
-    echo "$value"
-}
-
-host=$(confValue central.host)
-user=$(confValue central.user)
-password=$(confValue central.password)
-source=$(confValue central.db)
+# The settings are read by hgConfValue, which uses hgConfig.c, so includes are followed to any
+# depth and relative to the file that names them, exactly as a CGI follows them.  An earlier
+# copy of that logic here followed one level, relative to the current directory, and missed
+# central settings three includes down.  The makefile builds hgConfValue before calling this
+# and passes its path in HG_CONF_VALUE, because the binary is in bin/${MACHTYPE} and the
+# MACHTYPE make uses need not be uname -m (bash sets its own MACHTYPE when none is exported).
+hgConfValue="${HG_CONF_VALUE:-$(dirname "$0")/bin/$(uname -m)/hgConfValue}"
+if [ ! -x "$hgConfValue" ]; then
+    echo "makeHgCentralRegress.sh: no $hgConfValue;" \
+        "run make bin/\${MACHTYPE}/hgConfValue in $(dirname "$0")" >&2
+    exit 1
+fi
+{ read -r host; read -r user; read -r password; read -r source; } \
+    < <(HGDB_CONF="$conf" "$hgConfValue" central.host central.user central.password central.db)
 target=hgcentralregress
 
 if [ -z "$host" ] || [ -z "$user" ] || [ -z "$source" ]; then
@@ -82,7 +74,7 @@ fi
 
 # The tables tests have needed so far.  Add to this list rather than creating a table by hand,
 # so the next person's run has it too.
-tables="apiKeys namedSessionDb sessionDb userDb gbMembers gbNode genark"
+tables="apiKeys namedSessionDb sessionDb userDb gbMembers gbNode genark asmAlias dbDb hubStatus"
 
 sql() {
     mysql -h "$host" -u "$user" -p"$password" -N -B -e "$1"
