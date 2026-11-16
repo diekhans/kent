@@ -401,6 +401,16 @@ CONF2=$(conf_default)
 out=$(cgi_post "$CONF2" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
 check_contains "a JSON upstream error is still quoted" "$out" "unknown source haplotype"
 
+# ... but only its first part.  Copied whole into a fixed buffer, a long one
+# aborted the CGI and the page got an error page where it wanted JSON.
+LONG_ERR=$(python3 -c 'print("{\"status\":\"error\",\"error\":\"" + "x" * 3000 + "\"}")')
+start_mock --status 500 --body "$LONG_ERR"
+CONF2=$(conf_default)
+out=$(cgi_post "$CONF2" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
+check_contains "a long JSON upstream error is still an error envelope" "$out" \
+    '{"status":"error","error":"mapping server returned HTTP 500'
+check_not_contains "... and quotes only the first part" "$out" "$(printf 'x%.0s' $(seq 1 500))"
+
 start_mock --status 200 --body 'this is not json' --content-type text/plain
 CONF2=$(conf_default)
 out=$(cgi_post "$CONF2" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
@@ -778,6 +788,91 @@ else
     ra_reject "refAnnot: a hit already on the reference is not translated" \
         '{"db":"hg38","path":"GRCh38#0#chr1","start":1,"end":2,"position":"chr1:1-2","ref":"GRCh38#0"}' \
         "this hit is already on GRCh38"
+
+    # ---- files these commands write, and what they must leave alone ----
+    #
+    # Run in a directory of their own, laid out as cgi-bin is: the CGI's
+    # ../trash is then $TMP/trash, and loader/bedToBigBed is where it looks.
+    # SERVER_SOFTWARE is what makes the library use ../trash as it does under
+    # the web server; without it a command-line run keeps trash files in ".".
+    BOX="$TMP/cgi-bin"
+    mkdir -p "$BOX/loader" "$TMP/trash/quickLift"
+    for cand in "/usr/local/apache/cgi-bin-$(id -un)/loader/bedToBigBed" \
+                /usr/local/apache/cgi-bin/loader/bedToBigBed \
+                "$(command -v bedToBigBed 2>/dev/null)"; do
+        [ -n "$cand" ] && [ -x "$cand" ] && { ln -sf "$cand" "$BOX/loader/bedToBigBed"; break; }
+    done
+    enc() { ENC_S="$1" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["ENC_S"], safe=""))'; }
+    cgi_box() {                      # cgi_box <conf> <urlencoded body>
+        (cd "$BOX" && printf '%s' "$2" | env -i \
+            HGDB_CONF="$1" REMOTE_ADDR=127.0.0.1 SERVER_SOFTWARE=Apache \
+            REQUEST_METHOD=POST CONTENT_TYPE=application/x-www-form-urlencoded \
+            CONTENT_LENGTH=${#2} \
+            "$CGI" 2>&1)
+    }
+
+    # hubQuickLift-<db> names the hub hgConvert's quickLift attached for this
+    # user.  We ask the same library for the source's stanzas, and used to empty
+    # that file first.
+    THEIRS="../trash/quickLift/hub_theirs.txt"
+    printf 'hub quickLiftHubhg38\n\ngenome hg38\n\ntrack liftedEarlier\nshortLabel lifted earlier\n\n' \
+        > "$BOX/$THEIRS"
+    cp "$BOX/$THEIRS" "$TMP/theirsBefore.txt"
+    theirs_state() { cmp -s "$BOX/$THEIRS" "$TMP/theirsBefore.txt" && echo unchanged || echo changed; }
+    out=$(cgi_box "$QCONF" "cmd=liftCheck&db=hg38&hubQuickLift-hg38=$(enc "$THEIRS")")
+    check_contains "liftCheck: the source's tracks are counted" "$out" '"tracks":'
+    check_not_contains "... and the count is a number" "$out" '"tracks":null'
+    check_eq "... and hgConvert's quickLift hub is left as it was" "$(theirs_state)" "unchanged"
+    check_eq "... and no file of ours is left beside it" \
+        "$(find "$TMP/trash/quickLift" -type f | grep -c .)" "1"
+
+    # pangenomeQuickLift-<src>-<tgt> is where we keep the name of our own hub
+    # file between conversions, and that file is written over.  A cart variable
+    # can be set from a link, so a name that is not our file must not be used.
+    VICTIM="$TMP/notOurs.txt"
+    echo "somebody else's file" > "$VICTIM"
+    QL_FULL='{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38",
+      "position":"chr1:11000-12000","hideTracks":"off",
+      "blocks":[{"haplotype":"GRCh38#0#chr1","source_start":11000,"source_end":12000,
+                 "target_start":11000,"target_end":12000,"strand":"+"}]}'
+    if [ ! -x "$BOX/loader/bedToBigBed" ]; then
+        echo "  NOT RUN: the hub file checks, no bedToBigBed found"
+        notRun="the hub file checks (no bedToBigBed)"
+    else
+        out=$(cgi_box "$QCONF" \
+            "cmd=quickLift&payload=$(enc "$QL_FULL")&pangenomeQuickLift-hg38-hg38=$(enc "$VICTIM")")
+        check_contains "quickLift: a whole conversion gives a browser link" "$out" '"url":"hgTracks?db=hg38'
+        check_eq "... and a file named in the cart that is not ours is not written over" \
+            "$(head -1 "$VICTIM")" "somebody else's file"
+        check_eq "... and the hub is in our trash directory" \
+            "$(find "$TMP/trash/pangenomeQuickLift" -name 'hub*.txt' 2>/dev/null | grep -c .)" "1"
+        check_eq "... and hgConvert's quickLift hub is still as it was" "$(theirs_state)" "unchanged"
+
+        # The other half: a name that is ours is used again.  A new file for
+        # every conversion is a new hub attached to the cart every time.
+        OURS=$(cd "$BOX" && find ../trash/pangenomeQuickLift -name 'hub*.txt' | head -1)
+        out=$(cgi_box "$QCONF" \
+            "cmd=quickLift&payload=$(enc "$QL_FULL")&pangenomeQuickLift-hg38-hg38=$(enc "$OURS")")
+        check_contains "quickLift: converting again gives a link" "$out" '"url":"hgTracks?db=hg38'
+        check_eq "... through the same hub file, not a second one" \
+            "$(find "$TMP/trash/pangenomeQuickLift" -name 'hub*.txt' 2>/dev/null | grep -c .)" "1"
+    fi
+
+    # a long error from the mapping server, met while fetching the blocks
+    start_mock --status 500 --body "$LONG_ERR"
+    { echo "include $QCONF"
+      echo "pangenome.apiBase=http://127.0.0.1:$PORT"; } > "$TMP/quickliftLong.conf"
+    out=$(cgi_post_cmd "$TMP/quickliftLong.conf" quickLift \
+        '{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38",
+          "srcStart":1000,"srcEnd":2000,"tgt":"CHM13#0","position":"chr1:1-2",
+          "hideTracks":"off"}')
+    check_contains "quickLift: a long error from the mapping server is an error envelope" \
+        "$out" '{"status":"error","error":"mapping server returned HTTP 500'
+
+    # the PanLift form prints the cart's db and position into the page
+    out=$(cgi_box "$QCONF" "page=convert&db=hg38&position=$(enc "chr1:1-2'><script>alert(1)</script>")")
+    check_contains "PanLift form: drawn" "$out" "id='pgcPos'"
+    check_not_contains "... with the position escaped" "$out" "'><script>alert(1)"
 fi
 fi
 

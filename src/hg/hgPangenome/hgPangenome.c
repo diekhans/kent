@@ -979,9 +979,9 @@ else if (r.code >= 400)
     char *body = skipLeadingSpaces(r.body->string);
     if (body[0] == '{' || body[0] == '[')
         {
-        char snippet[400];
-        safef(snippet, sizeof(snippet), "%s", body);
-        emitJsonError("mapping server returned HTTP %ld: %s", r.code, snippet);
+        /* The first part only.  The precision does the cutting: safef() into
+         * a fixed buffer aborts the CGI when the text does not fit. */
+        emitJsonError("mapping server returned HTTP %ld: %.400s", r.code, body);
         }
     else if (r.code == 503)
         emitJsonError("the mapping service is unavailable (HTTP 503) - it may be "
@@ -1478,6 +1478,20 @@ return TRUE;
 
 
 
+static boolean pgIsOurHubFile(char *path)
+/* TRUE if path is a hub file pgHubName() made: in the trash directory, under
+ * pangenomeQuickLift, named hub*.txt.
+ *
+ * The name comes back out of the cart, and a cart value is not ours - it can
+ * be set from a URL or arrive in a loaded session - and the file it names is
+ * written over.  So nothing but our own file is taken from it. */
+{
+if (isEmpty(path) || !isTrashPath(path) || strstr(path, "/pangenomeQuickLift/") == NULL)
+    return FALSE;
+char *base = strrchr(path, '/') + 1;
+return startsWith("hub", base) && endsWith(base, ".txt");
+}
+
 static char *pgHubName(char *srcDb, char *tgtDb)
 /* Path of the hub file for this source/target pair, reused across conversions.
  *
@@ -1492,8 +1506,9 @@ static char *pgHubName(char *srcDb, char *tgtDb)
 char var[512];
 safef(var, sizeof(var), "pangenomeQuickLift-%s-%s", srcDb, tgtDb);
 char *name = cartOptionalString(cart, var);
-/* A saved session gets its own copy under userdata; leave that alone. */
-if (name != NULL && strstr(name, "userdata") != NULL)
+/* Only a file of ours.  That also leaves a saved session's copy alone: it is
+ * under the session-data directory, not in trash. */
+if (name != NULL && !pgIsOurHubFile(name))
     name = NULL;
 if (name != NULL)
     {
@@ -1622,32 +1637,43 @@ if (value != NULL)
 dyStringPrintf(stanza, "%s\n", line);
 }
 
-static void pgFreshLiftHub(char *db)
-/* Empty the quickLift hub file this cart is using for db, so that the next
- * trackHubBuild() writes only what the source is showing now.
+static char *pgBuildSourceHub(char *db, struct trackDb **retBadList)
+/* Have trackHubBuild() write the stanzas for what db is showing now, into a
+ * file of our own, and return its name; NULL if it could not.  The caller
+ * removes the file once it has read it.
  *
- * trackHubBuild merges its stanzas into whatever the file already holds, and
- * keeps any stanza it did not generate this time - deliberately, so that for
- * hgConvert a track lifted earlier is not lost.  For PanLift that is the wrong
- * contract: adjusting which tracks you want and converting again is the normal
- * way to use it, so the hub grows into the union of everything ever switched on
- * during the session, and a track turned off on the source goes on appearing on
- * the target.  Emptying the file first makes each conversion a snapshot.
- *
- * Truncated rather than deleted: getHubName() keeps the name in the cart only
- * while the file still opens, so deleting it would mint a new name, and a new
- * name is a new hub attached to the cart beside the old one. */
+ * trackHubBuild writes to the file the cart names in hubQuickLift-<db>, which
+ * is the hub hgConvert's quickLift has attached to this user's browser.  It
+ * also merges: a stanza already in the file stays.  Both are right for
+ * hgConvert and wrong for us.  PanLift wants only what is showing now, and
+ * has no business changing a hub that another tool attached - least of all
+ * emptying it first, which is what this code used to do.  So the cart
+ * variable is taken away for the length of the call, which makes trackHubBuild
+ * start a new file, and is put back afterwards exactly as it was. */
 {
 char var[PATH_LEN];
 safef(var, sizeof(var), "hubQuickLift-%s", db);
-char *path = cartOptionalString(cart, var);
-if (isEmpty(path) || !fileExists(path))
-    return;
-FILE *f = fopen(path, "w");
-if (f == NULL)
-    fprintf(stderr, "hgPangenome: could not empty %s: %s\n", path, strerror(errno));
+char *theirs = cloneString(cartOptionalString(cart, var));
+cartRemove(cart, var);
+
+char *built = NULL;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    built = trackHubBuild(db, cart, retBadList);
+errCatchEnd(errCatch);
+if (errCatch->gotError || isEmpty(built))
+    {
+    fprintf(stderr, "hgPangenome: trackHubBuild(%s) failed: %s\n", db,
+            errCatch->gotError ? trimSpaces(errCatch->message->string) : "no hub written");
+    built = NULL;
+    }
+errCatchFree(&errCatch);
+
+if (theirs != NULL)
+    cartSetString(cart, var, theirs);
 else
-    carefulClose(&f);
+    cartRemove(cart, var);
+return built;
 }
 
 static char *pgWriteQuickLiftHub(char *srcDb, char *srcHap, char *tgtDb, char *chainBb,
@@ -1674,20 +1700,9 @@ static char *pgWriteQuickLiftHub(char *srcDb, char *srcHap, char *tgtDb, char *c
  * The cart's "db" must already be the source assembly. */
 {
 struct trackDb *badList = NULL;
-char *built = NULL;
-pgFreshLiftHub(srcDb);
-struct errCatch *errCatch = errCatchNew();
-if (errCatchStart(errCatch))
-    built = trackHubBuild(srcDb, cart, &badList);
-errCatchEnd(errCatch);
-if (errCatch->gotError || isEmpty(built))
-    {
-    fprintf(stderr, "hgPangenome: trackHubBuild(%s) failed: %s\n", srcDb,
-            errCatch->gotError ? trimSpaces(errCatch->message->string) : "no hub written");
-    errCatchFree(&errCatch);
+char *built = pgBuildSourceHub(srcDb, &badList);
+if (built == NULL)
     return NULL;
-    }
-errCatchFree(&errCatch);
 
 /* The tracks the browser refused, in its own words, so a track the user can
  * see on the source and cannot find afterwards still gets an explanation. */
@@ -1773,7 +1788,8 @@ while (lineFileNext(lf, &line, NULL))
     if (startsWith("parent ", trimmed) || startsWith("subTrack ", trimmed))
         isChild = TRUE;
     if (startsWith("shortLabel ", trimmed))
-        safef(label, sizeof(label), "%s",
+        /* A custom track's label is the user's own text, of any length. */
+        safef(label, sizeof(label), "%.200s",
               skipLeadingSpaces(trimmed + strlen("shortLabel")));
     pgCopySetting(stanza, trimmed);
     }
@@ -1786,6 +1802,7 @@ if (inTrack)
     }
 dyStringFree(&stanza);
 lineFileClose(&lf);
+unlink(built);
 
 /* The track that draws the insertion, deletion and mismatch marks.  Same
  * stanza hubConnect.c synthesizes for a registered quickLift chain. */
@@ -1979,7 +1996,9 @@ if (r.code >= 400)
      * generic failure. */
     char *body = skipLeadingSpaces(r.body->string);
     if (body[0] == '{' || body[0] == '[')
-        safef(why, sizeof(why), "mapping server returned HTTP %ld: %s", r.code, body);
+        /* %.400s: safef() aborts when the text does not fit, and this is a
+         * body of any length. */
+        safef(why, sizeof(why), "mapping server returned HTTP %ld: %.400s", r.code, body);
     else
         safef(why, sizeof(why), "mapping server returned HTTP %ld", r.code);
     *retError = why;
@@ -2096,7 +2115,7 @@ if (ivs != NULL && ivs->type == jsonList)
     }
 if (bestSize == 0)
     {
-    safef(why, sizeof(why), "this region has no counterpart on %s", tgt);
+    safef(why, sizeof(why), "this region has no counterpart on %.200s", tgt);
     *retError = why;
     return FALSE;
     }
@@ -2202,17 +2221,10 @@ char *srcName = pgAttachAssembly(db);
 cartSetString(cart, "db", srcName);
 
 struct trackDb *badList = NULL;
-char *built = NULL;
-pgFreshLiftHub(srcName);
-struct errCatch *errCatch = errCatchNew();
-if (errCatchStart(errCatch))
-    built = trackHubBuild(srcName, cart, &badList);
-errCatchEnd(errCatch);
-boolean failed = errCatch->gotError;
-errCatchFree(&errCatch);
+char *built = pgBuildSourceHub(srcName, &badList);
 pgRestoreDb(savedDb);
 
-if (failed || isEmpty(built))
+if (built == NULL)
     {
     /* Not an answer, but not a reason to stop the user either: the conversion
      * itself will report whatever is really wrong. */
@@ -2232,6 +2244,7 @@ if (lf != NULL)
             count++;
     lineFileClose(&lf);
     }
+unlink(built);
 
 struct dyString *skipped = dyStringNew(256);
 struct trackDb *bad;
@@ -3836,8 +3849,9 @@ printf("<table class='hgPangenomeTable pgcTable' border=0>\n");
 printf("<tr><td><b>Source</b></td>\n");
 printf("<td><div id='pgcSrcLabel' class='pgcCurrent'></div>\n");
 printf("<input type='hidden' id='pgcSrcHap'>\n");
-printf("<input type='hidden' id='pgcSrcDb' value='%s'>\n", db);
-printf("<input type='hidden' id='pgcPos' value='%s'>\n", position);
+/* Both come from the cart, which a link can fill in, so they are escaped. */
+printf("<input type='hidden' id='pgcSrcDb' value='%s'>\n", htmlEncode(db));
+printf("<input type='hidden' id='pgcPos' value='%s'>\n", htmlEncode(position));
 printf("<div id='pgcSrcNote' class='pgMuted'></div>\n");
 printf("<div class='pgMuted'>To change the region, go to it in the "
        "<a href='../cgi-bin/hgTracks'>Genome Browser</a>.</div>"
