@@ -101,8 +101,7 @@ conf_default() {
         "pangenome.maxSeqLen=100" \
         "pangenome.maxRequestBytes=5000" \
         "pangenome.maxLiftSpan=10000000" \
-        "pangenome.maxLiftTargets=10" \
-        "pangenome.maxLiftTargetMb=0" \
+        "pangenome.maxChosenTargets=10" \
         "pangenome.timeoutSecs=10"
     echo "$TMP/hg.conf"
 }
@@ -490,7 +489,7 @@ check_not_contains "unknown cmd does not emit an API error envelope" "$out" '"st
 
 
 # ======================================= G. coordinate translation (liftover)
-section "coordinate translation: cmd=liftover and cmd=haplotypes"
+section "coordinate translation"
 
 # earlier sections restarted the mock on other ports; get a fresh one and
 # rebuild the confs that point at it
@@ -499,38 +498,35 @@ CONF=$(conf_default)
 mk_conf "$TMP/tok.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
                         "pangenome.apiToken=test-token-abc123"
 
-LIFT_OK='{"src":"HG00097#1#CM094066.1","start":19113,"end":19137,"tgt":"HG01234#2"}'
+LIFT_OK='{"src":"HG00097#1#CM094066.1","start":19113,"end":19137,"tgt":["HG01234#2"]}'
 
+# The plain block-by-block command is not offered any more: PanLift asks for
+# the summary, and a chain's blocks are fetched by the server itself.
 : > "$REC"
-out=$(cgi_post_cmd "$CONF" liftover "$LIFT_OK")
-check_eq       "liftover forwarded once" "$(mock_count)" "1"
-check_eq       "liftover forwarded as POST" "$(mock_field method)" "POST"
-check_eq       "liftover hits /api/v1/liftover" "$(mock_field path)" "/api/v1/liftover"
-check_eq       "liftover sent as application/json" "$(mock_field content_type)" "application/json"
-check_eq       "liftover payload forwarded byte-for-byte" "$(mock_field body)" "$LIFT_OK"
-check_contains "liftover intervals passed through" "$out" '"intervals"'
-check_contains "interval keeps its full 3-field contig" "$out" 'HG01234#2#CM0987.1'
-check_contains "a reverse-strand piece survives" "$out" '"strand": "-"'
+out=$(cgi_post_cmd "$CONF" liftover '{"src":"HG00097#1#CM094066.1","start":19113,"end":19137,"tgt":"HG01234#2","blocks":true}')
+check_eq "cmd=liftover is gone: nothing is sent to the mapping server" "$(mock_count)" "0"
 
-# an array of targets is a legal payload too (one request, many haplotypes)
-: > "$REC"
-LIFT_MULTI='{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0","grch38#0"]}'
-out=$(cgi_post_cmd "$CONF" liftover "$LIFT_MULTI")
-check_eq "array tgt accepted and forwarded" "$(mock_field body)" "$LIFT_MULTI"
+section "where a region lands, summarized (cmd=liftoverAll)"
 
-section "every haplotype at once (cmd=liftoverAll)"
-
-# What goes upstream is rebuilt from src/start/end alone: always "*", always
-# the summary, whatever else the page sent.
+# What goes upstream is rebuilt from the checked fields alone: the summary,
+# for every haplotype or for the ones named, whatever else the page sent.
 : > "$REC"
 out=$(cgi_post_cmd "$CONF" liftoverAll \
-    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0"],"blocks":true}')
+    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"blocks":true,"other":1}')
 check_eq       "liftoverAll forwarded once" "$(mock_count)" "1"
+check_eq       "liftoverAll forwarded as POST" "$(mock_field method)" "POST"
 check_eq       "liftoverAll hits /api/v1/liftover" "$(mock_field path)" "/api/v1/liftover"
+check_eq       "liftoverAll sent as application/json" "$(mock_field content_type)" "application/json"
 sent=$(mock_field body | tr -d ' ')
-check_eq       "liftoverAll asks for every haplotype, summarized" "$sent" \
+check_eq       "with no targets it asks for every haplotype, summarized" "$sent" \
     '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":"*","summary":true}'
 check_contains "liftoverAll answer passed through" "$out" '"intervals"'
+: > "$REC"
+cgi_post_cmd "$CONF" liftoverAll \
+    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0","HG01234#2"],"blocks":true}' > /dev/null
+sent=$(mock_field body | tr -d ' ')
+check_eq       "with targets it asks for those, summarized, and never for blocks" "$sent" \
+    '{"src":"HG00097#1#CM094066.1","start":10,"end":20,"tgt":["chm13#0","HG01234#2"],"summary":true}'
 : > "$REC"
 out=$(cgi_post_cmd "$CONF" liftoverAll '{"src":"HG00097#1","start":10,"end":20}')
 check_contains "liftoverAll checks the source path" "$out" "full contig path"
@@ -542,36 +538,34 @@ out=$(cgi_post_cmd "$TMP/small.conf" liftoverAll '{"src":"HG00097#1#CM094066.1",
 check_contains "an oversized answer is refused" "$out" "too large to show"
 check_contains "and comes back as our error" "$out" '"status":"error"'
 
-section "liftover input validation (server-side, before forwarding)"
+section "translation input validation (server-side, before forwarding)"
 
 lift_reject() {                      # lift_reject <label> <payload> <expected text>
     : > "$REC"
     local o
-    o=$(cgi_post_cmd "$CONF" liftover "$2")
+    o=$(cgi_post_cmd "$CONF" liftoverAll "$2")
     check_contains "$1" "$o" "$3"
     check_eq       "$1 - not forwarded" "$(mock_count)" "0"
 }
 
 lift_reject "src must be a full contig path" \
-    '{"src":"HG00097#1","start":1,"end":2,"tgt":"chm13#0"}' "full contig path"
+    '{"src":"HG00097#1","start":1,"end":2,"tgt":["chm13#0"]}' "full contig path"
 lift_reject "missing src rejected" \
-    '{"start":1,"end":2,"tgt":"chm13#0"}' "missing 'src'"
+    '{"start":1,"end":2,"tgt":["chm13#0"]}' "missing 'src'"
 lift_reject "missing start/end rejected" \
-    '{"src":"a#1#c","tgt":"chm13#0"}' "missing 'start' or 'end'"
+    '{"src":"a#1#c","tgt":["chm13#0"]}' "missing 'start' or 'end'"
 lift_reject "non-numeric coordinates rejected" \
-    '{"src":"a#1#c","start":"x","end":"y","tgt":"chm13#0"}' "must be numbers"
+    '{"src":"a#1#c","start":"x","end":"y","tgt":["chm13#0"]}' "must be numbers"
 lift_reject "end must exceed start" \
-    '{"src":"a#1#c","start":50,"end":50,"tgt":"chm13#0"}' "greater than"
+    '{"src":"a#1#c","start":50,"end":50,"tgt":["chm13#0"]}' "greater than"
 lift_reject "negative start rejected" \
-    '{"src":"a#1#c","start":-5,"end":10,"tgt":"chm13#0"}' "negative"
+    '{"src":"a#1#c","start":-5,"end":10,"tgt":["chm13#0"]}' "negative"
 lift_reject "over-span rejected at the 10Mb cap" \
-    '{"src":"a#1#c","start":0,"end":10000001,"tgt":"chm13#0"}' "limit 10000000"
-lift_reject "missing tgt rejected" \
-    '{"src":"a#1#c","start":1,"end":2}' "'tgt' must be"
+    '{"src":"a#1#c","start":0,"end":10000001,"tgt":["chm13#0"]}' "limit 10000000"
 lift_reject "empty tgt array rejected" \
-    '{"src":"a#1#c","start":1,"end":2,"tgt":[]}' "empty"
-# each target is a separate traversal upstream; a request naming them all can
-# take the mapping service down, so the cap is enforced here too
+    '{"src":"a#1#c","start":1,"end":2,"tgt":[]}' "'tgt' must be a list of haplotypes"
+# a reader may choose so many haplotypes and no more; past that the question is
+# about every haplotype, which is asked without a list
 many=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(11)]))')
 lift_reject "more than 10 targets rejected" \
     "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$many}" \
@@ -579,34 +573,15 @@ lift_reject "more than 10 targets rejected" \
 
 : > "$REC"
 ten=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(10)]))')
-out=$(cgi_post_cmd "$CONF" liftover "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$ten}")
+out=$(cgi_post_cmd "$CONF" liftoverAll "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$ten}")
 check_eq "exactly 10 targets accepted (boundary)" "$(mock_count)" "1"
-
-# The cost of a translation is span x targets, not either alone: the mapping
-# service traverses once per target and serves one request at a time.  Capping
-# each half separately is what let 10 Mb x 10 targets through as ~110 s of
-# exclusive backend time.
-mk_conf "$TMP/budget.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
-    "pangenome.maxLiftSpan=10000000" "pangenome.maxLiftTargets=10" \
-    "pangenome.maxLiftTargetMb=5"
-four=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(4)]))')
-out=$(cgi_post_cmd "$TMP/budget.conf" liftover \
-    "{\"src\":\"a#1#c\",\"start\":0,\"end\":2000000,\"tgt\":$four}")
-check_contains "span x targets over budget rejected" "$out" \
-    "megabase-assemblies"
-
-: > "$REC"
-two=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(2)]))')
-out=$(cgi_post_cmd "$TMP/budget.conf" liftover \
-    "{\"src\":\"a#1#c\",\"start\":0,\"end\":2000000,\"tgt\":$two}")
-check_eq "within budget accepted (2 x 2Mb = 4)" "$(mock_count)" "1"
 
 # Ours must fire below cheapcgi's own 1 MB cap, which aborts with an HTML page
 # a JSON client can only report as "Unexpected token '<'".
 mk_conf "$TMP/big.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
     "pangenome.maxRequestBytes=2000"
 big=$(python3 -c 'print("{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"pad\":\"" + "x"*4000 + "\"}")')
-out=$(cgi_post_cmd "$TMP/big.conf" liftover "$big")
+out=$(cgi_post_cmd "$TMP/big.conf" liftoverAll "$big")
 check_contains "oversized payload rejected as JSON, not HTML" "$out" \
     "request too large"
 check_not_contains "oversized payload does not emit an HTML page" "$out" "DOCTYPE"
@@ -616,14 +591,14 @@ lift_reject "malformed JSON rejected without aborting" \
 
 # A target is a haplotype name and nothing else.  The limits above count the
 # targets, and a word the mapping server reads as "all of them" counts as one.
-for bad in '"*"' '"all"' '"HG01234"' '"HG01234#2 x"' '"a#b#c#d"' '["HG01234#2","*"]' \
-           '["HG01234#2",5]' '[["HG01234#2"]]'; do
+for bad in '"*"' '"HG01234#2"' '["all"]' '["HG01234"]' '["HG01234#2 x"]' '["a#b#c#d"]' \
+           '["HG01234#2","*"]' '["HG01234#2",5]' '[["HG01234#2"]]'; do
     lift_reject "tgt $bad refused" \
-        "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$bad}" "'tgt' must name haplotypes"
+        "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$bad}" "'tgt' must be a list of haplotypes"
 done
-for good in '"HG01234#2"' '"hg01234#2"' '"HG01234#2#CM0987.1"' '["CHM13#0","GRCh38#0"]'; do
+for good in '["HG01234#2"]' '["hg01234#2"]' '["HG01234#2#CM0987.1"]' '["CHM13#0","GRCh38#0"]'; do
     : > "$REC"
-    cgi_post_cmd "$CONF" liftover "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$good}" > /dev/null
+    cgi_post_cmd "$CONF" liftoverAll "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$good}" > /dev/null
     check_eq "tgt $good accepted" "$(mock_count)" "1"
 done
 : > "$REC"
@@ -635,7 +610,7 @@ cgi_post_cmd "$CONF" surject '{"tgt":"CHM13#0","job_id":"job1","name":"r1"}' > /
 check_eq "surject: a haplotype name accepted" "$(mock_count)" "1"
 
 : > "$REC"
-out=$(cgi_post_cmd "$CONF" liftover '{"src":"a#1#c","start":0,"end":10000000,"tgt":"chm13#0"}')
+out=$(cgi_post_cmd "$CONF" liftoverAll '{"src":"a#1#c","start":0,"end":10000000,"tgt":["chm13#0"]}')
 check_eq "exactly at the span cap is accepted" "$(mock_count)" "1"
 
 section "reachable-targets query (cmd=liftoverTargets)"
@@ -674,16 +649,16 @@ check_contains "names match our assembly-table keys" "$out" 'hg00097#1'
 
 # auth + failure behaviour apply to the new routes too
 : > "$REC"
-cgi_post_cmd "$TMP/tok.conf" liftover "$LIFT_OK" > /dev/null
-check_eq "token sent on liftover" "$(mock_field token)" "test-token-abc123"
+cgi_post_cmd "$TMP/tok.conf" liftoverAll "$LIFT_OK" > /dev/null
+check_eq "token sent on a translation" "$(mock_field token)" "test-token-abc123"
 : > "$REC"
 cgi_get "$TMP/tok.conf" "cmd=haplotypes" > /dev/null
 check_eq "token sent on haplotypes" "$(mock_field token)" "test-token-abc123"
 
-out=$(cgi_post_cmd "$TMP/dead.conf" liftover "$LIFT_OK")
-check_contains "unreachable middleware reported on liftover" "$out" "could not reach mapping server"
-out=$(cgi_post_cmd "$TMP/noapi.conf" liftover "$LIFT_OK")
-check_contains "missing apiBase reported on liftover" "$out" "apiBase is not configured"
+out=$(cgi_post_cmd "$TMP/dead.conf" liftoverAll "$LIFT_OK")
+check_contains "unreachable middleware reported on a translation" "$out" "could not reach mapping server"
+out=$(cgi_post_cmd "$TMP/noapi.conf" liftoverAll "$LIFT_OK")
+check_contains "missing apiBase reported on a translation" "$out" "apiBase is not configured"
 
 section "alignments per sequence (server-side ceiling)"
 

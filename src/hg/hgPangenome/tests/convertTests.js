@@ -33,6 +33,13 @@ function startPage(opts) {
             calls.push({ url: String(url), opts: o });
             var u = String(url), b = (o && o.body) || '';
             var body;
+            var own = opts.respond ? opts.respond(u, b) : undefined;
+            if (own !== undefined)
+                return Promise.resolve(own).then(function (answer) {
+                    return { ok: true, status: 200,
+                             json: function () { return Promise.resolve(answer); },
+                             text: function () { return Promise.resolve(JSON.stringify(answer)); } };
+                });
             if (u.indexOf('cmd=contigs') >= 0)
                 // Both spellings, as the real endpoint returns: these hubs set
                 // "chromAuthority ucsc", so the browser shows chr1 where the
@@ -50,7 +57,7 @@ function startPage(opts) {
                 // deliberately lower-cased, as the published contract shows
                 body = opts.targets || { haplotypes: ['chm13#0', 'hg01234#2'] };
             else
-                body = opts.liftover || { intervals: [] };
+                body = opts.liftover || { summary: [] };
             return Promise.resolve({
                 ok: true, status: 200,
                 json: function () { return Promise.resolve(body); },
@@ -67,7 +74,6 @@ function startPage(opts) {
         defaultPosition: 'chr9:145458455-145495201',
         defaultTarget: 'grch38#0',
         minTargetCoverage: 10,
-        maxLiftTargets: 3,
     };
     Object.keys(opts.config || {}).forEach(function (k) {
         c.window.pangenomeConfig[k] = opts.config[k];
@@ -75,6 +81,17 @@ function startPage(opts) {
     c.fireReady();
     c.calls = calls;
     return c;
+}
+
+// The service's summary answer: one entry per haplotype asked for.
+function piece(contig, start, end, strand, ss, se) {
+    return { contig: contig, start: start, end: end, strand: strand,
+             source_start: ss, source_end: se };
+}
+function summ(entries) {
+    return { summary: entries.map(function (e) {
+        return { haplotype: e[0], pieces: e[1], mapped_bp: e[2] };
+    }), warnings: [] };
 }
 
 function text(c) { return c.el.pgcResults.textContent.replace(/\s+/g, ' '); }
@@ -264,10 +281,6 @@ t.test('no plot with pcLAI off, or with fewer than two regions to plot', functio
 });
 
 t.suite('every haplotype at once (page=liftAll)');
-function piece(contig, start, end, strand, ss, se) {
-    return { contig: contig, start: start, end: end, strand: strand,
-             source_start: ss, source_end: se };
-}
 t.test('overlapping pieces on one contig and strand are one place', function () {
     var A = startPage().api;
     // The shape the service sends in a duplicated region: one real piece, then
@@ -364,98 +377,6 @@ t.test('the page is named by the source path and interval', function () {
     var u = c.api.liftAllUrl({ src: 'HG00097#1#CM094066.1', start: 100, end: 200 });
     t.contains(u, 'page=liftAll&src=HG00097%231%23CM094066.1&start=100&end=200', 'source and interval');
     t.contains(u, 'hgsid=SID1', 'and the cart');
-});
-
-t.suite('block-level liftover responses');
-
-t.test('blocks are split by target haplotype, lower-cased', function () {
-    var g = pg.groupBlocks([
-        { haplotype: 'HG00235#2#CM094399.1', source_start: 0, source_end: 10,
-          target_start: 100, target_end: 110, strand: '+' },
-        { haplotype: 'HG00235#2#JBHIKM010000010.1', source_start: 20, source_end: 30,
-          target_start: 5, target_end: 15, strand: '+' },
-        { haplotype: 'HG00097#1#CM090084.1', source_start: 0, source_end: 5,
-          target_start: 7, target_end: 12, strand: '-' }
-    ]);
-    t.eq(Object.keys(g).length, 2, 'two haplotypes');
-    t.eq(g['hg00235#2'].length, 2, 'both contigs stay with their haplotype');
-    t.eq(g['hg00097#1'].length, 1, 'the other haplotype is separate');
-});
-
-t.test('a haplotype with no contig field is ignored, not crashed on', function () {
-    var g = pg.groupBlocks([{ haplotype: 'bogus', target_start: 1, target_end: 2 }]);
-    t.eq(Object.keys(g).length, 0, 'dropped');
-});
-
-t.test('blocks collapse back into one interval per contig and strand', function () {
-    var iv = pg.blocksAsIntervals([
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 133234194,
-          target_end: 133234924, strand: '+' },
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 133234925,
-          target_end: 133234948, strand: '+' },
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 133235057,
-          target_end: 133235189, strand: '+' }
-    ]);
-    t.eq(iv.length, 1, 'one interval');
-    t.eq(iv[0].start, 133234194, 'spans from the first block');
-    t.eq(iv[0].end, 133235189, 'to the last');
-});
-
-t.test('the collapsed interval records how much actually aligned', function () {
-    // the real HG02486 case: four blocks with a 19.8kb hole between them, so
-    // the outer span is more than twice what carries over
-    var iv = pg.blocksAsIntervals([
-        { haplotype: 'HG02486#1#CM088192.1', target_start: 140243497,
-          target_end: 140244117, strand: '+' },
-        { haplotype: 'HG02486#1#CM088192.1', target_start: 140244118,
-          target_end: 140254763, strand: '+' },
-        { haplotype: 'HG02486#1#CM088192.1', target_start: 140274595,
-          target_end: 140278498, strand: '+' },
-        { haplotype: 'HG02486#1#CM088192.1', target_start: 140278498,
-          target_end: 140280255, strand: '+' }
-    ]);
-    t.eq(iv.length, 1, 'one interval');
-    t.eq(iv[0].end - iv[0].start, 36758, 'span covers the whole extent');
-    t.eq(iv[0].mapped, 16925, 'aligned bases exclude the hole');
-    t.eq(iv[0].pieces, 4, 'and it remembers how many pieces');
-});
-
-t.test('a gapless region reports mapped equal to its span', function () {
-    var iv = pg.blocksAsIntervals([
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 100,
-          target_end: 200, strand: '+' },
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 200,
-          target_end: 350, strand: '+' }
-    ]);
-    t.eq(iv[0].mapped, iv[0].end - iv[0].start, 'nothing is missing');
-    t.eq(iv[0].pieces, 2, 'two blocks');
-});
-
-t.test('a strand flip is reported as its own interval', function () {
-    var iv = pg.blocksAsIntervals([
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 10, target_end: 20, strand: '+' },
-        { haplotype: 'HG00235#2#CM094399.1', target_start: 30, target_end: 40, strand: '-' }
-    ]);
-    t.eq(iv.length, 2, 'not merged across an inversion');
-});
-
-t.test('blocks that run backwards on the target still report their full span',
-       function () {
-    // Duplications and transpositions really do come back out of order.
-    var iv = pg.blocksAsIntervals([
-        { haplotype: 'HG00128#1#CM090084.1', target_start: 5000,
-          target_end: 5100, strand: '+' },
-        { haplotype: 'HG00128#1#CM090084.1', target_start: 1000,
-          target_end: 1100, strand: '+' }
-    ]);
-    t.eq(iv.length, 1, 'one contig, one interval');
-    t.eq(iv[0].start, 1000, 'minimum wins regardless of arrival order');
-    t.eq(iv[0].end, 5100, 'maximum wins');
-});
-
-t.test('no blocks yields no intervals', function () {
-    t.eq(pg.blocksAsIntervals([]).length, 0, 'empty');
-    t.eq(pg.blocksAsIntervals(null).length, 0, 'missing');
 });
 
 // ============================================================ position parsing
@@ -723,9 +644,7 @@ setTimeout(function () {
     // the driving happens in timers and the suite runs once it has settled -
     // the same shape as the other multi-step suites in this file.
     function padPage() {
-        return startPage({ liftover: { blocks: [
-            { haplotype: 'CHM13#0#chr9', source_start: 100, source_end: 200,
-              target_start: 500, target_end: 600, strand: '+' }] } });
+        return startPage({ liftover: summ([['CHM13#0', [piece('chr9', 500, 600, '+', 100, 200)], 100]]) });
     }
     var padA = padPage(), padB = padPage(), padNoBeacon = padPage();
     var padPages = [padA, padB, padNoBeacon];
@@ -869,31 +788,22 @@ setTimeout(function () {
              'an accession is passed through unchanged');
     });
 
-    t.suite('more targets than one request carries');
+    t.suite('many targets');
 
     t.test('the chosen line states how many are chosen, of how many', function () {
         t.contains(page.el.pgcChosen.textContent, 'Chosen 1 of 50', 'running count and the most');
     });
 
-    t.test('a longer list goes as several requests, none over the per-request size', function () {
+    t.test('a long list goes as one request', function () {
         var c = tooMany;
         c.el.pgcPos.value = 'CM094066.1:1-100';
         c.el.pgcTargets.children.forEach(function (o) { o.selected = true; });  // all 4
         c.el.pgcSubmit.dispatch('click');
-        var sent = posts(c).filter(function (x) { return (x.opts.body || '').indexOf('cmd=liftover') >= 0; });
-        t.eq(sent.length, 2, 'two requests at once: 3 targets and 1');
-        var sizes = sent.map(function (x) {
-            var tgt = JSON.parse(decodeURIComponent(x.opts.body.split('payload=')[1])).tgt;
-            return Array.isArray(tgt) ? tgt.length : 1;
-        });
-        t.eq(sizes.join('+'), '3+1', 'split at the per-request size');
+        var sent = posts(c).filter(function (x) { return (x.opts.body || '').indexOf('cmd=liftoverAll') >= 0; });
+        t.eq(sent.length, 1, 'one request');
+        t.eq(payloadOf(c).tgt.length, 4, 'naming all four');
+        t.notOk('blocks' in payloadOf(c), 'and not asking for the block list');
         t.contains(c.el.pgcStatus.textContent, 'Translating', 'and the page says it is working');
-    });
-
-    t.test('a long region carries fewer targets per request', function () {
-        t.eq(c0.api.batchSize(100), 3, 'short: the per-request size');
-        t.eq(c0.api.batchSize(2000000), 2, '2 Mb under a 5 Mb budget: two');
-        t.eq(c0.api.batchSize(9000000), 1, 'never fewer than one');
     });
 
     t.test('at the limit it goes through', function () {
@@ -919,14 +829,14 @@ setTimeout(function () {
         convert(badPos, 'not a position', ['CHM13#0']);
         convert(noTgt, 'CM094066.1:1-100', []);   // valid contig: isolate the target check
 
-        t.test('a single target sends src/start/end/tgt as a full contig path', function () {
+        t.test('a single target sends src/start/end and the target, as the summary request', function () {
             t.eq(posts(one).length, 1, 'one POST');
-            t.contains(posts(one)[0].opts.body, 'cmd=liftover', 'liftover command');
+            t.contains(posts(one)[0].opts.body, 'cmd=liftoverAll', 'the summary command');
             var p = payloadOf(one);
             t.eq(p.src, 'HG00097#1#CM094066.1', 'full 3-field source path, graph casing');
             t.eq(p.start, 19113, '0-based start');
             t.eq(p.end, 19137, 'half-open end');
-            t.eq(p.tgt, 'CHM13#0', 'single target as a string');
+            t.deepEq(p.tgt, ['CHM13#0'], 'the target, in a list');
         });
 
         t.test('the source path uses the graph\'s spelling, not our lower-cased key',
@@ -943,7 +853,7 @@ setTimeout(function () {
             t.ok(absent.api.hapInGraph('hg00097#1'), 'the list has arrived: one that is there');
             t.notOk(absent.api.hapInGraph('hg02080#2'), 'and one that is not');
             var sent = posts(absent).filter(function (x) {
-                return /cmd=liftover(&|$)/.test(x.opts.body);
+                return /cmd=liftoverAll/.test(x.opts.body);
             });
             t.eq(sent.length, 0, 'no conversion sent');
             t.contains(absent.el.pgcStatus.textContent, 'not in the loaded graph', 'reason shown');
@@ -1031,26 +941,42 @@ setTimeout(function () {
 
         function runRenderCases() {
         // ---- rendering ----
-        // blocks, as the server sends them now: the percentages are measured
-        // from the source side of these
-        var single = startPage({ liftover: { blocks: [
-            { haplotype: 'chm13#0#chr10', source_start: 19113, source_end: 19137,
-              target_start: 4338779, target_end: 4338799, strand: '+' }] } });
-        var multi = startPage({ liftover: { blocks: [
-            { haplotype: 'hg01234#2#CM0987.1', source_start: 0, source_end: 24,
-              target_start: 20551, target_end: 20575, strand: '+' },
-            { haplotype: 'hg01234#2#CM0988.1', source_start: 30, source_end: 40,
-              target_start: 400, target_end: 410, strand: '-' }] } });
-        var empty = startPage({ liftover: { intervals: [] } });
-        var mixed = startPage({ liftover: { intervals: [
-            { haplotype: 'chm13#0#chr10', start: 10, end: 20, strand: '+' }] } });
+        // the service's summary: where the region lands on each haplotype
+        // asked for, and how many of its bases do
+        var single = startPage({ liftover: summ([
+            ['chm13#0', [piece('chr10', 4338779, 4338799, '+', 19113, 19137)], 20]]) });
+        var multi = startPage({ liftover: summ([
+            ['hg01234#2', [piece('CM0987.1', 20551, 20575, '+', 0, 24),
+                           piece('CM0988.1', 400, 410, '-', 30, 40)], 34]]) });
+        var empty = startPage({ liftover: summ([['chm13#0', [], 0]]) });
+        // the service says nothing at all about GRCh38 here
+        var mixed = startPage({ liftover: summ([['chm13#0', [piece('chr10', 10, 20, '+', 0, 10)], 10]]) });
         var errPage = startPage({ liftover: { status: 'error', error: 'unknown source haplotype' } });
         // arrives the way hgConvert hands off: destination already chosen
         var autoPage = startPage({ config: { presetTarget: 'CHM13#0',
                                             presetAnnot: 'on', presetHide: 'off' },
-            liftover: { blocks: [{ haplotype: 'chm13#0#chr10',
-                source_start: 0, source_end: 20,
-                target_start: 10, target_end: 30, strand: '+' }] } });
+            liftover: summ([['chm13#0', [piece('chr10', 10, 30, '+', 0, 20)], 20]]) });
+        // the reachability question fails once, then answers
+        var retryAsks = 0;
+        var retryPage = startPage({ respond: function (u, b) {
+            if (b.indexOf('cmd=liftoverTargets') < 0) return undefined;
+            retryAsks++;
+            return retryAsks === 1 ? { status: 'error', error: 'graph server busy' }
+                                   : { haplotypes: ['chm13#0'] };
+        } });
+        // an answer that arrives late: after Clear, and after a second Convert
+        var lateClear = {}, lateSecond = { n: 0 };
+        var cleared = startPage({ respond: function (u, b) {
+            if (b.indexOf('cmd=liftoverAll') < 0) return undefined;
+            return new Promise(function (resolve) { lateClear.resolve = resolve; });
+        } });
+        var twice = startPage({ respond: function (u, b) {
+            if (b.indexOf('cmd=liftoverAll') < 0) return undefined;
+            lateSecond.n++;
+            if (lateSecond.n === 1)
+                return new Promise(function (resolve) { lateSecond.first = resolve; });
+            return summ([['GRCh38#0', [piece('chr7', 5, 105, '+', 0, 100)], 100]]);
+        } });
 
         setTimeout(function () {
             convert(single, 'CM094066.1:19114-19137', ['CHM13#0']);
@@ -1058,6 +984,17 @@ setTimeout(function () {
             convert(empty, 'CM094066.1:1-100', ['CHM13#0']);
             convert(mixed, 'CM094066.1:1-100', ['CHM13#0', 'GRCh38#0']);
             convert(errPage, 'CM094066.1:1-100', ['CHM13#0']);
+            retryPage.el.pgcPos.value = 'CM094066.1:1-100';
+            retryPage.el.pgcReachableOnly.checked = true;
+            retryPage.el.pgcReachableOnly.dispatch('change');
+            convert(cleared, 'CM094066.1:1-100', ['CHM13#0']);
+            cleared.el.pgcClear.dispatch('click');
+            lateClear.resolve(summ([['CHM13#0', [piece('chr10', 10, 110, '+', 0, 100)], 100]]));
+            convert(twice, 'CM094066.1:1-100', ['CHM13#0']);
+            convert(twice, 'CM094066.1:1-100', ['GRCh38#0']);
+            setTimeout(function () {
+                lateSecond.first(summ([['CHM13#0', [piece('chr10', 10, 110, '+', 0, 100)], 100]]));
+            }, 20);
 
             setTimeout(function () {
                 t.suite('rendering translated intervals');
@@ -1095,13 +1032,17 @@ setTimeout(function () {
                 });
 
 
-                t.test("a single interval renders as a position link with hgConvert-style percentages",
+                t.test("a single place is a position link, with the share of the region it carries",
                        function () {
                     var s = text(single);
                     t.contains(s, 'CHM13', 'target named');
                     t.contains(s, 'chr10:4338780-4338799', '1-based display');
                     t.contains(s, 'Coverage', 'share of the region, as a column');
-                    t.contains(s, '83.3%', 'its figure');
+                    t.contains(s, '83.3%', 'its figure: 20 of 24 bases');
+                    t.contains(s, 'Found on1 of 1', 'the strip counts the targets');
+                    t.contains(s, 'View all haplotypes', 'and offers every haplotype');
+                    t.notOk(/Filter rows|By population/.test(s),
+                            'without the whole-pangenome statistics and filters');
                     var l = links(single);
                     t.eq(l.length, 1, 'one view link');
                     if (l.length) {
@@ -1141,6 +1082,25 @@ setTimeout(function () {
                     t.contains(errPage.el.pgcStatus.textContent, 'Retry', 'retry offered');
                 });
 
+                // Retry on the reachability error, pressed now and checked below.
+                var retryBtn = retryPage.findAll(retryPage.el.pgcStatus, function (n) {
+                    return n.tagName === 'BUTTON' && n.textContent === 'Retry'; })[0];
+                var retryErr = retryPage.el.pgcStatus.textContent;
+                if (retryBtn) retryBtn.dispatch('click');
+
+                t.test('Clear cancels a conversion still out: its answer is not drawn', function () {
+                    t.eq(rowsOf(cleared).length, 0, 'no table');
+                    t.eq(text(cleared).trim(), '', 'nothing on the page');
+                });
+
+                t.test('a second Convert owns the page: the first answer, arriving later, is dropped',
+                       function () {
+                    var s = text(twice);
+                    t.eq(rowsOf(twice).length, 1, 'one row');
+                    t.contains(s, 'chr7:6-105', 'the second conversion\'s place');
+                    t.notOk(/chr10/.test(s), 'not the first one\'s');
+                });
+
 
                 // ---- ranked destinations (scored:true) ----
                 var scored = startPage({ targets: { haplotypes: [
@@ -1151,6 +1111,16 @@ setTimeout(function () {
                     scored.el.pgcReachableOnly.checked = true;
                     scored.el.pgcReachableOnly.dispatch('change');
                     setTimeout(function () {
+                        t.suite('Retry on the reachability check');
+
+                        t.test('it asks again, and the answer narrows the picker', function () {
+                            t.contains(retryErr, 'graph server busy', 'the first failure was shown');
+                            t.ok(retryBtn, 'with a Retry');
+                            t.eq(retryAsks, 2, 'pressing it asked the graph again');
+                            t.eq(retryPage.el.pgcReachableOnly.checked, true, 'the box is ticked again');
+                            t.eq(retryPage.el.pgcTargets.children.length, 1, 'and the list is narrowed');
+                        });
+
                         t.suite('ranked destinations');
 
                         t.test('the request asks for scores and a floor', function () {
@@ -1184,9 +1154,8 @@ setTimeout(function () {
                         // ---- no caveat on a wide region ----
                         // A wide region loses nothing a tiled one finds (tested
                         // against the service, 2026-11-02), so it is not flagged.
-                        var wide = startPage({
-                            liftover: { intervals: [{ haplotype: 'CHM13#0#chr10',
-                                        start: 10, end: 500010, strand: '+' }] } });
+                        var wide = startPage({ liftover: summ([
+                            ['CHM13#0', [piece('chr10', 10, 500010, '+', 0, 500000)], 500000]]) });
                         setTimeout(function () {
                             convert(wide, 'CM094066.1:1-500000', ['CHM13#0']);
                             setTimeout(function () {

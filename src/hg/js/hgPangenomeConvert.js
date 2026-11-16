@@ -23,9 +23,7 @@
 'use strict';
 
 var CFG = {};
-var MAX_SPAN = 10000000;        // middleware cap; also enforced server-side
-var MAX_TARGETS = 10;           // per request, not per conversion: see liftInBatches()
-var BUDGET_MB = 5;             // per request: span in Mb x targets
+var MAX_SPAN = 1000000;         // the server's cap (pangenome.maxLiftSpan), which it enforces too
 var MAX_CHOSEN = 50;           // haplotypes one conversion may be sent to; 0 for no limit
 
 // Source assembly -> haplotype, i.e. the inverse of the generated HPRC table
@@ -639,8 +637,13 @@ function showReachable() {
         .catch(function (err) {
             setToggleBusy(false);
             untick();
+            // Retry asks again; going through the toggle would not, the box
+            // having just been unticked.
             showError("Could not check which assemblies contain this region: " +
-                      err.message, onReachableToggle);
+                      err.message, function () {
+                          if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = true; }
+                          showReachable();
+                      });
         });
 }
 
@@ -958,194 +961,7 @@ function browserLinkFor(interval) {
              db: assembly, isRemote: false, contig: contig, pos: pos };
 }
 
-// ---- The results table ------------------------------------------------------
-//
-// One row per region found, laid out as the mapping page's results are: the
-// sample and which of its haplotypes first, then its population, the position
-// as the link that opens it, and how much of the region it accounts for.  A
-// target with no equivalent region still gets a row that says so.
-// "Population" is the HPRC's description of the sample.
-//
-// The table is built as plain DOM so that every link is a live node, which the
-// ancestry plot clicks; in the browser DataTables then pages and sorts it (pgcPageTable).
-
 function pctText(v) { return v == null ? "" : v.toFixed(1) + "%"; }
-
-function renderResults(srcLabel, targets, intervals, failed, errors) {
-    var box = $("pgcResults");
-    clear(box);
-
-    // Group the intervals by target haplotype so each requested target gets an
-    // answer - including the honest empty one.
-    var byHap = Object.create(null);
-    (intervals || []).forEach(function (iv) {
-        var full = String(iv.haplotype || "");
-        var parts = full.split("#");
-        var hap = parts.length >= 2 ? (parts[0] + "#" + parts[1]) : full;
-        (byHap[hap.toLowerCase()] = byHap[hap.toLowerCase()] || []).push(iv);
-    });
-    var found = 0, withAny = 0;
-    targets.forEach(function (t) {
-        var n = (byHap[String(t).toLowerCase()] || []).length;
-        found += n;
-        if (n) withAny++;
-    });
-
-    var card = el("div", { class: "gbCard pgcCard" });
-    box.appendChild(el("div", { class: "gbApp" }, [card]));
-
-    // The strip, as on the mapping results page: what was asked, what came back,
-    // and the page's actions on the right.
-    var acts = el("span", { class: "gbStripActions", id: "pgcStripActs" });
-    var stat = function (k, v) {
-        return el("div", { class: "gbStat" }, [el("span", { class: "k", text: k }),
-                                               el("span", { class: "v", text: v })]);
-    };
-    var div = function () { return el("span", { class: "gbDiv" }); };
-    var sPop = samplePop(currentSourceHap());
-    var srcLen = (lastSource && lastSource.end > lastSource.start)
-        ? lastSource.end - lastSource.start : 0;
-    card.appendChild(el("div", { class: "gbStrip" }, [
-        stat("Converted from", srcLabel), div(),
-        stat("Population", sPop ? sPop.desc + " (" + sPop.code + ")" : "—"), div(),
-        stat("Length", srcLen ? withCommas(srcLen) + " bp" : "—"), div(),
-        stat("Targets", withCommas(targets.length)), div(),
-        stat("Found on", withCommas(withAny) + " of " + withCommas(targets.length)),
-        acts
-    ]));
-    if (lastSource)
-        acts.appendChild(el("a", { class: "gbPill", href: liftAllUrl(lastSource),
-            title: "This region on every haplotype in the pangenome, with figures on " +
-                   "how it carries over", text: "View all haplotypes" }));
-
-    // The regions the ancestry plot is offered for, the source first.
-    var anc = ancOn() && lastSource ? [] : null;
-    if (anc) {
-        var srcHap = currentSourceHap();
-        var srcParts = String(lastSource.src || "").split("#");
-        anc.push({ role: "source", hap: srcParts.slice(0, 2).join("#"),
-                   db: assemblyForHap(srcHap), contig: srcParts.slice(2).join("#"),
-                   start: lastSource.start, end: lastSource.end,
-                   url: (browserLinkFor({ haplotype: lastSource.src, start: lastSource.start,
-                                          end: lastSource.end }) || {}).url });
-    }
-    if (anc) {
-        var plotHost = el("div", { class: "pgrPanel", id: "pgrPclaiPlot" });
-        plotHost.style.display = "none";
-        // A region's "View in Genome Browser" in the plot is that region's
-        // link, clicked: one way to open a target, whichever place it is from.
-        plotHost.addEventListener("click", function (ev) {
-            var b = ev.target && ev.target.closest ? ev.target.closest("[data-pgp-open]") : null;
-            if (!b) return;
-            var hit = anc.filter(function (x) { return x.id === b.getAttribute("data-pgp-open"); })[0];
-            if (!hit || !hit.anchor) return;            // no row link: the plain href stands
-            ev.preventDefault();
-            hit.anchor.click();
-        });
-        card.appendChild(plotHost);
-    }
-
-    var head = ["#", "Sample", "Haplotype", "Population", "Open in Genome Browser",
-                "Coverage", "Span", "Strand"];
-    var tips = { Coverage: "Share of the region's bases that carried over to this place",
-                 Span: "Share of the region's span between the first and last base that carried over",
-                 Haplotype: "Which of the sample's two haplotypes; 0 for a reference",
-                 Population: "The sample's population, as the HPRC describes it" };
-    // Not the form's pgcTable class: its fixed layout and pinned first column
-    // are for the form, and on this table they made the cells run into each other.
-    var table = el("table", { id: "pgcTable", class: "display" });
-    table.appendChild(el("thead", null, [el("tr", null, head.map(function (h) {
-        return el("th", tips[h] ? { text: h, title: tips[h] } : { text: h });
-    }))]));
-    var tbody = el("tbody");
-    table.appendChild(tbody);
-
-    var origSize = srcLen;
-    var rank = 0;
-    targets.forEach(function (t) {
-        var pieces = byHap[String(t).toLowerCase()] || [];
-        var info = prettyHap(t);
-        var pop = samplePop(t);
-        var popText = pop ? pop.desc + " (" + pop.code + ")" : "";
-        // Trio-phased assemblies know which parent a haplotype came from.
-        var parent = info.label.split(" ")[1];
-        parent = (parent === "paternal" || parent === "maternal") ? parent : null;
-        var lead = function () {
-            return [el("td", { class: "rankCol", text: String(++rank) }),
-                    el("td", { class: "sampleCol", text: info.sample }),
-                    el("td", parent ? { class: "phaseCol", text: info.phase, title: parent }
-                                    : { class: "phaseCol", text: info.phase == null ? "" : info.phase }),
-                    el("td", { class: "popCol", text: popText })];
-        };
-        if (pieces.length === 0) {
-            var lost = (failed || []).indexOf(t) >= 0;
-            var none = el("tr", { class: "pgcNone" }, lead().concat([
-                el("td", { class: "posCol" }, lost ? [el("span", { class: "pgrUnplaced",
-                    text: "not translated" }),
-                    el("span", { class: "pgcNoneWhy", text: " - the request failed: " +
-                                 ((errors || [])[0] || "no answer") + "." })] :
-                    [el("span", { class: "pgrUnplaced", text: "no equivalent region" }),
-                    el("span", { class: "pgcNoneWhy",
-                                 text: " - this region does not exist on " + hapLabel(t) + "." })]),
-                el("td", { class: "pctCol" }), el("td", { class: "pctCol" }),
-                el("td", { class: "strandCol" })
-            ]));
-            tbody.appendChild(none);
-            return;
-        }
-        pieces.forEach(function (iv) {
-            var link = browserLinkFor(iv);
-            var label = link ? link.pos
-                             : (hapLabel(iv.haplotype) + ":" + (iv.start + 1) + "-" + iv.end);
-            var posCell = el("td", { class: "posCol" });
-            var a = null;
-            // The position itself is the link, as hgConvert's is.
-            if (link) {
-                a = el("a", { href: link.url, text: label,
-                    title: "Show this region in the UCSC Genome Browser " +
-                           "(assembly " + link.db + ")" });
-                if (link.isRemote) {
-                    a.setAttribute("target", "_blank");
-                    a.setAttribute("rel", "noopener");
-                }
-                // With annotations asked for, this link carries the source's
-                // tracks with it - one link, as in hgConvert.
-                if (wantsAnnotations(iv))
-                    armAnnotationLink(a, iv, link);
-                posCell.appendChild(a);
-            } else {
-                posCell.appendChild(el("code", { text: label }));
-            }
-            // Both percentages are against the region the user asked to
-            // convert, as hgConvert's are.
-            var bases = null, spanPct = null;
-            if (origSize > 0 && typeof iv.mapped === "number" && typeof iv.srcStart === "number") {
-                bases = 100 * iv.mapped / origSize;
-                spanPct = 100 * (iv.srcEnd - iv.srcStart) / origSize;
-            }
-            var cells = lead().concat([posCell,
-                el("td", { class: "pctCol", text: pctText(bases) }),
-                el("td", { class: "pctCol", text: pctText(spanPct) }),
-                el("td", iv.strand === "-" ? { class: "strandCol", text: "-", title: "reverse strand" }
-                                           : { class: "strandCol", text: "+" })]);
-            if (anc) {
-                var ivParts = String(iv.haplotype || "").split("#");
-                var ivHap = ivParts.slice(0, 2).join("#");
-                // The row's own link goes along: the plot's "View in Genome
-                // Browser" clicks it, so annotations and the alignment
-                // differences come with it exactly as they do from here.
-                anc.push({ role: "target", hap: ivHap,
-                           db: assemblyForHap(ivHap), contig: ivParts.slice(2).join("#"),
-                           start: iv.start, end: iv.end, url: link ? link.url : null,
-                           anchor: a });
-            }
-            tbody.appendChild(el("tr", null, cells));
-        });
-    });
-    card.appendChild(el("div", { class: "pgcTableWrap" }, [table]));
-    pgcPageTable(table);
-    if (anc) ancPlot(acts, anc);
-}
 
 // Pages and sorting, as on the mapping results page, when DataTables is on the
 // page; without it the table is simply all there.
@@ -1184,19 +1000,6 @@ function pgcPageTable(table, order) {
 // Offer to carry the source's own gene tracks over to this target.  The chain
 // is built from the blocks we already have, so this costs the mapping server
 // nothing further.
-// Can this row carry the source's annotations?  Only when the user asked for
-// them, we have the blocks the chain is built from, and both sides are
-// assemblies this server can open.
-function wantsAnnotations(iv) {
-    if (!quickLiftWanted() || !lastBlocks || !lastSource) return false;
-    var parts = String(iv.haplotype || "").split("#");
-    if (parts.length < 2) return false;
-    var hap = (parts[0] + "#" + parts[1]).toLowerCase();
-    var blocks = lastBlocks[hap];
-    if (!blocks || blocks.length === 0) return false;
-    return annotationsPossible(iv);
-}
-
 // Both sides are assemblies this server opens, so QuickLift can draw one's
 // tracks on the other.
 function annotationsPossible(iv) {
@@ -1260,52 +1063,11 @@ function hideTargetTracks() {
 
 // ---- Convert ----------------------------------------------------------------
 
-var lastRequest = null;
-var lastBlocks = null;         // per target haplotype, when annotations were asked for
-var lastSource = null;         // the source the blocks were computed from
+var lastSource = null;         // the source of the results on the page
 
 function quickLiftWanted() {
     var box = $("pgcQuickLift");
     return !!(box && box.checked);
-}
-
-// Blocks arrive as a flat list covering every requested target; split them by
-// haplotype so each result card can be turned into its own chain.
-function groupBlocks(blocks) {
-    var byHap = Object.create(null);
-    (blocks || []).forEach(function (b) {
-        var parts = String(b.haplotype || "").split("#");
-        if (parts.length < 2) return;
-        var hap = (parts[0] + "#" + parts[1]).toLowerCase();
-        (byHap[hap] = byHap[hap] || []).push(b);
-    });
-    return byHap;
-}
-
-// With blocks:true the server sends blocks instead of intervals, but the
-// result cards still want intervals.  Collapse each contig's blocks back into
-// the span they cover, which is what the intervals view reports anyway.
-function blocksAsIntervals(blocks) {
-    var byKey = Object.create(null), order = [];
-    (blocks || []).forEach(function (b) {
-        var key = b.haplotype + "\t" + (b.strand || "+");
-        var iv = byKey[key];
-        if (!iv) {
-            iv = byKey[key] = { haplotype: b.haplotype, strand: b.strand || "+",
-                                start: b.target_start, end: b.target_end,
-                                srcStart: b.source_start, srcEnd: b.source_end,
-                                mapped: b.target_end - b.target_start, pieces: 1 };
-            order.push(iv);
-            return;
-        }
-        if (b.target_start < iv.start) iv.start = b.target_start;
-        if (b.target_end > iv.end) iv.end = b.target_end;
-        if (b.source_start < iv.srcStart) iv.srcStart = b.source_start;
-        if (b.source_end > iv.srcEnd) iv.srcEnd = b.source_end;
-        iv.mapped += b.target_end - b.target_start;
-        iv.pieces += 1;
-    });
-    return order;
 }
 
 // The source path plus coordinates, or {error}.  Shared by the conversion and
@@ -1327,10 +1089,15 @@ function buildSource() {
              start: pos.start, end: pos.end };
 }
 
+// One request, whatever the number of targets: the service's summary mode
+// walks the source region once and answers for every haplotype asked for, so
+// fifty cost about what one does.  The answer is the all-haplotypes page's,
+// for the chosen few, and is drawn by the same code (renderAll).
+var convertSeq = 0;            // the conversion the page is waiting for
+
 function doConvert() {
     var src = buildSource();
     if (src.error) { showError(src.error); return; }
-    var pos = { contig: src.contig, start: src.start, end: src.end };
 
     var targets = selectedTargets();
     if (targets.length === 0) { showError("Choose at least one target assembly."); return; }
@@ -1338,102 +1105,31 @@ function doConvert() {
         showError("Choose at most " + MAX_CHOSEN + " haplotypes, or use View all haplotypes.");
         return;
     }
-
     // Send the graph's spelling for targets too: an unknown target is not an
-    // error upstream, it just yields no intervals - which would look like
-    // "region absent" rather than a mistake.
+    // error upstream, it just yields nothing - which would look like "region
+    // absent" rather than a mistake.
     targets = targets.map(canonicalHap);
-    lastRequest = { src: src.src, start: src.start, end: src.end,
-                    tgt: targets.length === 1 ? targets[0] : targets };
-    // The block-level answer is what a chain is made of, so only ask for it
-    // when the annotations are actually wanted.
-    var wantAnnotations = quickLiftWanted();
-    // Always ask for blocks, not just when lifting annotations: the collapsed
-    // interval is only the outer span, and without the blocks inside it there
-    // is no way to say how much of the region actually carried over.
-    lastRequest.blocks = true;
 
     clear($("pgcResults"));
-    var what = fmtPos(pos.contig, pos.start, pos.end);
+    var what = fmtPos(src.contig, src.start, src.end);
     showBusy("Translating " + what + " to " + targets.length + " assembl" +
              (targets.length === 1 ? "y" : "ies") + "…");
+    // A later click, or Clear, owns the page from then on: an answer to an
+    // earlier one is dropped when it arrives.
     var seq = ++convertSeq;
-
-    liftInBatches(lastRequest, targets, function (done) {
-        if (seq === convertSeq && targets.length > done)
-            showBusy("Translating " + what + ": " + done + " of " + targets.length +
-                     " assemblies done…");
-    }).then(function (resp) {
-        if (seq !== convertSeq) return;            // a newer conversion owns the page
-        if (resp.failed.length === targets.length)
-            throw new Error(resp.errors[0] || "server error");
-        lastBlocks = wantAnnotations ? groupBlocks(resp.blocks) : null;
-        lastSource = src;          // the percentages are measured against it
-        renderResults(hapLabel(src.src) + ":" + (pos.start + 1) + "-" + pos.end,
-                      targets, resp.intervals.concat(blocksAsIntervals(resp.blocks)),
-                      resp.failed, resp.errors);
-        hideStatus();
-    }).catch(function (err) {
-        if (seq !== convertSeq) return;
-        showError("Conversion failed: " + err.message, doConvert);
-    });
-}
-
-// ---- Many targets ------------------------------------------------------------
-//
-// A region is converted to at most MAX_CHOSEN assemblies (pangenome.maxChosenTargets).
-// The work upstream is one graph traversal per target, so a long list goes as several
-// requests of at most MAX_TARGETS targets each - fewer for a long region, so
-// that span x targets stays inside the server's per-request budget - two at a
-// time.  The CGI queues requests to the graph server (pangenome.maxConcurrent),
-// so one reader's 50 targets and another reader's one are served in turn
-// rather than the first blocking the second.
-
-var convertSeq = 0;
-
-// The targets one request may carry for a region of this many bases.
-function batchSize(span) {
-    var byBudget = Math.floor(BUDGET_MB * 1000000 / Math.max(1, span));
-    return Math.max(1, Math.min(MAX_TARGETS, byBudget));
-}
-
-// One translation, as several requests when the list is long.  Resolves to
-// { intervals, blocks, failed: [targets], errors: [messages] }; a failed
-// request is tried once more before its targets are given up on.
-function liftInBatches(request, targets, progress) {
-    var per = batchSize(request.end - request.start);
-    var batches = [];
-    for (var i = 0; i < targets.length; i += per) batches.push(targets.slice(i, i + per));
-    var out = { intervals: [], blocks: [], failed: [], errors: [] };
-    var next = 0, done = 0;
-    var one = function (batch) {
-        var req = {};
-        Object.keys(request).forEach(function (k) { req[k] = request[k]; });
-        req.tgt = batch.length === 1 ? batch[0] : batch;
-        var ask = function () {
-            return postCmd("liftover", req).then(function (resp) {
-                if (resp && resp.status === "error") throw new Error(resp.error || "server error");
-                return resp || {};
-            });
-        };
-        return ask().catch(function () { return ask(); }).then(function (resp) {
-            out.intervals = out.intervals.concat(resp.intervals || []);
-            out.blocks = out.blocks.concat(resp.blocks || []);
-        }, function (err) {
-            out.failed = out.failed.concat(batch);
-            if (out.errors.indexOf(err.message) < 0) out.errors.push(err.message);
-        }).then(function () {
-            done += batch.length;
-            if (progress) progress(done);
+    postCmd("liftoverAll", { src: src.src, start: src.start, end: src.end, tgt: targets })
+        .then(function (resp) {
+            if (seq !== convertSeq) return;
+            if (!resp || resp.status === "error") throw new Error((resp && resp.error) || "no answer");
+            if (!resp.summary) throw new Error("the graph server sent no summary");
+            lastSource = src;          // what the links carry annotations over from
+            allSrcHap = String(src.src).split("#").slice(0, 2).join("#");
+            hideStatus();
+            renderAll(resp, src, targets);
+        }).catch(function (err) {
+            if (seq !== convertSeq) return;
+            showError("Conversion failed: " + err.message, doConvert);
         });
-    };
-    var lane = function () {
-        if (next >= batches.length) return Promise.resolve();
-        return one(batches[next++]).then(lane);
-    };
-    var lanes = [];
-    for (var k = 0; k < Math.min(2, batches.length); k++) lanes.push(lane());
-    return Promise.all(lanes).then(function () { return out; });
 }
 
 // Start the choice over: no targets, no search, every population, and no
@@ -1449,6 +1145,7 @@ function onClear() {
     if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
     targetOptions($("pgcTargets")).forEach(function (o) { o.selected = false; });
     fillTargets("");
+    convertSeq++;               // a conversion still out is not to draw into the cleared page
     clear($("pgcResults"));
     hideStatus();
 }
@@ -2021,11 +1718,35 @@ function allAnnotControl() {
             hideLabel])]);
 }
 
-function renderAll(resp, src) {
+// The table of where a region lands, one row a piece.  With "chosen", a list
+// of haplotypes, it is PanLift's answer for those: each of them has a row,
+// found or not, and the page's statistics and filters, which describe the
+// whole pangenome, are left out.  Without, it is the all-haplotypes page.
+function renderAll(resp, src, chosen) {
     var box = $("pgcResults");
     clear(box);
     var len = src.end - src.start;
-    var haps = allHaps = allHapsFrom(resp.summary, len);
+    var haps = allHapsFrom(resp.summary, len);
+    if (chosen) {
+        // Matched without regard to case, and shown as the reader chose it:
+        // the service's list of haplotypes and its answers are spelled apart.
+        var asked = Object.create(null), have = Object.create(null);
+        chosen.forEach(function (t) { asked[String(t).toLowerCase()] = t; });
+        haps = haps.filter(function (h) { return asked[String(h.hap).toLowerCase()]; });
+        haps.forEach(function (h) {
+            have[String(h.hap).toLowerCase()] = true;
+            h.hap = asked[String(h.hap).toLowerCase()];
+        });
+        // One the service did not answer for has no place here either.
+        chosen.forEach(function (t) {
+            if (have[String(t).toLowerCase()] || String(t).toLowerCase() === String(allSrcHap).toLowerCase()) return;
+            haps.push({ hap: t, pieces: [], mapped: 0, bases: 0, change: null, inserted: null,
+                        deleted: null, unsure: false, contigs: 0, reverse: false,
+                        group: popGroupOf(t) });
+        });
+    }
+    allHaps = haps;
+    allFilter = null;
     var found = haps.filter(function (h) { return h.pieces.length; }).length;
     var srcLabel = hapLabel(src.src) + ":" + (src.start + 1) + "-" + src.end;
 
@@ -2042,20 +1763,27 @@ function renderAll(resp, src) {
         stat("Converted from", srcLabel), div(),
         stat("Population", sPop ? sPop.desc + " (" + sPop.code + ")" : "—"), div(),
         stat("Length", withCommas(len) + " bp"), div(),
-        stat("Haplotypes", withCommas(haps.length)), div(),
-        stat("Found on", withCommas(found) + " (" +
+        stat(chosen ? "Targets" : "Haplotypes", withCommas(haps.length)), div(),
+        stat("Found on", chosen ? withCommas(found) + " of " + withCommas(haps.length)
+                                : withCommas(found) + " (" +
              (haps.length ? Math.round(100 * found / haps.length) : 0) + "%)")]);
-    var annot = allAnnotControl();
+    // The form has the two annotation choices already; that page has no form.
+    var annot = chosen ? null : allAnnotControl();
     if (annot) { strip.appendChild(div()); strip.appendChild(annot); }
     strip.appendChild(acts);
     card.appendChild(strip);
+    if (chosen)
+        acts.appendChild(el("a", { class: "gbPill", href: liftAllUrl(src),
+            title: "This region on every haplotype in the pangenome, with figures on " +
+                   "how it carries over", text: "View all haplotypes" }));
     var tsv = el("button", { type: "button", class: "gbPill", text: "Download Table",
         title: "Download the rows below, in their current order and filter, as a " +
                "tab-separated file that opens in Excel" });
     acts.appendChild(tsv);
 
-    card.appendChild(el("div", { class: "pgcStats" }, [
-        allCoveragePanel(haps), allSizePanel(haps), allPopPanel(haps)]));
+    if (!chosen)
+        card.appendChild(el("div", { class: "pgcStats" }, [
+            allCoveragePanel(haps), allSizePanel(haps), allPopPanel(haps)]));
 
     // The regions the ancestry plot is offered for, the source first.
     var anc = ancOn() ? [] : null;
@@ -2068,7 +1796,7 @@ function renderAll(resp, src) {
     }
     var notes = el("div", { class: "pgrNotes" });
     notes.appendChild(el("div", { class: "pgrNote", text: "One row for each piece of the region " +
-        "on a haplotype. Click a number above to filter the table." }));
+        "on a haplotype." + (chosen ? "" : " Click a number above to filter the table.") }));
     (resp.warnings || []).forEach(function (w) {
         if (w && w.reason === "timeout")
             notes.appendChild(el("div", { class: "pgrNote pgErrBox", text: "The graph server " +
@@ -2092,7 +1820,7 @@ function renderAll(resp, src) {
     }
     card.appendChild(el("div", { id: "pgcAllBar", class: "pgrBar on", hidden: "hidden" }));
     allMetricFilters = [];
-    card.appendChild(allMetricControls());
+    if (!chosen) card.appendChild(allMetricControls());
 
     // The table.
     var split = haps.some(function (h) { return h.pieces.length > 1; });
@@ -2125,7 +1853,8 @@ function renderAll(resp, src) {
                                 ? (p.end - p.start) - (p.source_end - p.source_start) : null });
         });
     });
-    var annotOk = !!CFG.quickLiftEnabled;
+    // The form has the Annotations box only where the browser can lift tracks.
+    var annotOk = chosen ? !!$("pgcQuickLift") : !!CFG.quickLiftEnabled;
     rows.forEach(function (r, idx) {
         var h = r.h, p = r.piece;
         var info = prettyHap(h.hap);
@@ -2271,8 +2000,6 @@ function init() {
     if (!$("pgcResults")) return;              // not this page
     CFG = window.pangenomeConfig || {};
     if (CFG.maxLiftSpan) MAX_SPAN = CFG.maxLiftSpan;
-    if (typeof CFG.maxLiftTargets === "number" && CFG.maxLiftTargets > 0) MAX_TARGETS = CFG.maxLiftTargets;
-    if (typeof CFG.maxLiftTargetMb === "number" && CFG.maxLiftTargetMb > 0) BUDGET_MB = CFG.maxLiftTargetMb;
     if (typeof CFG.maxChosenTargets === "number" && CFG.maxChosenTargets >= 0) MAX_CHOSEN = CFG.maxChosenTargets;
 
     // Options carried over from hgConvert: the user set them there, so honour
@@ -2350,8 +2077,6 @@ else
 if (typeof module !== "undefined" && module.exports)
     module.exports = {
         parsePosition: parsePosition,
-        batchSize: batchSize,
-        liftInBatches: liftInBatches,
         canonicalHap: canonicalHap,
         hapInGraph: hapInGraph,
         buildSource: buildSource,
@@ -2368,9 +2093,6 @@ if (typeof module !== "undefined" && module.exports)
         hapForDb: hapForDb,
         assemblyForHap: assemblyForHap,
         browserLinkFor: browserLinkFor,
-        renderResults: renderResults,
-        groupBlocks: groupBlocks,
-        blocksAsIntervals: blocksAsIntervals,
         ancPlot: ancPlot,
         samplePop: samplePop,
         allHapsFrom: allHapsFrom,

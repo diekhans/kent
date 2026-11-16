@@ -18,14 +18,12 @@
  *   (no cmd)      render the page (form + result area) + serve the JS.
  *   cmd=map       POST the "payload" JSON to  {apiBase}/api/v1/map .
  *   cmd=poll      GET  {apiBase}/api/v1/map/{job_id} .
- *   cmd=liftover  POST the "payload" JSON to {apiBase}/api/v1/liftover - translate
- *                 an interval from one haplotype's coordinates to another's.
- *                 Synchronous: the answer comes back in the same response.
  *   cmd=liftoverTargets  POST to {apiBase}/api/v1/liftover/targets - which
  *                 haplotypes this region can translate to at all.
- *   cmd=liftoverAll  POST to {apiBase}/api/v1/liftover with tgt "*" in its
- *                 summary form - one row per haplotype in the graph, for
- *                 page=liftAll.  The request sent on is built here.
+ *   cmd=liftoverAll  POST to {apiBase}/api/v1/liftover in its summary form -
+ *                 where a region lands, one row per haplotype: every
+ *                 haplotype in the graph (page=liftAll), or the ones PanLift's
+ *                 form names.  The request sent on is built here.
  *   cmd=alignTrack build a bigPsl custom track of the mapped sequence on the
  *                 target haplotype, as hgBlat keeps its results, and answer
  *                 with the browser link that draws it.
@@ -79,11 +77,6 @@
  *                            haplotype (page=liftAll); default 20000000.  A
  *                            summary is about 1 kB a haplotype; past this the
  *                            page says the region is too complex to show.
- *   pangenome.maxLiftTargetMb  max (span in Mb) x (targets) per request; default
- *                            5.  The service traverses once per target and
- *                            serves one request at a time, so the product is
- *                            the real cost - capping span and targets
- *                            separately let 10 Mb x 10 targets through.
  *   pangenome.maxChainSpan   max bp we may fetch to build a chain; default
  *                            10000000.  Separate from maxLiftSpan on purpose:
  *                            that limits what a user may ask for, this limits
@@ -110,18 +103,11 @@
  *                            the user follows the link; default 5000000.  Both
  *                            are clamped so interval+2*pad fits maxLiftSpan.
  *                            Set either to 0 to switch that stage off.
- *   pangenome.maxLiftTargets max target haplotypes in one translation request;
- *                            default 10.  Not a limit on the reader: PanLift
- *                            sends a longer list as several requests, which
- *                            the queue (maxConcurrent) takes in turn.
  *   pangenome.maxChosenTargets  most haplotypes PanLift's picker lets a reader
  *                            choose for one conversion; default 50, 0 for no
  *                            limit.  Past it the question is about every
- *                            haplotype, which page=liftAll answers in one request.
- *                            Each target is a separate traversal on the mapping
- *                            server, so this is enforced here as well as in the
- *                            page - a request naming all ~464 haplotypes can
- *                            overload it.
+ *                            haplotype, which page=liftAll answers.  Enforced
+ *                            here as well as in the page.
  *   pangenome.quickLift      "on"/"off" default for the "show the source's gene
  *                            annotations on the target" checkbox on the
  *                            conversion page; default "on".  The checkbox is
@@ -675,16 +661,12 @@ for (ref = tgtEl->val.jeList; ref != NULL; ref = ref->next)
 return TRUE;
 }
 
-static char *pgValidateLiftover(char *payload, long maxSpan, boolean needTgt,
-                                int maxTargets)
-/* Server-side checks on a coordinate-translation request before we forward it:
+static char *pgValidateLiftover(char *payload, long maxSpan)
+/* Server-side checks on the region of a coordinate-translation request before
+ * anything is sent on:
  *   src   - full 3-field PanSN contig path (coordinates live on a contig)
  *   start - 0-based, end - exclusive, start < end
  *   span  - within the middleware's cap
- *   tgt   - a haplotype/contig name, or a non-empty array of them (only when
- *           needTgt; the reachability query has no target).  Capped: each target
- *           is a separate graph traversal upstream, and a request naming every
- *           haplotype is enough to overload the mapping server.
  * Returns NULL if OK, otherwise a human-readable reason.  Never aborts. */
 {
 static char msg[256];
@@ -696,7 +678,6 @@ if (errCatchStart(errCatch))
     char *src = jsonOptionalStringField(root, "src", NULL);
     struct jsonElement *startEl = jsonFindNamedField(root, "", "start");
     struct jsonElement *endEl = jsonFindNamedField(root, "", "end");
-    struct jsonElement *tgtEl = jsonFindNamedField(root, "", "tgt");
 
     if (isEmpty(src))
         result = "missing 'src' haplotype path";
@@ -706,21 +687,6 @@ if (errCatchStart(errCatch))
         result = "missing 'start' or 'end'";
     else if (startEl->type != jsonNumber || endEl->type != jsonNumber)
         result = "'start' and 'end' must be numbers";
-    else if (needTgt && (tgtEl == NULL ||
-             (tgtEl->type != jsonString && tgtEl->type != jsonList)))
-        result = "'tgt' must be a haplotype name or an array of them";
-    else if (needTgt && tgtEl->type == jsonList && tgtEl->val.jeList == NULL)
-        result = "'tgt' array is empty";
-    else if (needTgt && tgtEl->type == jsonList &&
-             slCount(tgtEl->val.jeList) > maxTargets)
-        {
-        safef(msg, sizeof(msg),
-              "too many target haplotypes: %d (limit is %d per conversion)",
-              slCount(tgtEl->val.jeList), maxTargets);
-        result = msg;
-        }
-    else if (needTgt && !pgTargetsAreNames(tgtEl))
-        result = "'tgt' must name haplotypes, such as HG00097#1";
     else
         {
         long start = startEl->val.jeNumber, end = endEl->val.jeNumber;
@@ -732,26 +698,6 @@ if (errCatchStart(errCatch))
             {
             safef(msg, sizeof(msg), "range is %ld bp (limit %ld)", end - start, maxSpan);
             result = msg;
-            }
-        /* Span and target count are each capped above, but the work is their
-         * product: the mapping service traverses the graph once per target and
-         * handles one request at a time, so 10 targets x 10 Mb is a hundred
-         * target-megabases and about two minutes during which nobody else is
-         * served.  Capping each half separately is what allowed that. */
-        else if (needTgt)
-            {
-            long targets = (tgtEl != NULL && tgtEl->type == jsonList)
-                           ? slCount(tgtEl->val.jeList) : 1;
-            long budgetMb = atol(cfgOr("pangenome.maxLiftTargetMb", "5"));
-            long askedMb = ((end - start) * targets + 999999) / 1000000;
-            if (budgetMb > 0 && askedMb > budgetMb)
-                {
-                safef(msg, sizeof(msg),
-                      "%ld bp x %ld assemblies is %ld megabase-assemblies "
-                      "(limit %ld); convert a smaller range or fewer assemblies",
-                      end - start, targets, askedMb, budgetMb);
-                result = msg;
-                }
             }
         }
     }
@@ -857,7 +803,7 @@ else if (sameString(cmd, "liftoverTargets"))
         return;
         }
     long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
-    char *bad = pgValidateLiftover(payload, maxSpan, FALSE, 0);
+    char *bad = pgValidateLiftover(payload, maxSpan);
     if (bad != NULL)
         {
         emitJsonError("%s", bad);
@@ -929,12 +875,13 @@ else if (sameString(cmd, "surjectAll"))
     }
 else if (sameString(cmd, "liftoverAll"))
     {
-    /* The region on every haplotype, one row each: where it lands and how
-     * much of it does.  The service walks the source once for all of them, so
-     * this costs about what a single target does.  What goes upstream is
-     * rebuilt from the checked fields alone: the target is always "*" in its
+    /* The region on every haplotype, or on the ones the request names, one
+     * row each: where it lands and how much of it does.  The service walks the
+     * source once for all of them, so this costs about what a single target
+     * does.  What goes upstream is rebuilt from the checked fields alone: the
      * summary form, never the block list, which for every haplotype runs to
-     * about 118,000 rows a megabase. */
+     * about 118,000 rows a megabase; and as targets either "*" or a list of
+     * haplotype names no longer than a reader may choose. */
     char *payload = cgiOptionalString("payload");
     if (isEmpty(payload))
         {
@@ -942,19 +889,44 @@ else if (sameString(cmd, "liftoverAll"))
         return;
         }
     long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
-    char *bad = pgValidateLiftover(payload, maxSpan, FALSE, 0);
+    char *bad = pgValidateLiftover(payload, maxSpan);
     if (bad != NULL)
         {
         emitJsonError("%s", bad);
         return;
         }
     struct jsonElement *root = jsonParse(payload);
+    struct jsonElement *tgtEl = jsonFindNamedField(root, "", "tgt");
+    if (tgtEl != NULL)
+        {
+        int maxChosen = atoi(cfgOr("pangenome.maxChosenTargets", "50"));
+        if (tgtEl->type != jsonList || tgtEl->val.jeList == NULL || !pgTargetsAreNames(tgtEl))
+            {
+            emitJsonError("'tgt' must be a list of haplotypes, such as HG00097#1");
+            return;
+            }
+        if (maxChosen > 0 && slCount(tgtEl->val.jeList) > maxChosen)
+            {
+            emitJsonError("too many target haplotypes: %d (limit is %d per conversion)",
+                          slCount(tgtEl->val.jeList), maxChosen);
+            return;
+            }
+        }
     struct jsonWrite *jw = jsonWriteNew();
     jsonWriteObjectStart(jw, NULL);
     jsonWriteString(jw, "src", jsonOptionalStringField(root, "src", NULL));
     jsonWriteNumber(jw, "start", (long long)jsonFindNamedField(root, "", "start")->val.jeNumber);
     jsonWriteNumber(jw, "end", (long long)jsonFindNamedField(root, "", "end")->val.jeNumber);
-    jsonWriteString(jw, "tgt", "*");
+    if (tgtEl == NULL)
+        jsonWriteString(jw, "tgt", "*");
+    else
+        {
+        struct slRef *ref;
+        jsonWriteListStart(jw, "tgt");
+        for (ref = tgtEl->val.jeList; ref != NULL; ref = ref->next)
+            jsonWriteString(jw, NULL, ((struct jsonElement *)ref->val)->val.jeString);
+        jsonWriteListEnd(jw);
+        }
     jsonWriteBoolean(jw, "summary", TRUE);
     jsonWriteObjectEnd(jw);
     safef(url, sizeof(url), "%s/api/v1/liftover", apiBase);
@@ -983,26 +955,6 @@ else if (sameString(cmd, "haplotypes"))
     safef(url, sizeof(url), "%s/api/v1/haplotypes", apiBase);
     r = pgHttp(url, NULL, timeout, token);
     }
-else /* cmd == "liftover" */
-    {
-    char *payload = cgiOptionalString("payload");
-    if (isEmpty(payload))
-        {
-        emitJsonError("missing 'payload'");
-        return;
-        }
-    long maxSpan = atol(cfgOr("pangenome.maxLiftSpan", "1000000"));
-    int maxTargets = atoi(cfgOr("pangenome.maxLiftTargets", "10"));
-    char *bad = pgValidateLiftover(payload, maxSpan, TRUE, maxTargets);
-    if (bad != NULL)
-        {
-        emitJsonError("%s", bad);
-        return;
-        }
-    safef(url, sizeof(url), "%s/api/v1/liftover", apiBase);
-    r = pgHttp(url, payload, timeout, token);
-    }
-
 if (r.busy)
     emitJsonError("%s", r.errMsg);
 else if (r.transportErr)
@@ -3830,8 +3782,6 @@ jsInlineF("window.pangenomeConfig = {\n"
           "  presetHide: \"%s\",\n"
           "  minTargetCoverage: %s,\n"
           "  maxTargetNodes: %s,\n"
-          "  maxLiftTargets: %d,\n"
-          "  maxLiftTargetMb: %ld,\n"
           "  maxChosenTargets: %d,\n"
           "  hgsid: \"%s\",\n"
           "  quickLiftEnabled: %s,\n"
@@ -3853,8 +3803,6 @@ jsInlineF("window.pangenomeConfig = {\n"
           jsonStringEscape(cgiUsualString("pgHide", "")),
           cfgOr("pangenome.minTargetCoverage", "10"),
           cfgOr("pangenome.maxTargetNodes", "300"),
-          atoi(cfgOr("pangenome.maxLiftTargets", "10")),
-          atol(cfgOr("pangenome.maxLiftTargetMb", "5")),
           atoi(cfgOr("pangenome.maxChosenTargets", "50")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
@@ -3909,7 +3857,7 @@ static void drawConvertPage()
  * arriving from a track view pre-fills them with whatever the user was looking
  * at - but both stay editable.  Destination haplotypes come from the live graph
  * (cmd=haplotypes) and the translation itself is done by the middleware
- * (cmd=liftover); js/hgPangenomeConvert.js drives both. */
+ * (cmd=liftoverAll); js/hgPangenomeConvert.js drives both. */
 {
 /* Whatever the user was last viewing, if anything. */
 char *db = cartUsualString(cart, "db", "");
@@ -4407,7 +4355,7 @@ if (sameOk(cmd, "locus"))
     return 0;
     }
 if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
-                    || sameString(cmd, "liftover") || sameString(cmd, "haplotypes")
+                    || sameString(cmd, "haplotypes")
                     || sameString(cmd, "liftoverTargets") || sameString(cmd, "liftoverAll")
                     || sameString(cmd, "surject") || sameString(cmd, "surjectAll")))
     {
@@ -4415,7 +4363,7 @@ if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
      * JSON hog-exit so the client renders it as an error.  Polling is cheap
      * and happens many times per job, so it is deliberately NOT throttled -
      * throttling it would penalize legitimate users' polling loops. */
-    if (sameString(cmd, "map") || sameString(cmd, "liftover")
+    if (sameString(cmd, "map")
         || sameString(cmd, "liftoverTargets") || sameString(cmd, "liftoverAll")
         || sameString(cmd, "surject"))
         {
