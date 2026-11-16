@@ -8259,21 +8259,9 @@ char *pslName, *faName, *qName;
 enum gfType qt, tt;
 boolean isProt;
 
-/* A tool other than hgBlat that writes ss names the track with ssShortLabel,
- * which hgBlat never sets (see hgTracks.c userPslTg).  Its results are not a
- * BLAT search, so the page says neither BLAT in its title nor BLAT's track
- * description. */
-char *ssLong = cartOptionalString(cart, "ssLongLabel");
-boolean blatContext = isEmpty(cartOptionalString(cart, "ssShortLabel"));
-char heading[256];
-if (blatContext)
-    safef(heading, sizeof heading, "BLAT Search Alignments");
-else
-    safef(heading, sizeof heading, "%s", isNotEmpty(ssLong) ? ssLong : "Sequence Alignments");
-char *headingHtml = htmlEncode(heading);
-cartWebStart(cart, database, "%s", headingHtml);
+cartWebStart(cart, database, "BLAT Search Alignments");
 
-printf("<H2>%s</H2>\n", headingHtml);
+printf("<H2>BLAT Search Alignments</H2>\n");
 printf("<A href id='hgUsualPslShowAllLink'>Show All</A>\n");
 printf("<H3>Click on a line to see detailed letter-by-letter display</H3>\n");
 
@@ -8338,24 +8326,7 @@ jsInline("$('#hgUsualPslShowAllLink').click(function(){\n"
 	"return false;\n"
 	"});\n");
 
-if (blatContext)
-    webIncludeHelpFile(USER_PSL_TRACK_NAME, TRUE);
-else
-    {
-    printf("<H2>Description</H2>\n");
-    printf("<P>This track shows the alignments of your sequence(s) to the genome assembly. "
-           "In the Genome Browser, alignments of nucleotides use color to highlight "
-           "differences as follows:</P>\n");
-    printf("<UL>\n"
-           "<LI><B>red</B>: Genome and query sequence have different bases at this position.\n"
-           "<LI><B>orange</B>: The query sequence has an insertion (or genome has a deletion "
-           "/ alignment gap) at this point.\n"
-           "<LI><B>purple</B>: The query sequence extends beyond the end of the alignment.\n"
-           "<LI><B>green</B>: The query sequence appears to have a polyA tail that is not "
-           "aligned to the genome.\n"
-           "</UL>\n");
-    }
-freeMem(headingHtml);
+webIncludeHelpFile(USER_PSL_TRACK_NAME, TRUE);
 }
 
 void doHgGold(struct trackDb *tdb, char *fragName)
@@ -8946,7 +8917,6 @@ static boolean gAlnModern = FALSE;
 static boolean gAlnInWindow = FALSE;
 static void showSomeAlignmentModern(struct psl *psl, bioSeq *oSeq, enum gfType qType,
                        int qStart, int qEnd, char *qName, int cdsS, int cdsE, boolean blatContext);
-static char *blatAsmLabel(char *database);
 
 void showSomeAlignment(struct psl *psl, bioSeq *oSeq,
                        enum gfType qType, int qStart, int qEnd,
@@ -9009,8 +8979,15 @@ exit(0);	/* Avoid cartHtmlEnd. */
 
 void showSomePartialDnaAlignment(struct psl *partPsl, struct psl *wholePsl,
 				 bioSeq *oSeq, char *qName, int cdsS, int cdsE)
-/* Display protein or DNA alignment in a frame. */
+/* Display protein or DNA alignment in a frame (or the modern single page when gAlnModern). */
 {
+if (gAlnModern)
+    {   /* modern single-page view of the part in the window, as showSomeAlignment() does the whole */
+    gAlnInWindow = (partPsl != wholePsl);
+    showSomeAlignmentModern(wholePsl, oSeq, gftDna, 0, oSeq->size, qName, cdsS, cdsE, FALSE);
+    webEndGb();
+    exit(0);   // we drew the whole page; skip the frameset close
+    }
 int blockCount, i;
 struct tempName indexTn, bodyTn;
 FILE *index, *body;
@@ -9300,7 +9277,7 @@ if (tdb == NULL)
     errAbort("BUG: bigPsl alignment table '%s' not found; this maybe causes by `.' in track names", aliTable);
 char title[1024];
 safef(title, sizeof title, "%s vs Genomic [%s]", acc, aliTable);
-htmlFramesetStart(title);
+alnModernStart(title);   // modern page when modernAlignPage is set, as htcBigPslAli()
 
 /* Get some environment vars. */
 start = cartInt(cart, "l");
@@ -9535,26 +9512,7 @@ char *bareAliTable = trackHubSkipHubName(aliTable);
 char *accForTitle = startsWith("ncbiRefSeq", bareAliTable) ? acc : accChopped;
 char title[1024];
 safef(title, sizeof title, "%s vs Genomic [%s]", accForTitle, aliTable);
-/* A user's sequence gets the modern single page here wherever htcUserAli() gives it one, so the
- * whole alignment and the part in the window are the same kind of page.  blatContext as there:
- * a tool other than hgBlat names the track with ssShortLabel. */
-boolean modern = startsWith("user", bareAliTable)
-                 && (cartUsualBoolean(cart, "blatNewPage", FALSE)
-                     || cfgOptionBooleanDefault("modernAlignPage", FALSE));
-boolean blatContext = isEmpty(cartOptionalString(cart, "ssShortLabel"));
-if (modern)
-    {
-    char pageTitle[256];
-    char *asmLabel = blatAsmLabel(database);
-    char *asmLabelHtml = htmlEncode(asmLabel);
-    safef(pageTitle, sizeof pageTitle, "%sBase Alignment: %s", blatContext ? "BLAT " : "",
-          asmLabelHtml);
-    webStartGbNoBanner(cart, database, pageTitle);
-    freeMem(asmLabelHtml);
-    freeMem(asmLabel);
-    }
-else
-    htmlFramesetStart(title);
+htmlFramesetStart(title);
 
 if (startsWith("user", bareAliTable))
     {
@@ -9573,9 +9531,6 @@ if (startsWith("user", bareAliTable))
 	cartRemove(cart, "ss");
 	errAbort("hgBlat temporary files not found");
 	}
-
-    if (ss == NULL)   // the cart no longer holds the sequence track; parseSs() would crash on it
-	errAbort("This alignment is no longer available. Please run the search again.");
 
     start = cartInt(cart, "o");
 
@@ -9679,15 +9634,6 @@ else
 
 if (startsWith("xeno", bareAliTable))
     errAbort("htcCdnaAliInWindow does not support translated alignments.");
-else if (modern)
-    {
-    gAlnInWindow = (partPsl != wholePsl);
-    showSomeAlignmentModern(wholePsl, rnaSeq, gftDna, 0, rnaSeq->size, NULL,
-                            cdsStart, cdsEnd, blatContext);
-    webEndGb();
-    cartCheckout(&cart);   // exit(0) skips main's checkout, as in htcUserAli()
-    exit(0);
-    }
 else
     showSomePartialDnaAlignment(partPsl, wholePsl, rnaSeq,
 				NULL, cdsStart, cdsEnd);
@@ -10273,8 +10219,7 @@ if (modern)
     char pageTitle[256];
     char *asmLabel = blatAsmLabel(database);   // may carry a hub's genomes.txt organism string
     char *asmLabelHtml = htmlEncode(asmLabel);
-    safef(pageTitle, sizeof pageTitle, "%sBase Alignment: %s",
-          isEmpty(cartOptionalString(cart, "ssShortLabel")) ? "BLAT " : "", asmLabelHtml);
+    safef(pageTitle, sizeof pageTitle, "BLAT Base Alignment: %s", asmLabelHtml);
     webStartGbNoBanner(cart, database, pageTitle);   // menubar + <main>, no legacy section tables
     freeMem(asmLabelHtml);
     freeMem(asmLabel);
@@ -10311,14 +10256,7 @@ for (oSeq = oSeqList; oSeq != NULL; oSeq = oSeq->next)
 if (oSeq == NULL)  errAbort("%s is in %s but not in %s. Internal error.", qName, pslName, faName);
 if (modern)
     {
-    /* Whether this really is a BLAT result decides the chrome: the title, and a
-     * "Back to results" button pointing at hgBlat.  The ss mechanism is not
-     * BLAT's alone - a tool that writes ss itself also names the track, with
-     * ssShortLabel, which hgBlat never sets (see hgTracks.c userPslTg).  Sending
-     * one of those users "back" to a BLAT search they never ran is a dead end,
-     * so they get the neutral chrome and a link to the browser instead. */
-    boolean blatContext = isEmpty(cartOptionalString(cart, "ssShortLabel"));
-    showSomeAlignmentModern(psl, oSeq, qt, 0, oSeq->size, NULL, 0, 0, blatContext);
+    showSomeAlignmentModern(psl, oSeq, qt, 0, oSeq->size, NULL, 0, 0, TRUE);   // hgBlat context
     webEndGb();
     cartCheckout(&cart);   // exit(0) below skips main's checkout, so save the cart here or lose it
     exit(0);   // we drew the whole page; skip the framework's table-closing cartHtmlEnd

@@ -1136,10 +1136,6 @@ if (oldVars)
 	    cartRemove(cart, "near_search");
 	/* hgBlat results (hgUserPsl track): */
 	cartRemove(cart, "ss");
-	/* and any label another tool put on that track, so it cannot outlive
-	 * the results it named */
-	cartRemove(cart, "ssShortLabel");
-	cartRemove(cart, "ssLongLabel");
 	/* hgTables correlate: */
 	cartRemove(cart, "hgta_correlateTrack");
 	cartRemove(cart, "hgta_correlateTable");

@@ -333,7 +333,7 @@ void changeTrackVisExclude(struct group *groupList, char *groupTarget, int chang
  * ordering also.
  * If excludeHash is not NULL then don't change the visibility of the group names in that hash.
  * If keepQuickLift is set then don't change the visibility of tracks lifted from another
- * assembly via QuickLift, nor of the user's searched sequence (hgUserPsl).
+ * assembly via QuickLift.
  */
 {
 struct group *group;
@@ -357,11 +357,6 @@ for (group = groupList; group != NULL; group = group->next)
             struct trackDb *tdb = track->tdb;
             if (keepQuickLift && (trackDbSetting(tdb, "quickLiftUrl") != NULL))
                 continue;   // leave QuickLifted tracks visible
-            // and the sequence the user searched with ("ss", from hgBlat or a tool that writes
-            // it the same way): hiding the target's own tracks is meant to leave what the user
-            // brought, and an arrival with both would otherwise show the lifted tracks alone
-            if (keepQuickLift && sameString(track->track, "hgUserPsl"))
-                continue;
             if (changeVis == -1) // to default
                 {
                 if (tdbIsComposite(tdb))
@@ -1179,16 +1174,6 @@ tg->canPack = TRUE;
 tg->visibility = tvPack;
 tg->longLabel = "Your Sequence from Blat Search";
 tg->shortLabel = "Blat Sequence";
-/* A tool other than hgBlat can put its own name on this track: it writes "ss"
- * into the cart and these two alongside it.  hgBlat never sets them, so its
- * own labels are untouched.  They are cleared with "ss" (see web.c) so a label
- * cannot outlive the results it belongs to. */
-char *ssShort = cartOptionalString(cart, "ssShortLabel");
-char *ssLong = cartOptionalString(cart, "ssLongLabel");
-if (isNotEmpty(ssShort))
-    tg->shortLabel = cloneString(ssShort);
-if (isNotEmpty(ssLong))
-    tg->longLabel = cloneString(ssLong);
 tg->loadItems = loadUserPsl;
 tg->mapItemName = lfMapNameFromExtra;
 tg->priority = 103;
