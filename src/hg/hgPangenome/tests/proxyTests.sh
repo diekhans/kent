@@ -1,18 +1,23 @@
 #!/bin/bash
 # proxyTests.sh - Layer 2 of the hgPangenome test suite.
 #
-# Tests the compiled CGI's API modes (cmd=map / cmd=poll) against a mock
-# middleware: server-side input caps, what we actually send upstream (URL,
-# Content-Type, auth header, payload bytes), the job-id charset guard, upstream
-# HTTP error mapping, timeouts, response passthrough, and that bot-delay is
-# applied to submissions but not to polling.
+# Tests the compiled CGI's commands against a mock middleware: server-side
+# input caps, what we actually send upstream (URL, Content-Type, auth header,
+# payload bytes), the job-id charset guard, upstream HTTP error mapping,
+# timeouts, response passthrough, and that bot-delay is applied to submissions
+# but not to polling.
 #
-# Fully isolated: the test hg.conf files do NOT include the site hg.conf, so
-# these tests never contact the shared bottleneck server, MySQL, or the real
-# middleware.  Only python3 stdlib + the compiled CGI are needed.
+# The CGI tested is the one built from this tree: $PG_CGI, or ../hgPangenome
+# as "make compile" leaves it.  "make test" builds it first.  An installed CGI
+# is never used, because it may be older than the source being tested.
 #
-# Usage:   ./proxyTests.sh            (exit 0 = all passed)
-#          PG_CGI=/path/to/hgPangenome ./proxyTests.sh
+# Isolated: the test hg.conf files do not include the site hg.conf, so nothing
+# here contacts the bottleneck server, MySQL or the real middleware.  The one
+# exception is the last section, the commands that run inside the cart, which
+# is left out unless PG_DB_TESTS=1 ("make testWithDb").
+#
+# Exit 0 = all passed, 1 = a check failed, 77 = could not run (no CGI, or the
+# cart section was asked for and no hg.conf here reaches a central database).
 
 set -u
 cd "$(dirname "$0")"
@@ -32,18 +37,21 @@ trap cleanup EXIT
 
 # ---------------------------------------------------------------- locate CGI
 
+NOT_RUN=77
+notRun=""
+
 find_cgi() {
-    if [ -n "${PG_CGI:-}" ] && [ -x "${PG_CGI}" ]; then echo "$PG_CGI"; return; fi
-    if [ -x ../hgPangenome ]; then echo "$(cd .. && pwd)/hgPangenome"; return; fi
-    if [ -x /usr/local/apache/cgi-bin-$USER/hgPangenome ]; then
-        echo "/usr/local/apache/cgi-bin-$USER/hgPangenome"; return; fi
-    echo ""
+    if [ -n "${PG_CGI:-}" ]; then
+        [ -x "$PG_CGI" ] && echo "$(cd "$(dirname "$PG_CGI")" && pwd)/$(basename "$PG_CGI")"
+        return
+    fi
+    [ -x ../hgPangenome ] && echo "$(cd .. && pwd)/hgPangenome"
 }
 CGI=$(find_cgi)
 if [ -z "$CGI" ]; then
-    echo "SKIP: no hgPangenome binary found."
-    echo "      Build one with:  (cd .. && make compile)   or set PG_CGI=/path/to/hgPangenome"
-    exit 0
+    echo "NOT RUN: no hgPangenome built from this tree."
+    echo "         Use \"make test\", which builds one, or set PG_CGI=/path/to/hgPangenome"
+    exit $NOT_RUN
 fi
 echo "Using CGI: $CGI"
 
@@ -575,18 +583,6 @@ check_contains "oversized payload rejected as JSON, not HTML" "$out" \
     "request too large"
 check_not_contains "oversized payload does not emit an HTML page" "$out" "DOCTYPE"
 
-# The page no longer posts its blocks - the server fetches them - so a failed
-# fetch must say why.  Reporting "no 'blocks' array in the request" described
-# our own request and hid the upstream reason (a 503 while the service was
-# restarting looked identical to a region that cannot be lifted).
-mk_conf "$TMP/dead2.conf" "pangenome.apiBase=http://127.0.0.1:$(free_port)"
-out=$(cgi_post_cmd "$TMP/dead2.conf" quickLift \
-    '{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38",
-      "srcStart":1000,"srcEnd":2000,"tgt":"CHM13#0","position":"chr1:1-2",
-      "hideTracks":"off"}')
-check_not_contains "failed block fetch does not blame the request" "$out" \
-    "no 'blocks' array"
-
 lift_reject "malformed JSON rejected without aborting" \
     '{"src":' "invalid JSON payload"
 
@@ -655,30 +651,24 @@ out=$(cgi_post_cmd "$CONF" map \
   '{"sequences":[{"name":"a","sequence":"ACGT"}],"options":{"max_multimaps":3}}')
 check_eq "exactly the ceiling accepted (boundary)" "$(mock_count)" "1"
 
-section "alignTrack: a hostile query name cannot corrupt the files"
+# ------------------------------------------- commands that run in the cart
+#
+# quickLift, refAnnot and alignTrack build a track hub or write the user's
+# sequence track, so they run inside the cart, and the cart needs the browser's
+# central database.  The isolated hg.conf has none, and there the CGI stops
+# before any of our code runs.  So these checks are not part of the default
+# run: each request starts a new session row in that database.  PG_DB_TESTS=1
+# ("make testWithDb") includes them, borrowing the database settings from a
+# real hg.conf and nothing else.
 
-# the name comes from the user's own FASTA header and lands in a FASTA line, a
-# PSL column and hgc's whitespace-split "i=" parameter
-ql_name_probe=$(cgi_post_cmd "$CONF" alignTrack \
-  '{"db":"noSuchDb","contig":"c","name":"a b","sequence":"ACGT","cigar":"4M","start":0}')
-case "$ql_name_probe" in
-    *'"status"'*) check_contains "unknown assembly still reported cleanly" \
-                      "$ql_name_probe" "no sequence sizes available" ;;
-    *) echo "  SKIP: alignTrack needs a cart-capable hg.conf" ;;
-esac
+if [ "${PG_DB_TESTS:-0}" != "1" ]; then
+    echo
+    echo "--- commands that run in the cart: not included (make testWithDb) ---"
+else
+section "commands that run in the cart (uses the central database)"
 
-section "quickLift annotation lifting (validation)"
-
-# cmd=quickLift is the one command that builds a track hub, so unlike the rest
-# it runs inside the cart shell and needs a central database.  The isolated
-# hg.conf these tests use deliberately has none, so the shell aborts before any
-# of our code runs.  Probe for that and skip rather than report failures the
-# developer cannot act on.
-# Borrow database settings from a real hg.conf; the rest of the suite stays
-# hermetic, only this section needs one.  Probe by actually running the command
-# rather than by inspecting the file - credentials often live in an included
-# private file we cannot read from here.
-ql_ok=0
+# Probe by running a command rather than by reading the file: credentials
+# often live in an included private file we cannot read from here.
 QCONF=""
 for cand in "${HGDB_CONF:-}" "${HOME:-}/.hg.conf" "${HOME:-}/hg.conf" \
             /usr/local/apache/cgi-bin-$(id -un)/hg.conf \
@@ -688,20 +678,46 @@ for cand in "${HGDB_CONF:-}" "${HOME:-}/.hg.conf" "${HOME:-}/hg.conf" \
     # Borrow the database settings but not the site's front-door defences:
     # with a bottleneck server and a Cloudflare site key configured, a
     # cookie-less request like ours is answered with a captcha page instead of
-    # reaching the command at all.
+    # reaching the command at all.  "delete" takes off one setting of a key,
+    # and a conf that includes another can hold several, hence the repeats.
     { echo "include $abs"
-      echo "delete cloudFlareSiteKey bottleneck.host bottleneck.port"
+      for _ in 1 2 3 4; do
+          echo "delete cloudFlareSiteKey bottleneck.host bottleneck.port"
+      done
       echo "pangenomeTools=on"
       echo "pangenome.apiBase=http://127.0.0.1:$PORT"
       echo "pangenome.timeoutSecs=10"; } > "$TMP/quicklift.conf"
     case "$(cgi_post_cmd "$TMP/quicklift.conf" quickLift '{}' 2>/dev/null)" in
-        *'"status"'*) ql_ok=1; QCONF="$TMP/quicklift.conf"; break ;;
+        *'"status"'*) QCONF="$TMP/quicklift.conf"; break ;;
     esac
 done
 
-if [ "$ql_ok" -eq 0 ]; then
-    echo "  SKIP: no hg.conf with a reachable central database"
+if [ -z "$QCONF" ]; then
+    echo "  NOT RUN: no hg.conf here reaches a central database"
+    notRun="the commands that run in the cart"
 else
+    # the name comes from the user's own FASTA header and lands in a FASTA
+    # line, a PSL column and hgc's whitespace-split "i=" parameter
+    out=$(cgi_post_cmd "$QCONF" alignTrack \
+      '{"db":"noSuchDb","contig":"c","name":"a b","sequence":"ACGT","cigar":"4M","start":0}')
+    check_contains "alignTrack: an unknown assembly is reported, not crashed on" \
+        "$out" "no sequence sizes available"
+
+    # The page does not post its blocks - the server fetches them - so a failed
+    # fetch must say why.  Reporting "no 'blocks' array in the request"
+    # described our own request and hid the upstream reason (a 503 while the
+    # service was restarting looked identical to a region that cannot be lifted).
+    { echo "include $QCONF"
+      echo "pangenome.apiBase=http://127.0.0.1:$(free_port)"; } > "$TMP/quickliftDead.conf"
+    out=$(cgi_post_cmd "$TMP/quickliftDead.conf" quickLift \
+        '{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38",
+          "srcStart":1000,"srcEnd":2000,"tgt":"CHM13#0","position":"chr1:1-2",
+          "hideTracks":"off"}')
+    check_contains "quickLift: a failed block fetch says the server was not reached" \
+        "$out" "could not reach the mapping server"
+    check_not_contains "and does not blame the request" "$out" "no 'blocks' array"
+    check_not_contains "the bottleneck server is not contacted" "$out" "botDelay"
+
     ql_reject() {                    # ql_reject <label> <payload> <expected text>
         : > "$REC"
         local o
@@ -763,16 +779,20 @@ else
         '{"db":"hg38","path":"GRCh38#0#chr1","start":1,"end":2,"position":"chr1:1-2","ref":"GRCh38#0"}' \
         "this hit is already on GRCh38"
 fi
+fi
 
 # --------------------------------------------------------------------- report
 
 echo
 echo "---------------------------------------------"
 total=$((pass+fail))
-if [ "$fail" -eq 0 ]; then
-    echo "ALL PASSED: $pass/$total"
-    exit 0
-else
+if [ "$fail" -ne 0 ]; then
     echo "FAILED: $fail of $total"
     exit 1
 fi
+if [ -n "$notRun" ]; then
+    echo "PASSED $pass/$total, but NOT RUN: $notRun"
+    exit $NOT_RUN
+fi
+echo "ALL PASSED: $pass/$total"
+exit 0

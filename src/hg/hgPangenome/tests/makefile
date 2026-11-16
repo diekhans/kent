@@ -1,30 +1,34 @@
 kentSrc = ../../..
 include ../../../inc/common.mk
 
-# Tests for PanView, the pangenome mapping tool.  Everything here is self-contained: no
-# network, no MySQL, no live middleware, no shared bottleneck server.  Layers
-# whose tool is missing SKIP rather than fail, so "make test" is safe on a build
-# machine that has no node (node is optional in kent, see NODEBIN in common.mk).
+# Tests for PanView and PanLift.  "make test" builds the CGI from this tree,
+# without installing it, runs every layer against it and removes it again.  It
+# contacts no network, no MySQL, no live middleware and no bottleneck server.
+# A layer that cannot run (no node, say) is reported as NOT RUN and the suite
+# does not pass.
 
 test::
-	./runTests.sh
-
-# The proxy layer needs the CGI binary.  This builds one here (without
-# installing it) and runs the suite against it, then removes it again.
-testWithCgi::
 	(cd .. && ${MAKE} compile)
 	PG_CGI=../hgPangenome ./runTests.sh; status=$$?; rm -f ../hgPangenome; exit $$status
+
+# The same, plus the checks on the commands that run inside the cart
+# (quickLift, refAnnot, alignTrack).  Those need the browser's central
+# database, taken from your hg.conf, and each request starts a session row
+# there, which is why they are not in "make test".
+testWithDb::
+	(cd .. && ${MAKE} compile)
+	PG_DB_TESTS=1 PG_CGI=../hgPangenome ./runTests.sh; status=$$?; rm -f ../hgPangenome; exit $$status
 
 # Refresh the generated haplotype -> UCSC assembly table from the published
 # HPRC index, then re-run the tests that depend on it.
 updateAssemblies::
 	(cd .. && ./makeAssemblyMap.py)
-	./runTests.sh
+	${MAKE} test
 
 help::
 	@printf "makefile targets:\n\
-test             - run every layer that can run here (skips what needs missing tools)\n\
-testWithCgi      - build a throwaway CGI binary first, so the proxy layer runs too\n\
+test             - build the CGI from this tree and run every layer against it\n\
+testWithDb       - the same, plus the cart commands (uses the central database)\n\
 updateAssemblies - regenerate js/hgPangenomeAssemblies.js from the HPRC index, then test\n\
 \n\
 Individual layers:\n\
@@ -33,7 +37,7 @@ Individual layers:\n\
   node renderTests.js   contract/rendering tests (Layer 3)\n\
   node resultsTests.js  results page: cells, row order, download\n\
 \n\
-To test a specific CGI binary:  PG_CGI=/path/to/hgPangenome ./proxyTests.sh\n"
+To test a CGI you built yourself:  PG_CGI=/path/to/hgPangenome ./proxyTests.sh\n"
 
 clean::
 	rm -rf output

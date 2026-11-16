@@ -5,13 +5,19 @@ Tests for PanView, the pangenome mapping tool: the browser client (js/hgPangenom
 and the CGI proxy (hgPangenome.c).  Layered so that everything except the
 end-to-end layer runs with no middleware and no browser.
 
-Run everything that can run here:
+Run it:
 
-    make test          # or: ./runTests.sh
+    make test          # builds the CGI from this tree, tests it, removes it
+    make testWithDb    # the same, plus the commands that run inside the cart
 
-Layers whose tool is missing SKIP rather than fail, so this is safe on a build
-machine with no node (node is optional in kent - see NODEBIN in inc/common.mk)
-and with no CGI binary built.  "make help" lists the targets.
+"make test" contacts nothing outside this machine.  "make testWithDb" adds the
+checks on quickLift, refAnnot and alignTrack; those need the browser's central
+database, taken from your hg.conf, and each request starts a session row
+there, so they are not in the default run.
+
+A layer that cannot run - no node, no CGI built - is reported as NOT RUN and
+the suite result is INCOMPLETE, not PASS.  A JS test file that stops before
+printing its count is a failure.  "make help" lists the targets.
 
 Run just the unit layer:
 
@@ -45,8 +51,8 @@ mockMiddleware.py
                 and records every request (method, path, headers, body) as JSON
                 lines so tests can assert what the CGI actually sent upstream.
 proxyTests.sh   LAYER 2: CGI proxy tests.
-runTests.sh     Runs the layers (skipping any whose tool is absent).
-makefile        Standard kent entry point: make test / testWithCgi /
+runTests.sh     Runs the layers and prints one result line for each.
+makefile        Standard kent entry point: make test / testWithDb /
                 updateAssemblies / help.
 
 The haplotype -> assembly table
@@ -97,8 +103,10 @@ non-API paths    an unknown cmd neither forwards upstream nor emits an API
 
 Isolation: the test hg.conf files are standalone (they do NOT include the site
 hg.conf), so Layer 2 never touches the shared bottleneck server, MySQL, or the
-real middleware.  The CGI is located via $PG_CGI, else ../hgPangenome, else the
-installed sandbox CGI; if none exists the layer SKIPs with instructions.
+real middleware.  The exception is its last section, the commands that run
+inside the cart, which is only run by "make testWithDb".  The CGI is $PG_CGI,
+else ../hgPangenome as "make compile" leaves it; an installed CGI is never
+used, and with neither the layer is NOT RUN.
 
 
 What Layer 1 covers (62 assertions groups)

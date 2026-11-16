@@ -790,11 +790,14 @@ setTimeout(function () {
                      'and the cart it belongs to');
             });
 
-            t.test('no beacon where the browser has none', function () {
-                // It runs as the page is being replaced; naming a missing
-                // navigator would throw and take the navigation with it.
-                t.eq(padNoBeacon.sandbox.beacons.length, 0,
-                     'nothing sent, nothing thrown');
+            t.test('where the browser has no beacon, the link still opens', function () {
+                // The wider chain is asked for as the page is being replaced.
+                // Naming a missing navigator there throws, and the reader is told
+                // the annotations could not be carried instead of being taken on.
+                t.ok(padNoBeacon.link, 'a result link was rendered');
+                t.eq(padNoBeacon.sandbox.beacons.length, 0, 'nothing sent');
+                t.notOk(/Could not carry/.test(padNoBeacon.el.pgcStatus.textContent),
+                        'and nothing thrown');
             });
         }, 0);
         }, 0);
@@ -908,7 +911,9 @@ setTimeout(function () {
 
     // requests (the pages were given time above via their own fetch stubs)
     var one = startPage(), many = startPage(), badPos = startPage(), noTgt = startPage();
+    var absent = startPage({ db: 'GCA_018504085.2' });   // hg02080#2, not in the stub's graph
     setTimeout(function () {
+        convert(absent, 'CM094066.1:1-100', ['CHM13#0']);
         convert(one, 'CM094066.1:19114-19137', ['CHM13#0']);
         convert(many, 'CM094066.1:1-100', ['CHM13#0', 'GRCh38#0', 'HG01234#2']);
         convert(badPos, 'not a position', ['CHM13#0']);
@@ -935,10 +940,13 @@ setTimeout(function () {
 
         t.test('a haplotype absent from the loaded graph is caught before sending',
                function () {
-            var c = startPage({ db: 'GCA_018504085.2' });   // hg02080#2, not in this stub list
-            setTimeout(function () {}, 0);
-            t.notOk(c.api.hapInGraph('hg02080#2') && c.api.canonicalHap('hg02080#2') === 'HG02080#2',
-                    'not treated as present');
+            t.ok(absent.api.hapInGraph('hg00097#1'), 'the list has arrived: one that is there');
+            t.notOk(absent.api.hapInGraph('hg02080#2'), 'and one that is not');
+            var sent = posts(absent).filter(function (x) {
+                return /cmd=liftover(&|$)/.test(x.opts.body);
+            });
+            t.eq(sent.length, 0, 'no conversion sent');
+            t.contains(absent.el.pgcStatus.textContent, 'not in the loaded graph', 'reason shown');
         });
 
         t.test('several targets are sent as an array, in one request', function () {
