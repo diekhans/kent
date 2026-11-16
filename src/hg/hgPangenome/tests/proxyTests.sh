@@ -331,6 +331,19 @@ check_eq "token also sent on poll" "$(mock_field token)" "test-token-abc123"
 cgi_post "$CONF" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}' > /dev/null
 check_eq "no token configured means no auth header" "$(mock_field token)" "<null>"
 
+# A redirect is not followed.  Following it would send the token, which is in
+# a header of ours, to wherever the redirect pointed.
+start_mock --redirect
+mk_conf "$TMP/redir.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
+                          "pangenome.apiToken=test-token-abc123"
+: > "$REC"
+out=$(cgi_post "$TMP/redir.conf" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
+check_eq       "a redirect is not followed" "$(mock_count)" "1"
+check_not_contains "... so the token goes nowhere else" "$(cat "$REC")" "/redirected"
+check_contains "... and is reported as an error" "$out" "answered with a redirect (HTTP 302)"
+start_mock
+CONF=$(conf_default)
+
 # ============================================================= off switch
 section "off switch (pangenomeTools)"
 
@@ -347,7 +360,9 @@ check_contains "tools off: a file-reading command says so too" "$out" "not avail
 # ======================================================= C. job_id guard
 section "job_id guard (path traversal / SSRF)"
 
-for bad in "../../etc/passwd" "a/b" "a?x=1" "a&b" "a;b" "a b" "http://evil.example/x" '$(id)'; do
+# "." and ".." are made of allowed characters and still name a directory
+for bad in "../../etc/passwd" "a/b" "a?x=1" "a&b" "a;b" "a b" "http://evil.example/x" '$(id)' \
+           "." ".." ".hidden" "-x"; do
     : > "$REC"
     out=$(cgi_get "$CONF" "cmd=poll&job_id=$(python3 -c "
 import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1], safe=''))" "$bad")")
@@ -456,6 +471,9 @@ check_contains     "bottleneck failure message is user-facing" "$body" "rate lim
 check_not_contains "bottleneck failure leaks no HTML to the browser" "$body" "<!DOCTYPE"
 check_not_contains "bottleneck failure leaks no host/port to the browser" "$body" "IP 127.0.0.1"
 check_contains     "bottleneck failure detail is written to the error log" "$log" "bot check failed"
+
+out=$(cgi_post_cmd "$TMP/bot.conf" locus '{"items":[]}')
+check_contains "cmd=locus consults the bottleneck server too" "$out" "rate limiter unavailable"
 
 : > "$REC"
 out=$(cgi_get "$TMP/bot.conf" "cmd=poll&job_id=job1")
@@ -595,6 +613,26 @@ check_not_contains "oversized payload does not emit an HTML page" "$out" "DOCTYP
 
 lift_reject "malformed JSON rejected without aborting" \
     '{"src":' "invalid JSON payload"
+
+# A target is a haplotype name and nothing else.  The limits above count the
+# targets, and a word the mapping server reads as "all of them" counts as one.
+for bad in '"*"' '"all"' '"HG01234"' '"HG01234#2 x"' '"a#b#c#d"' '["HG01234#2","*"]' \
+           '["HG01234#2",5]' '[["HG01234#2"]]'; do
+    lift_reject "tgt $bad refused" \
+        "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$bad}" "'tgt' must name haplotypes"
+done
+for good in '"HG01234#2"' '"hg01234#2"' '"HG01234#2#CM0987.1"' '["CHM13#0","GRCh38#0"]'; do
+    : > "$REC"
+    cgi_post_cmd "$CONF" liftover "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$good}" > /dev/null
+    check_eq "tgt $good accepted" "$(mock_count)" "1"
+done
+: > "$REC"
+out=$(cgi_post_cmd "$CONF" surject '{"tgt":"*","job_id":"job1","name":"r1"}')
+check_contains "surject: tgt \"*\" refused" "$out" "'tgt' must name a haplotype"
+check_eq       "surject: tgt \"*\" - not forwarded" "$(mock_count)" "0"
+: > "$REC"
+cgi_post_cmd "$CONF" surject '{"tgt":"CHM13#0","job_id":"job1","name":"r1"}' > /dev/null
+check_eq "surject: a haplotype name accepted" "$(mock_count)" "1"
 
 : > "$REC"
 out=$(cgi_post_cmd "$CONF" liftover '{"src":"a#1#c","start":0,"end":10000000,"tgt":"chm13#0"}')
@@ -868,6 +906,35 @@ else
           "hideTracks":"off"}')
     check_contains "quickLift: a long error from the mapping server is an error envelope" \
         "$out" '{"status":"error","error":"mapping server returned HTTP 500'
+
+    # cmd=locus names the genes at each hit.  An interval far longer than any
+    # sequence that can be mapped is not looked up: naming it means reading
+    # every gene in it.  (Here because the gene files are found through the
+    # central database; the command itself starts no session.)
+    LOCUS_AT='"db":"GCA_042077495.1","contig":"CM089723.1","start":135714502'
+    out=$(cgi_post_cmd "$QCONF" locus \
+        "{\"items\":[{$LOCUS_AT,\"end\":135738459},{$LOCUS_AT,\"end\":140714502}]}")
+    check_contains "locus: a hit is named, an interval of 5 Mb is not" "$out" '"loci":["exon LCT-MCM6",null]'
+
+    # The page parameters must not be saved into the user's session: "start",
+    # "end" and "src" are names any other tool might read.
+    DUMP=""
+    for cand in "/usr/local/apache/cgi-bin-$(id -un)/cartDump" /usr/local/apache/cgi-bin/cartDump; do
+        [ -x "$cand" ] && { DUMP="$cand"; break; }
+    done
+    out=$(cgi_box "$QCONF" "page=convert&db=hg38&src=pgSrcMark&start=4242421&end=4242422&refAnnot=pgRefMark&pgTarget=pgTgtMark&pgAnnot=on&pgHide=on")
+    SID=$(printf '%s' "$out" | grep -o 'hgsid=[0-9]*_[A-Za-z0-9]*' | head -1)
+    if [ -z "$DUMP" ] || [ -z "$SID" ]; then
+        echo "  NOT RUN: the saved-session check (no cartDump, or no session id in the page)"
+        notRun="the saved-session check"
+    else
+        dump=$(cd "$BOX" && env -i HGDB_CONF="$QCONF" REMOTE_ADDR=127.0.0.1 SERVER_SOFTWARE=Apache \
+            REQUEST_METHOD=GET QUERY_STRING="$SID" "$DUMP" 2>&1)
+        check_contains "saved session: read back, with the assembly in it" "$dump" "db hg38"
+        for mark in pgSrcMark 4242421 4242422 pgRefMark pgTgtMark "page convert" pgAnnot pgHide; do
+            check_not_contains "saved session: no '$mark'" "$dump" "$mark"
+        done
+    fi
 
     # the PanLift form prints the cart's db and position into the page
     out=$(cgi_box "$QCONF" "page=convert&db=hg38&position=$(enc "chr1:1-2'><script>alert(1)</script>")")

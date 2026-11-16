@@ -222,13 +222,18 @@ struct hash *oldVars = NULL;
  * the whole block list for a conversion - saving that would bloat every
  * user's cart row permanently, and a big enough one simply breaks the
  * UPDATE that saves it. */
+/* The page parameters are kept out too.  They say which page a link opens and
+ * on what, they are read from the request and never from the cart, and several
+ * have names any other tool might use ("start", "end", "src"). */
 char *excludeVars[] = {"Submit", "submit", "Clear", "cmd", "payload",
-                       "job_id", NULL};
+                       "job_id", "page", "src", "start", "end", "refAnnot",
+                       "pgTarget", "pgAnnot", "pgHide", NULL};
 
 /* Abuse protection.  We use the same UCSC bottleneck/botDelay mechanism as
  * hgBlat.  The backend is expensive (seconds per read), so we apply the full
  * standard penalty rather than hgBlat's 0.5. */
 #define delayFraction 1.0
+#define locusDelayFraction 0.5  /* cmd=locus: asked once for each page of results; hgBlat's weight */
 static boolean issueBotWarning = FALSE;
 
 static char *cfgOr(char *name, char *def)
@@ -375,7 +380,9 @@ curl_easy_setopt(curl, CURLOPT_URL, url);
 curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, pgAccum);
 curl_easy_setopt(curl, CURLOPT_WRITEDATA, r.body);
 curl_easy_setopt(curl, CURLOPT_TIMEOUT, (long)timeoutSecs);
-curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
+/* No redirects.  The API has none, and following one would carry the token
+ * in our header to wherever it pointed. */
+curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 0L);
 curl_easy_setopt(curl, CURLOPT_USERAGENT, "hgPangenome");
 if (postJson != NULL)
     {
@@ -435,11 +442,35 @@ static boolean pgValidJobId(char *s)
 {
 if (isEmpty(s) || strlen(s) > 128)
     return FALSE;
+/* Begins with a letter or a digit, which is what keeps "." and ".." out: both
+ * pass the character test below and both mean something in a path. */
+if (!isalnum((unsigned char)s[0]))
+    return FALSE;
 char *p;
 for (p = s; *p != '\0'; ++p)
     if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '-' || *p == '.'))
         return FALSE;
 return TRUE;
+}
+
+static boolean pgValidDb(char *db);
+
+static boolean pgValidHapName(char *s)
+/* A haplotype as the graph names it, SAMPLE#PHASE ("HG00097#1"), or one of its
+ * sequences, SAMPLE#PHASE#CONTIG.  Nothing else is passed on as a target: the
+ * limits on a request count its targets, and a word that the mapping server
+ * reads as "all of them" would be counted as one. */
+{
+if (isEmpty(s) || strlen(s) > 200)
+    return FALSE;
+char *dupe = cloneString(s);
+char *fields[4];
+int i, n = chopByChar(dupe, '#', fields, ArraySize(fields));
+boolean ok = (n == 2 || n == 3);
+for (i = 0; ok && i < n; ++i)
+    ok = pgValidDb(fields[i]);
+freeMem(dupe);
+return ok;
 }
 
 static void pgJobFaPath(char *jobId, char *buf, int bufSize)
@@ -632,6 +663,21 @@ errCatchFree(&errCatch);
 return result;
 }
 
+static boolean pgTargetsAreNames(struct jsonElement *tgtEl)
+/* TRUE if a request's 'tgt', one string or a list, holds haplotype names only. */
+{
+if (tgtEl->type == jsonString)
+    return pgValidHapName(tgtEl->val.jeString);
+struct slRef *ref;
+for (ref = tgtEl->val.jeList; ref != NULL; ref = ref->next)
+    {
+    struct jsonElement *el = ref->val;
+    if (el->type != jsonString || !pgValidHapName(el->val.jeString))
+        return FALSE;
+    }
+return TRUE;
+}
+
 static char *pgValidateLiftover(char *payload, long maxSpan, boolean needTgt,
                                 int maxTargets)
 /* Server-side checks on a coordinate-translation request before we forward it:
@@ -676,6 +722,8 @@ if (errCatchStart(errCatch))
               slCount(tgtEl->val.jeList), maxTargets);
         result = msg;
         }
+    else if (needTgt && !pgTargetsAreNames(tgtEl))
+        result = "'tgt' must name haplotypes, such as HG00097#1";
     else
         {
         long start = startEl->val.jeNumber, end = endEl->val.jeNumber;
@@ -733,6 +781,8 @@ if (errCatchStart(errCatch))
     char *name = jsonOptionalStringField(root, "name", NULL);
     if (isEmpty(tgt))
         result = "missing 'tgt' haplotype";
+    else if (!pgValidHapName(tgt))
+        result = "'tgt' must name a haplotype, such as HG00097#1";
     else if (isEmpty(jobId) && isEmpty(gaf))
         result = "need either 'job_id' or 'gaf'";
     else if (!isEmpty(jobId) && !pgValidJobId(jobId))
@@ -970,6 +1020,9 @@ if (r.busy)
     emitJsonError("%s", r.errMsg);
 else if (r.transportErr)
     emitJsonError("could not reach mapping server: %s", r.errMsg ? r.errMsg : "unknown error");
+else if (r.code >= 300 && r.code < 400)
+    emitJsonError("the mapping server answered with a redirect (HTTP %ld), "
+                  "which is not followed", r.code);
 else if (r.code >= 400)
     {
     /* Surface the upstream failure.  When the body is JSON it is the mapping
@@ -1988,7 +2041,7 @@ if (r.transportErr)
     *retError = why;
     return NULL;
     }
-if (r.code >= 400)
+if (r.code >= 300)
     {
     /* Quote the upstream body when it is JSON - "service starting; indexes not
      * loaded yet" is the difference between "try again shortly" and "this
@@ -2049,7 +2102,7 @@ if (r.transportErr)
     *retError = why;
     return FALSE;
     }
-if (r.code >= 400)
+if (r.code >= 300)
     {
     safef(why, sizeof(why), "mapping server returned HTTP %ld", r.code);
     *retError = why;
@@ -3151,6 +3204,7 @@ return got;
 
 #define LOCUS_MAX_ITEMS 200     /* one page of the table */
 #define LOCUS_MAX_GENES 3       /* "exon A-B-C" says enough */
+#define LOCUS_SPAN_PER_SEQ 10   /* longest interval named, in longest sequences */
 
 static char *pgCatGenesPath(char *acc)
 /* The CAT gene bigBed of one assembly, or NULL. */
@@ -3285,6 +3339,10 @@ if (isEmpty(payload))
     emitJsonError("missing payload");
     return;
     }
+/* An interval here is a hit, about as long as the sequence that was mapped.
+ * One far longer than any sequence can be is not looked up, and is answered
+ * null: every gene in it would be read to name it. */
+double maxSpan = LOCUS_SPAN_PER_SEQ * atof(cfgOr("pangenome.maxSeqLen", "100000"));
 struct dyString *out = dyStringNew(4096);
 dyStringAppend(out, "{\"status\":\"ok\",\"loci\":[");
 char *parseError = NULL;
@@ -3312,7 +3370,8 @@ if (errCatchStart(errCatch))
             char *locus = NULL;
             if (pgSafeToken(db) && pgSafeToken(contig) && sEl != NULL && eEl != NULL &&
                 sEl->type == jsonNumber && eEl->type == jsonNumber &&
-                sEl->val.jeNumber >= 0 && eEl->val.jeNumber > sEl->val.jeNumber)
+                sEl->val.jeNumber >= 0 && eEl->val.jeNumber > sEl->val.jeNumber &&
+                eEl->val.jeNumber - sEl->val.jeNumber <= maxSpan)
                 {
                 int start = sEl->val.jeNumber, end = eEl->val.jeNumber;
                 struct hashEl *conn = hashLookup(connByDb, db);
@@ -4244,6 +4303,33 @@ jsIncludeFile("hgPangenome.js", NULL);
 cartWebEnd();
 }
 
+static boolean pgBotCheck(long enteredMainTime, double fraction)
+/* The bottleneck server's rate limit for one request.  FALSE when the request
+ * has been answered already and the caller should stop.
+ *
+ * If the bottleneck server itself is unreachable, botDelay errAborts, which
+ * would send an HTML 500 down a JSON endpoint (the client would show raw
+ * markup).  Catch it and answer with our error envelope instead - the pattern
+ * botDelay.c documents for JSON endpoints.  A genuine hog still exits via
+ * hogExit(), which emits JSON 429. */
+{
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    earlyBotCheck(enteredMainTime, "hgPangenome", fraction, 0, 0, "json");
+errCatchEnd(errCatch);
+boolean ok = !errCatch->gotError;
+if (!ok)
+    {
+    /* Detail (host/port of the bottleneck server) goes to the error log, not
+     * to the browser. */
+    fprintf(stderr, "hgPangenome: bot check failed: %s\n",
+            trimSpaces(errCatch->message->string));
+    emitJsonError("rate limiter unavailable, please try again in a moment");
+    }
+errCatchFree(&errCatch);
+return ok;
+}
+
 int main(int argc, char *argv[])
 /* Process command line. */
 {
@@ -4296,6 +4382,11 @@ if (sameOk(cmd, "contigs"))
     }
 if (sameOk(cmd, "locus"))
     {
+    /* Rate limited at half weight, as hgBlat and hgc are: the results page
+     * asks once for each page of its table, and each answer reads gene files
+     * for up to 200 rows. */
+    if (!pgBotCheck(enteredMainTime, locusDelayFraction))
+        return 0;
     doLocus();
     return 0;
     }
@@ -4312,26 +4403,8 @@ if (cmd != NULL && (sameString(cmd, "map") || sameString(cmd, "poll")
         || sameString(cmd, "liftoverTargets") || sameString(cmd, "liftoverAll")
         || sameString(cmd, "surject"))
         {
-        /* If the bottleneck server itself is unreachable, botDelay errAborts,
-         * which would send an HTML 500 down a JSON endpoint (the client would
-         * show raw markup).  Catch it and answer with our error envelope
-         * instead - the pattern botDelay.c documents for JSON endpoints.
-         * Note a genuine hog still exits via hogExit(), which emits JSON 429. */
-        struct errCatch *errCatch = errCatchNew();
-        if (errCatchStart(errCatch))
-            earlyBotCheck(enteredMainTime, "hgPangenome", delayFraction, 0, 0, "json");
-        errCatchEnd(errCatch);
-        if (errCatch->gotError)
-            {
-            /* Detail (host/port of the bottleneck server) goes to the error log,
-             * not to the browser. */
-            fprintf(stderr, "hgPangenome: bot check failed: %s\n",
-                    trimSpaces(errCatch->message->string));
-            emitJsonError("rate limiter unavailable, please try again in a moment");
-            errCatchFree(&errCatch);
+        if (!pgBotCheck(enteredMainTime, delayFraction))
             return 0;
-            }
-        errCatchFree(&errCatch);
         }
     apiProxy(cmd);
     return 0;

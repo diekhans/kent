@@ -15,6 +15,8 @@ Only the python3 standard library is used; nothing is installed.
   mockMiddleware.py --port 8795 --record /tmp/rec.jsonl
                     [--status 200] [--body '{"x":1}'] [--delay 0]
                     [--content-type application/json]
+                    [--redirect]         answer with a redirect to this same
+                                         server's /redirected
 """
 
 import argparse
@@ -56,6 +58,12 @@ class Handler(BaseHTTPRequestHandler):
     def _respond(self, default_body):
         if ARGS.delay:
             time.sleep(ARGS.delay)
+        if ARGS.redirect and not self.path.endswith('/redirected'):
+            self.send_response(302)
+            self.send_header('Location', 'http://127.0.0.1:%d/redirected' % ARGS.port)
+            self.send_header('Content-Length', '0')
+            self.end_headers()
+            return
         body = (ARGS.body if ARGS.body is not None else default_body).encode()
         self.send_response(ARGS.status)
         self.send_header('Content-Type', ARGS.content_type)
@@ -114,6 +122,7 @@ def main():
     p.add_argument('--body', default=None)
     p.add_argument('--delay', type=float, default=0)
     p.add_argument('--content-type', dest='content_type', default='application/json')
+    p.add_argument('--redirect', action='store_true')
     ARGS = p.parse_args()
     srv = HTTPServer(('127.0.0.1', ARGS.port), Handler)
     # tell the caller we are ready
