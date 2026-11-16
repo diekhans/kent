@@ -90,7 +90,7 @@ runCgi() {
 
 runJs unitTests.js    "Pure functions"
 runCgi
-runJs renderTests.js  "PanView form, old view"
+runJs formTests.js    "PanView form"
 runJs resultsTests.js "PanView results"
 runJs convertTests.js "PanLift"
 

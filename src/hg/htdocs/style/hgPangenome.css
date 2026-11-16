@@ -40,47 +40,7 @@
 .pgErrBox ul { margin: 4px 0 0 1.2em; }
 .pgErrText { font-weight: bold; }
 
-/* ---- Result "cards" = UCSC .section boxes with a .subheadingBar head ---- */
-
-.pgCard {
-    background: #fffee8; border: 1px solid #888888; margin-bottom: 16px;
-}
-.pgPending { opacity: 0.6; }
-
-.pgCardHead {
-    font-weight: bold; font-size: 1.1em; color: #000000; background-color: #D9E4F8;
-    padding: 2px 10px; border-bottom: 1px solid #888888;
-}
-.pgName { font-family: Monaco, 'andale mono', 'lucida console', monospace; }
-
-/* status word in the head: plain, not a colored pill */
-.pgBadge {
-    font-weight: normal; font-size: 0.72em; color: #333333; margin-left: 8px;
-}
-.pgError { color: #aa3333; }              /* the one UCSC error tint, used sparingly */
-
-.pgBody { padding: 8px 12px; }
-
-/* ---- Summary line ---- */
-
-.pgSummary { margin-bottom: 8px; }
-.pgSummaryStats {
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.85em;
-    color: #000000;
-}
-.pgSummaryHap { display: block; margin-top: 2px; font-size: 0.9em; }
-
-/* ---- Sections within a card ---- */
-
-.pgSection { margin: 8px 0 0; padding-top: 6px; border-top: 1px solid #dddddd; }
-.pgSectionLabel { font-weight: bold; font-size: 0.9em; color: #000000; margin-bottom: 3px; }
 .pgMuted { color: #666666; font-size: 0.9em; }
-
-/* ---- Haplotypes ---- */
-
-.pgHapRep { margin-bottom: 4px; }
-.pgHapName { font-family: Monaco, 'andale mono', 'lucida console', monospace; font-weight: bold; }
-.pgRepRole { font-size: 0.85em; color: #444444; }   /* " — representative, reference" as plain text */
 
 .pgHapPreview {
     font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.85em;
@@ -89,23 +49,9 @@
 
 .pgHapMore { margin-top: 6px; }
 .pgHapMore > summary { cursor: pointer; color: #121E9A; }
-.pgHapToolbar { display: flex; gap: 10px; align-items: center; margin: 6px 0; }
-.pgHapSearch { font-size: 0.85em; padding: 2px 4px; flex: 0 0 220px; }
-.pgHapList {
-    max-height: 220px; overflow: auto; border: 1px solid #888888; background: #ffffff;
-}
-.pgHapListRow {
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.85em;
-    padding: 1px 8px; border-bottom: 1px solid #eeeeee;
-}
-.pgHapListRow:hover { background: #fdffb7; }
-.pgHapListName { display: inline-block; min-width: 24em; }
-.pgHapListPct  { color: #444444; }
-.pgHapListNote { color: #666666; font-style: italic; margin-left: 8px; }
 
-/* ---- Downloads: plain UCSC-blue text links, not buttons ---- */
+/* ---- Plain UCSC-blue text buttons ("Retry") ---- */
 
-.pgDownload { display: inline-block; margin-top: 4px; }
 .pgDlBtn {
     font: inherit; font-size: 0.85em; color: #121E9A; background: none; border: none;
     padding: 0 8px 0 0; cursor: pointer; text-decoration: underline;
@@ -114,25 +60,8 @@
 
 /* ---- Surjection ---- */
 
-.pgSurjectOk { font-size: 0.9em; }
-.pgSurjectPos {
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-weight: bold;
-}
-.pgSurjectMeta {
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.85em;
-    color: #444444; margin-left: 10px;
-}
-.pgSurjectOk .pgDlBtn { margin-left: 12px; }
-.pgSurjectBad { font-size: 0.9em; }
 .pgSurjectLink { margin-top: 4px; font-size: 0.9em; }
 .pgSurjectLink a { color: #121E9A; }
-
-
-/* ---- Other placements ---- */
-
-.pgOther { margin-top: 8px; }
-.pgOther > summary { cursor: pointer; color: #121E9A; }
-.pgOtherItem { padding: 6px 0 6px 10px; border-left: 2px solid #dddddd; margin-top: 6px; }
 
 /* ---- Coordinate conversion page ---- */
 
@@ -240,17 +169,6 @@
     max-width: 60em;
 }
 
-/* The browser / new tab / details row on a mapped position, laid out the way
- * hgBlat's results table does it. */
-.pgSurjectLinks { margin-top: 2px; }
-.pgSurjectLinks a { margin-right: 6px; }
-/* The little "opens elsewhere" arrow hgBlat puts on its new-tab link. */
-.pgExtLink::after {
-    content: "\2197";
-    font-size: 0.85em;
-    padding-left: 2px;
-}
-
 /* A caution on the conversion form: something the user can still fix before
  * they submit, so it reads as advice rather than as an error. */
 .pgWarn {
@@ -311,7 +229,6 @@
     color: #6b7380; font-style: italic;
 }
 .pgcOr::before, .pgcOr::after { content: ""; flex: 1; border-top: 1px solid #d5d9de; }
-
 
 /* ==== search form (formBuild in hgPangenome.js) ===========================
  * Mirrors the search-form rules of hgBlat.css (#blatFormBox), under #pgFormBox. */

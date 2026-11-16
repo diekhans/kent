@@ -212,6 +212,176 @@ t.test('a record without one leaves it unset, not zero', function () {
     t.ok(r.qStart === undefined, 'unset');
 });
 
+t.test('a record that did not place says so, and still carries the mapping figures', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'no_anchors', coverage: 72.5, graph_identity: 98.1 });
+    t.ok(r.placeFailed, 'failed');
+    t.eq(r.placeStatus, 'no_anchors', 'with the reason');
+    t.eq(r.coverage, 72.5, 'coverage kept');
+    t.eq(r.listIdentity, 98.1, 'identity along the graph kept');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+t.test('a record on a fragment has the fragment\'s offset added', function () {
+    var a = {}, b = {};
+    R.pgrApplyRecord(a, { status: 'ok', haplotype: 'CHM13#0#chr10#1000', target_start: 100,
+                          target_end: 150, strand: '+', cigar: '50M' });
+    R.pgrApplyRecord(b, { status: 'ok', haplotype: 'CHM13#0#chr10[1000]', target_start: 100,
+                          target_end: 150, strand: '+', cigar: '50M' });
+    t.eq(a.contig, 'chr10', 'the contig, without the offset');
+    t.eq(a.start, 1100, 'start');
+    t.eq(a.end, 1150, 'end');
+    t.deepEq([b.contig, b.start, b.end], [a.contig, a.start, a.end], 'both notations agree');
+});
+t.test('a record on a name that cannot be read is not placed by guessing', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'CHM13#0#chr10#foo', target_start: 1,
+                          target_end: 2 });
+    t.ok(r.placeFailed, 'failed');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+
+t.suite('reference bases a CIGAR consumes');
+t.test('simple match', function () {
+    t.eq(R.pgrCigarSpan('150M'), 150, '150M');
+    t.eq(R.pgrCigarSpan('1500M'), 1500, 'multi-digit');
+    t.eq(R.pgrCigarSpan('1M'), 1, 'single base');
+});
+t.test('missing or unmapped CIGAR is zero', function () {
+    t.eq(R.pgrCigarSpan(''), 0, 'empty');
+    t.eq(R.pgrCigarSpan(null), 0, 'null');
+    t.eq(R.pgrCigarSpan(undefined), 0, 'undefined');
+    t.eq(R.pgrCigarSpan('*'), 0, 'star');
+});
+t.test('deletions and skips consume reference', function () {
+    t.eq(R.pgrCigarSpan('75M3D72M'), 150, 'deletion');
+    t.eq(R.pgrCigarSpan('20M100N20M'), 140, 'skip (intron)');
+});
+t.test('insertions, soft and hard clips do not consume reference', function () {
+    t.eq(R.pgrCigarSpan('10M5I10M'), 20, 'insertion');
+    t.eq(R.pgrCigarSpan('5S140M5S'), 140, 'soft clip');
+    t.eq(R.pgrCigarSpan('3H10M3H'), 10, 'hard clip');
+});
+t.test('= and X (sequence match/mismatch) consume reference', function () {
+    t.eq(R.pgrCigarSpan('10=5X10='), 25, 'eq/x');
+});
+t.test('mixed operations', function () {
+    t.eq(R.pgrCigarSpan('10S5M2I3D4M6H'), 12, '5M+3D+4M');
+});
+
+t.suite('the sequence a target name points at');
+t.test('a plain three-field name is its contig, at offset 0', function () {
+    t.deepEq(R.pgrSplitTarget('CHM13#0#chr10'), { contig: 'chr10', offset: 0 }, 'chr10');
+    t.deepEq(R.pgrSplitTarget('GRCh38#0#CM000663.2'), { contig: 'CM000663.2', offset: 0 },
+             'an accession keeps its dot');
+});
+t.test('a fragment\'s offset is read from either notation', function () {
+    t.deepEq(R.pgrSplitTarget('CHM13#0#chr10#1407250'), { contig: 'chr10', offset: 1407250 }, '#N');
+    t.deepEq(R.pgrSplitTarget('GRCh38#0#chr1[585988]'), { contig: 'chr1', offset: 585988 }, '[N]');
+});
+t.test('a name that cannot be read yields nothing, not a guess', function () {
+    t.isNull(R.pgrSplitTarget('CHM13#0#chr10#foo'), 'non-numeric fourth field');
+    t.isNull(R.pgrSplitTarget('CHM13#0'), 'too few fields');
+    t.isNull(R.pgrSplitTarget('chr10'), 'not a PanSN name');
+    t.isNull(R.pgrSplitTarget(null), 'null');
+});
+
+t.suite('the mapping\'s own surjection');
+function surj(over) {
+    var s = { status: 'ok', target: 'CHM13#0#chr10', position: 19113, strand: '+',
+              cigar: '24M', score: 100, mapping_quality: 60, identity: 0.5 };
+    Object.keys(over || {}).forEach(function (k) { s[k] = over[k]; });
+    return { surjection: s };
+}
+function placed(over) { var r = {}; R.pgrApplySurjection(r, surj(over)); return r; }
+t.test('the row gets the contig, a 0-based start and an end from the CIGAR', function () {
+    var r = placed();
+    t.eq(r.contig, 'chr10', 'contig');
+    t.eq(r.start, 19113, 'start as reported');
+    t.eq(r.end, 19137, '24M ends 24 bases on');
+    t.eq(r.strand, '+', 'strand');
+    t.eq(r.surjMapq, 60, 'MAPQ');
+    t.eq(r.identity, 50, 'identity as a percentage');
+    t.notOk(r.placeFailed, 'placed');
+});
+t.test('position 0 is a real coordinate, not a missing value', function () {
+    var r = placed({ position: 0, cigar: '10M' });
+    t.eq(r.start, 0, 'start');
+    t.eq(r.end, 10, 'end');
+    t.notOk(r.placeFailed, 'placed');
+});
+t.test('deletions widen the range', function () {
+    var r = placed({ position: 100, cigar: '75M3D72M' });
+    t.eq(r.end - r.start, 150, '150 reference bases');
+});
+t.test('a missing or unmapped CIGAR leaves an empty range at the position', function () {
+    t.eq(placed({ position: 100, cigar: null }).end, 100, 'null cigar');
+    t.eq(placed({ position: 100, cigar: '*' }).end, 100, 'star cigar');
+});
+t.test('a fragment\'s offset is added to the position, in either notation', function () {
+    var a = placed({ target: 'CHM13#0#chr10#1000', position: 100, cigar: '50M' });
+    var b = placed({ target: 'CHM13#0#chr10[1000]', position: 100, cigar: '50M' });
+    t.deepEq([a.contig, a.start, a.end], ['chr10', 1100, 1150], '#N');
+    t.deepEq([b.contig, b.start, b.end], ['chr10', 1100, 1150], '[N]');
+});
+t.test('an unreadable target is not placed by guessing', function () {
+    var r = placed({ target: 'CHM13#0#chr10#foo' });
+    t.ok(r.placeFailed, 'failed');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+t.test('every failure status leaves the row unplaced, with the status', function () {
+    ['incompatible', 'unknown_path', 'surjection_failed', 'empty_input', 'path_not_indexed']
+        .forEach(function (st) {
+            var r = placed({ status: st });
+            t.ok(r.placeFailed, st + ' failed');
+            t.eq(r.placeStatus, st, st + ' kept');
+            t.ok(r.contig === undefined, st + ' has no coordinate');
+        });
+});
+t.test('a haplotype with no path there is "no_anchors", whatever the status says', function () {
+    var r = placed({ status: 'surjection_failed', detail: 'no_anchors: nothing to place on' });
+    t.eq(r.placeStatus, 'no_anchors', 'read from the detail');
+});
+t.test('no surjection at all is a failure, not a crash', function () {
+    var r = {};
+    R.pgrApplySurjection(r, {});
+    t.ok(r.placeFailed, 'empty answer');
+    r = {};
+    R.pgrApplySurjection(r, null);
+    t.ok(r.placeFailed, 'no answer');
+});
+
+t.suite('the assembly a haplotype is served from');
+t.test('the generated HPRC table is loaded', function () {
+    var n = Object.keys(R.window.pangenomeAssemblies || {}).length;
+    t.ok(n > 400, 'populated (' + n + ' haplotypes)');
+});
+t.test('sample haplotypes resolve to their GenArk assembly', function () {
+    t.eq(R.pgrAssembly('HG00097#1'), 'GCA_044165215.1', 'HG00097 hap1');
+    t.eq(R.pgrAssembly('HG00097#2'), 'GCA_044164745.1', 'HG00097 hap2');
+    t.eq(R.pgrAssembly('NA19338#1'), 'GCA_042035195.1', 'NA19338 hap1');
+});
+t.test('a name is matched on sample and haplotype, in any case, contig or not', function () {
+    t.eq(R.pgrAssembly('hg00097#1'), 'GCA_044165215.1', 'lower case');
+    t.eq(R.pgrAssembly('HG00097#1#CM094066.1'), 'GCA_044165215.1', 'with its contig');
+});
+t.test('the two haplotypes of a sample are different assemblies', function () {
+    t.notOk(R.pgrAssembly('HG00408#1') === R.pgrAssembly('HG00408#2'), 'pat and mat differ');
+});
+t.test('the references come from the same table', function () {
+    t.eq(R.pgrAssembly('CHM13#0'), 'hs1', 'CHM13');
+    t.eq(R.pgrAssembly('GRCh38#0'), 'hg38', 'GRCh38');
+});
+t.test('an assembly served only from a hub elsewhere is kept as its URL', function () {
+    var v = R.pgrAssembly('HG002#1');
+    t.contains(v, 'https://genome.ucsc.edu', 'absolute');
+    t.contains(v, 'db=hub_', 'hub id db, which only resolves on that server');
+});
+t.test('an unknown haplotype has no assembly', function () {
+    t.isNull(R.pgrAssembly('NOSUCHSAMPLE#1'), 'unknown sample');
+    t.isNull(R.pgrAssembly('HG00097#9'), 'unknown haplotype of a known sample');
+    t.isNull(R.pgrAssembly('toString'), 'a name Object.prototype has');
+});
+
 t.suite('one haplotype on its own');
 t.test('every placement of every query is a place to fill, from the rows alone', function () {
     R.pgrMapping = null;

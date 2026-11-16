@@ -63,9 +63,6 @@
  *                            turn it on: on, the page sends work to the graph
  *                            server with this server's token.
  *   pangenome.apiBase        base URL of the mapping API, e.g. https://host/pangenome
- *   pangenome.useMock        "on" runs the page against the built-in JS mock
- *                            instead of the API; default "off"
- *   pangenome.transport      "job" (async, poll) or "sync"; default "job"
  *   pangenome.timeoutSecs    per-request timeout talking to the middleware; default 120
  *   pangenome.pollIntervalMs poll interval in ms; default 1500
  *   pangenome.maxSequences   max sequences per submit (server-enforced); default 50
@@ -3760,11 +3757,6 @@ static void injectConfig()
  * hgPangenome.js reads this on DOMContentLoaded, which fires after inline
  * scripts have run, so ordering relative to the external <script src> is safe. */
 {
-/* The mock only when asked for.  It used to be the default with no API base,
- * which on a server never set up for the tools meant a page of made-up
- * results. */
-boolean useMock = sameString(cfgOr("pangenome.useMock", "off"), "on");
-char *transport = cfgOr("pangenome.transport", "job");
 int pollMs = atoi(cfgOr("pangenome.pollIntervalMs", "1500"));
 int maxSeq = atoi(cfgOr("pangenome.maxSequences", "10"));
 int maxMultimapsLimit = atoi(cfgOr("pangenome.maxMultimapsLimit", "3"));
@@ -3774,14 +3766,9 @@ if (maxMultimaps > maxMultimapsLimit)
 if (maxMultimaps < 1)
     maxMultimaps = 1;
 
-/* apiBase and transport are admin-controlled; still route them through the
- * JS-string escaper to be safe. */
 /* Note: the middleware base URL is deliberately NOT sent to the browser; the
- * browser only ever talks to this CGI (same origin).  useMock lets the JS run
- * against its built-in mock when no middleware is configured. */
+ * browser only ever talks to this CGI (same origin). */
 jsInlineF("window.pangenomeConfig = {\n"
-          "  useMock: %s,\n"
-          "  transport: \"%s\",\n"
           "  pollIntervalMs: %d,\n"
           "  maxSequences: %d,\n"
           "  maxMultimaps: %d,\n"
@@ -3800,14 +3787,8 @@ jsInlineF("window.pangenomeConfig = {\n"
           "  maxChosenTargets: %d,\n"
           "  hgsid: \"%s\",\n"
           "  quickLiftEnabled: %s,\n"
-          "  quickLift: %s,\n"
-          /* The search page hands off to the results table when a job
-           * finishes.  hg.conf can turn that off to get the old in-page
-           * cards back without a rebuild. */
-          "  resultsPage: %s\n"
+          "  quickLift: %s\n"
           "};\n",
-          useMock ? "true" : "false",
-          jsonStringEscape(transport),
           pollMs, maxSeq, maxMultimaps,
           /* empty => let the middleware use its own default */
           isEmpty(cfgOr("pangenome.minHapCoverage", ""))
@@ -3829,8 +3810,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           atoi(cfgOr("pangenome.maxChosenTargets", "50")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
-          sameString(cfgOr("pangenome.quickLift", "on"), "on") ? "true" : "false",
-          sameString(cfgOr("pangenome.resultsPage", "on"), "on") ? "true" : "false");
+          sameString(cfgOr("pangenome.quickLift", "on"), "on") ? "true" : "false");
 }
 
 static void drawForm()
@@ -3845,13 +3825,11 @@ static void drawForm()
  * window.pangenomeConfig already; this carries only what the form adds. */
 {
 printf("<div id='pgFormBox' class='gbApp'></div>\n");
-/* Progress and errors, and the in-page result cards for an install that has
- * turned the results page off.  Emitted here rather than built by the script,
- * so that the page has somewhere to say what went wrong even when the script
- * cannot run; hgPangenome.js moves the status box into the form, beside the
- * buttons it reports on. */
+/* Progress and errors.  Emitted here rather than built by the script, so that
+ * the page has somewhere to say what went wrong even when the script cannot
+ * run; hgPangenome.js moves the status box into the form, beside the buttons
+ * it reports on. */
 printf("<div id='pgStatus' class='pgStatus' style='display:none'></div>\n");
-printf("<div id='pgResults' class='pgResults'></div>\n");
 
 struct jsonWrite *jw = jsonWriteNew();
 jsonWriteObjectStart(jw, NULL);
@@ -4294,10 +4272,8 @@ webIncludeResourceFile("hgPangenome.css");
 
 drawForm();
 
-/* Config first (inline, runs before DOMContentLoaded), then the app + mock. */
+/* Config first (inline, runs before DOMContentLoaded), then the app. */
 injectConfig();
-jsIncludeFile("hgPangenomeAssemblies.js", NULL);   /* generated haplotype->assembly table */
-jsIncludeFile("hgPangenomeMock.js", NULL);
 jsIncludeFile("hgPangenome.js", NULL);
 
 cartWebEnd();

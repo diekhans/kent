@@ -443,7 +443,7 @@ out=$(cgi_post "$TMP/to.conf" '{"sequences":[{"name":"r","sequence":"ACGT"}],"op
 check_contains "slow middleware times out instead of hanging" "$out" "could not reach mapping server"
 
 # apiBase not configured
-mk_conf "$TMP/noapi.conf" "pangenome.transport=job"
+mk_conf "$TMP/noapi.conf"
 out=$(cgi_post "$TMP/noapi.conf" '{"sequences":[{"name":"r","sequence":"ACGT"}],"options":{}}')
 check_contains "missing apiBase reported" "$out" "apiBase is not configured"
 out=$(cgi_get "$TMP/noapi.conf" "cmd=poll&job_id=job1")
