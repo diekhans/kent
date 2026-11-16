@@ -198,6 +198,20 @@ hashFree(&have);
 return dbList;
 }
 
+static boolean pangenomeOnly(char *fromDb, char *toDb)
+/* TRUE if toDb is reached from fromDb through the pangenome and not through a chain: it is in
+ * the HPRC index and the chain table does not offer it.  The same rule pangenomeAddToList()
+ * labels by, so what is labelled "(pangenome)" and what is handed to hgPangenome agree. */
+{
+if (pangenomeFind(toDb) == NULL)
+    return FALSE;
+struct dbDb *db, *chained = hGetLiftOverToDatabases(fromDb);
+for (db = chained; db != NULL; db = db->next)
+    if (sameString(db->name, toDb))
+        return FALSE;
+return TRUE;
+}
+
 static void askForDestination(struct liftOverChain *liftOver, char *fromPos,
 	struct dbDb *fromDb, struct dbDb *toDb)
 /* set up page for entering data */
@@ -780,9 +794,11 @@ static void doConvert(char *fromPos)
 /* A pangenome destination has no liftOver chain, so none of the code below
  * applies to it.  Hand it to hgPangenome, which translates through the graph,
  * carrying the position and the assembly the user picked.  Everything else
- * takes the ordinary chain path, unchanged. */
+ * takes the ordinary chain path, unchanged - and that includes an HPRC
+ * assembly that does have a chain from here, which most have from hg38. */
 char *toName = cartString(cart, HGLFT_TODB_VAR);
-struct pgAsm *pg = pangenomeFind(toName);
+struct pgAsm *pg = pangenomeOnly(trackHubSkipHubName(database), toName)
+                   ? pangenomeFind(toName) : NULL;
 if (pg != NULL)
     {
     char url[2048];
