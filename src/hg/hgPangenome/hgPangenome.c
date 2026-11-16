@@ -64,9 +64,13 @@
  *   pangenome.apiBase        base URL of the mapping API, e.g. https://host/pangenome
  *   pangenome.timeoutSecs    per-request timeout talking to the middleware; default 120
  *   pangenome.pollIntervalMs poll interval in ms; default 1500
- *   pangenome.maxSequences   max sequences per submit (server-enforced); default 50
+ *   pangenome.maxSequences   max sequences per submit (server-enforced); default 10
  *   pangenome.maxSeqLen      max length of one sequence in bp; default 100000
- *   pangenome.maxRequestBytes max raw payload size; default 500000
+ *   pangenome.maxRequestBytes max size of one request's payload; default 1040000,
+ *                            which holds maxSequences sequences of maxSeqLen
+ *                            and stays under the 1 MB (1048576) that cheapcgi.c
+ *                            accepts as a CGI's input - past that it answers
+ *                            with an HTML page.  The form checks all three.
  *   pangenome.minHapCoverage only report haplotypes matching at least this
  *                            percentage (0-100) on mapping results; unset means
  *                            the middleware's own default.  The default returns
@@ -146,7 +150,7 @@
  * (cmd=poll) is exempt.  The maxSequences/maxSeqLen/maxRequestBytes caps are
  * enforced here server-side (the browser's checks are bypassable) and should be
  * kept in sync with the middleware's own limits.
- *   pangenome.maxSequences   max sequences accepted per submit; default 50
+ *   pangenome.maxSequences   max sequences accepted per submit; default 10
  *   pangenome.maxMultimaps   alignments asked for per sequence; default (and
  *                            at most) maxMultimapsLimit.  The form offers no
  *                            choice: every job asks for this many, and the
@@ -213,6 +217,9 @@ struct hash *oldVars = NULL;
 char *excludeVars[] = {"Submit", "submit", "Clear", "cmd", "payload",
                        "job_id", "page", "src", "start", "end", "refAnnot",
                        "pgTarget", "pgAnnot", "pgHide", NULL};
+
+/* The default of pangenome.maxRequestBytes: see the note on it above. */
+#define PG_MAX_REQUEST_BYTES "1040000"
 
 /* Abuse protection.  We use the same UCSC bottleneck/botDelay mechanism as
  * hgBlat.  The backend is expensive (seconds per read), so we apply the full
@@ -1668,6 +1675,38 @@ else
 return built;
 }
 
+static char *pgNameFromHub(char *hubPath, char *file)
+/* How a hub at hubPath has to name file in a setting ending in "Url", which is
+ * resolved against the hub's own directory when the hub is read.
+ *
+ * The two are usually in one directory, and then it is the base name.  But the
+ * hub file is kept from one conversion to the next (pgHubName) and trash is
+ * filed by day, so a hub made yesterday gets today's chain, which is in the
+ * directory beside its own: "../<day>/<name>".  Named by base name alone, as
+ * it used to be, that chain was looked for in yesterday's directory, and the
+ * lifted tracks stopped drawing after midnight. */
+{
+char hubDir[PATH_LEN], fileDir[PATH_LEN], name[FILENAME_LEN], ext[FILEEXT_LEN];
+splitPath(hubPath, hubDir, NULL, NULL);
+splitPath(file, fileDir, name, ext);
+char rel[PATH_LEN];
+if (sameString(hubDir, fileDir))
+    safef(rel, sizeof(rel), "%s%s", name, ext);
+else
+    {
+    /* fileDir ends in "/"; its last component is the day */
+    char dir[PATH_LEN];
+    safef(dir, sizeof(dir), "%s", fileDir);
+    int len = strlen(dir);
+    if (len > 0 && dir[len-1] == '/')
+        dir[len-1] = '\0';
+    char *day = strrchr(dir, '/');
+    day = (day == NULL) ? dir : day + 1;
+    safef(rel, sizeof(rel), "../%s/%s%s", day, name, ext);
+    }
+return cloneString(rel);
+}
+
 static char *pgWriteQuickLiftHub(char *srcDb, char *srcHap, char *tgtDb, char *chainBb,
                                  struct dyString *shown, struct dyString *skipped)
 /* Write a hub that offers the source's annotations to the destination assembly,
@@ -1712,12 +1751,11 @@ safef(hubTmp, sizeof(hubTmp), "%s.tmp", hubPath);
 FILE *f = mustOpen(hubTmp, "w");
 chmod(hubTmp, 0666);
 
-/* Name the chain relative to the hub - they land in the same trash directory.
- * Every setting whose name ends in "Url" is resolved against the hub's own
- * location when the hub is read, so handing over the path we opened it by
- * would resolve a second time and look for it underneath itself. */
-char *chainRel = strrchr(chainBb, '/');
-chainRel = (chainRel == NULL) ? chainBb : chainRel + 1;
+/* Name the chain relative to the hub.  Every setting whose name ends in "Url"
+ * is resolved against the hub's own location when the hub is read, so handing
+ * over the path we opened it by would resolve a second time and look for it
+ * underneath itself. */
+char *chainRel = pgNameFromHub(hubPath, chainBb);
 
 /* The label is what the user reads.  Name the haplotype they converted from -
  * that is how they think of the source - rather than the accession, let alone
@@ -1891,6 +1929,22 @@ errCatchFree(&errCatch);
 return name;
 }
 
+static boolean pgDbBorrowed = FALSE;    /* the cart's db is not the user's just now */
+static char *pgDbBefore = NULL;         /* what it was */
+
+static void pgBorrowDb(char *db)
+/* Point the cart's db at an assembly we need to read through it, remembering
+ * what it was the first time, so that pgRunCartCommand() can put it back if
+ * the command aborts before it gets to. */
+{
+if (!pgDbBorrowed)
+    {
+    pgDbBefore = cloneString(cartUsualString(cart, "db", ""));
+    pgDbBorrowed = TRUE;
+    }
+cartSetString(cart, "db", db);
+}
+
 static void pgRestoreDb(char *savedDb)
 /* Put the cart's db back: we borrow it to reach the two assemblies, and the
  * conversion page must not find it changed underneath. */
@@ -1899,6 +1953,7 @@ if (isEmpty(savedDb))
     cartRemove(cart, "db");
 else
     cartSetString(cart, "db", savedDb);
+pgDbBorrowed = FALSE;
 }
 
 /* How far either side of the converted interval the chain should reach.
@@ -2267,7 +2322,7 @@ if (srcContig == NULL)
  * source: a request straight from the conversion page may carry no db at all,
  * and cartTrackDbInit aborts rather than defaulting. */
 char *savedDb = cloneString(cartUsualString(cart, "db", ""));
-cartSetString(cart, "db", srcDb);
+pgBorrowDb(srcDb);
 /* A GenArk assembly has no database of its own - its trackDb lives in an
  * assembly hub, and once attached the browser knows it by a decorated name.
  * Both sides need attaching: the source so we can read its tracks, the target
@@ -2467,6 +2522,11 @@ cartSetString(cart, connectVar, "1");
  * assembly - genarkUrl is NULL and there is nothing to attach. */
 unsigned srcHubId = 0;
 char *srcHubUrl = genarkUrl(srcDb);
+/* A curated hub such as hs1 is a hub too, and has to be named the same way:
+ * left to the cart, its connection reaches the browser page only if no other
+ * request of this user saved a cart in between. */
+if (srcHubUrl == NULL)
+    hubConnectGetCuratedUrl(srcDb, &srcHubUrl);
 if (srcHubUrl != NULL)
     {
     char *srcErr = NULL;
@@ -3832,6 +3892,9 @@ jsonWriteObjectStart(jw, NULL);
 /* The per-sequence length the server enforces, so the character counter can
  * say a sequence is too long before it is submitted rather than after. */
 jsonWriteNumber(jw, "maxSeqLen", atol(cfgOr("pangenome.maxSeqLen", "100000")));
+/* And the size of the whole request, which the form checks as it is typed:
+ * one sequence at the limit is fine, and so many of them may not be. */
+jsonWriteNumber(jw, "maxRequestBytes", atol(cfgOr("pangenome.maxRequestBytes", PG_MAX_REQUEST_BYTES)));
 /* What is being searched, named on the form so that nobody has to guess which
  * graph a result came from.  A setting, because the graph is a deployment
  * choice and changes with each HPRC release. */
@@ -3981,6 +4044,38 @@ printf("<div id='pgcResults' class='pgResults'></div>\n");
 printf("<p>Have a sequence instead?  Use <a href='hgPangenome'>PanView</a>.</p>\n");
 }
 
+static void pgRunCartCommand(char *cmd)
+/* Run one of the commands that work inside the cart, and answer for it if it
+ * aborts.  An errAbort from the library - a file that will not open, a hub
+ * that will not parse - would otherwise go to the cart shell, which answers a
+ * JSON caller with an HTML page, and would leave the cart's db on whatever
+ * assembly the command had borrowed it for, saved that way. */
+{
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    if (sameString(cmd, "quickLift"))
+        doQuickLift(cgiOptionalString("payload"), FALSE);
+    else if (sameString(cmd, "extendChain"))
+        doQuickLift(cgiOptionalString("payload"), TRUE);
+    else if (sameString(cmd, "refAnnot"))
+        doRefAnnot();
+    else
+        doAlignTrack();
+    }
+errCatchEnd(errCatch);
+if (errCatch->gotError)
+    {
+    if (pgDbBorrowed)
+        pgRestoreDb(pgDbBefore);
+    fprintf(stderr, "hgPangenome: cmd=%s aborted: %s\n", cmd,
+            trimSpaces(errCatch->message->string));
+    emitJsonError("the request could not be completed: %.300s",
+                  trimSpaces(errCatch->message->string));
+    }
+errCatchFree(&errCatch);
+}
+
 void doMiddle(struct cart *theCart)
 /* Write the page. */
 {
@@ -3996,34 +4091,24 @@ if (!pgToolsOn())
 
 /* Building a quickLift hub needs the cart, so unlike the other commands this
  * one comes through the cart shell.  It writes its own JSON header. */
-if (sameOk(cgiOptionalString("cmd"), "quickLift"))
+char *cartCmd = cgiOptionalString("cmd");
+if (sameOk(cartCmd, "quickLift") || sameOk(cartCmd, "refAnnot") || sameOk(cartCmd, "alignTrack"))
     {
-    doQuickLift(cgiOptionalString("payload"), FALSE);
+    pgRunCartCommand(cartCmd);
     return;
     }
-/* A reference's annotations on a mapped haplotype, for the results page. */
-if (sameOk(cgiOptionalString("cmd"), "refAnnot"))
+/* Same work as quickLift, wider chain.  Sent after the user has followed the
+ * link, so the chain they are already looking at is replaced by one that
+ * survives panning.  Nothing waits for it, and the reply goes nowhere. */
+if (sameOk(cartCmd, "extendChain"))
     {
-    doRefAnnot();
-    return;
-    }
-/* Same work, wider chain.  Sent after the user has followed the link, so the
- * chain they are already looking at is replaced by one that survives panning.
- * Nothing waits for it, and the reply goes nowhere. */
-if (sameOk(cgiOptionalString("cmd"), "extendChain"))
-    {
-    doQuickLift(cgiOptionalString("payload"), TRUE);
+    pgRunCartCommand(cartCmd);
     /* Deliberately not returning: cartCheckout() would write this request's
      * copy of the cart over whatever the browser has done in the seconds since,
      * undoing tracks the user turned on while we were working.  We have nothing
      * to save, so leave without saving. */
     fflush(stdout);
     exit(0);
-    }
-if (sameOk(cgiOptionalString("cmd"), "alignTrack"))
-    {
-    doAlignTrack();
-    return;
     }
 
 /* Either page is a good moment to take away hubs whose files have been swept:
@@ -4320,7 +4405,7 @@ if (cmd != NULL && !pgToolsOn())
 if (cmd != NULL)
     {
     char *payload = cgiOptionalString("payload");
-    long maxBytes = atol(cfgOr("pangenome.maxRequestBytes", "500000"));
+    long maxBytes = atol(cfgOr("pangenome.maxRequestBytes", PG_MAX_REQUEST_BYTES));
     if (payload != NULL && maxBytes > 0 && (long)strlen(payload) > maxBytes)
         {
         emitJsonError("request too large: %ld bytes (limit %ld)",

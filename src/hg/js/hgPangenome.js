@@ -20,13 +20,13 @@
 var CFG = {};
 var POLL_INTERVAL = 1500;
 var HGSID = null;           // session, needed by commands that write the cart
-var MAX_SEQUENCES = 50;
+var MAX_SEQUENCES = 10;
 var MAX_MULTIMAPS = 1;
 
 function readConfig() {
     CFG = window.pangenomeConfig || {};
     POLL_INTERVAL = CFG.pollIntervalMs || 1500;
-    MAX_SEQUENCES = CFG.maxSequences || 50;
+    MAX_SEQUENCES = CFG.maxSequences || 10;
     MAX_MULTIMAPS = CFG.maxMultimaps || 1;
     HGSID = CFG.hgsid || null;
 }
@@ -150,6 +150,16 @@ function validate(parsed) {
             message: "too many sequences: " + parsed.sequences.length +
                      " (limit is " + MAX_SEQUENCES + ")"
         });
+
+    // The server's limit on the whole request: said here, before sending,
+    // where the reader can still do something about it.
+    var bases = 0;
+    parsed.sequences.forEach(function (s) { bases += (s.sequence || "").length; });
+    var room = totalRoom(parsed.sequences.length);
+    if (room !== null && bases > room)
+        parsed.errors.push({ line: 0,
+            message: "the sequences are " + commas(bases) + " bases together (limit is " +
+                     commas(room) + ")" });
 
     return parsed.errors.length === 0;
 }
@@ -451,6 +461,15 @@ function formTab(showUpload) {
 // the limits the server enforces so a sequence that is too long is flagged
 // before it is sent.  Debounced: a paste can be a megabyte, and the textarea
 // itself is never re-rendered, so the caret stays where the user put it.
+// The bases one search may carry in all, or null where the server has not
+// said.  Its limit is on the size of the request, which is the sequences plus
+// a little for each one's name and the wrapping around them.
+function totalRoom(nSeq) {
+    var fd = window.hgPangenomeFormData;
+    if (!fd || !fd.maxRequestBytes) return null;
+    return Math.max(0, fd.maxRequestBytes - 200 * nSeq - 500);
+}
+
 function formCount() {
     var out = $("pgCountText"), ta = $("pgSeq"), fd = window.hgPangenomeFormData;
     if (!out || !ta || !fd) return;
@@ -464,10 +483,13 @@ function formCount() {
     var nSeq = parsed.sequences.length;
     var text = commas(bases) + " bases in " + commas(nSeq) + " sequence" + (nSeq === 1 ? "" : "s");
     var problem = null;
+    var room = totalRoom(nSeq);
     if (nSeq > MAX_SEQUENCES)
         problem = "up to " + commas(MAX_SEQUENCES) + " sequences";
     else if (fd.maxSeqLen && longest > fd.maxSeqLen)
         problem = "longest is " + commas(longest) + " bp, limit " + commas(fd.maxSeqLen) + " bp";
+    else if (room !== null && bases > room)
+        problem = "too long together, limit " + commas(room) + " bases";
     out.textContent = problem ? text + " — " + problem : text;
     out.className = problem ? "over" : "";
 }

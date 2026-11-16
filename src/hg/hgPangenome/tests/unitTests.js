@@ -247,14 +247,14 @@ function nSeqs(n) {
     return parsed(a);
 }
 
-t.test('exactly 50 sequences is allowed (boundary)', function () {
-    t.ok(pg.validate(nSeqs(50)), '50 accepted');
+t.test('exactly 10 sequences is allowed (boundary): the default limit', function () {
+    t.ok(pg.validate(nSeqs(10)), '10 accepted');
 });
 
-t.test('51 sequences is rejected with the limit in the message', function () {
-    var p = nSeqs(51);
+t.test('11 sequences is rejected with the limit in the message', function () {
+    var p = nSeqs(11);
     t.notOk(pg.validate(p), 'invalid');
-    t.contains(p.errors[p.errors.length - 1].message, 'too many sequences: 51 (limit is 50)', 'message');
+    t.contains(p.errors[p.errors.length - 1].message, 'too many sequences: 11 (limit is 10)', 'message');
 });
 
 t.test('the cap honors a configured maxSequences', function () {
@@ -266,6 +266,40 @@ t.test('the cap honors a configured maxSequences', function () {
     var p = nSeqs(3);
     t.notOk(c.api.validate(p), '3 rejected');
     t.contains(p.errors[p.errors.length - 1].message, '(limit is 2)', 'configured limit used');
+});
+
+t.suite('validate - the size of the whole request');
+
+t.test('sequences that fit one by one may still be too long together', function () {
+    var c = loader.load();
+    c.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 3000 };
+    var seq = new Array(1001).join('ACGT').slice(0, 1000);
+    var ok = c.api.parseInput('>a\n' + seq + '\n>b\n' + seq);
+    t.ok(c.api.validate(ok), 'two of 1,000 bases fit a 3,000 byte request');
+    var over = c.api.parseInput('>a\n' + seq + '\n>b\n' + seq + '\n>c\n' + seq);
+    t.notOk(c.api.validate(over), 'three do not');
+    t.contains(over.errors[0].message, '3,000 bases together', 'the total is stated');
+    t.contains(over.errors[0].message, 'limit is 1,900', 'and the room there is, less the wrapping');
+});
+
+t.test('with the default limits, ten sequences of full length fit', function () {
+    // pangenome.maxSequences 10 x maxSeqLen 100,000 inside maxRequestBytes 1,040,000
+    var c = loader.load();
+    c.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 1040000 };
+    var seq = new Array(25001).join('ACGT');
+    var parts = [];
+    for (var i = 0; i < 10; i++) parts.push('>s' + i + '\n' + seq);
+    var p = c.api.parseInput(parts.join('\n'));
+    t.ok(c.api.validate(p), 'accepted');
+    t.eq(JSON.stringify({ sequences: p.sequences.map(function (s) {
+        return { name: s.name, sequence: s.sequence }; }), options: {} }).length < 1040000, true,
+        'and the request really is under the limit');
+});
+
+t.test('where the server has not said, nothing is assumed', function () {
+    var c = loader.load();
+    var p = c.api.parseInput('>a\nACGT');
+    t.ok(c.api.validate(p), 'no form data, no total check');
 });
 
 // ---------------------------------------------------------------- formEncode

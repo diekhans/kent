@@ -343,6 +343,27 @@ check_contains "... and is reported as an error" "$out" "answered with a redirec
 start_mock
 CONF=$(conf_default)
 
+# The three limits agree: with nothing configured, as many sequences as are
+# allowed, each as long as is allowed, make a request that is accepted.
+mk_conf "$TMP/defaults.conf" "pangenome.apiBase=http://127.0.0.1:$PORT"
+# (a megabyte is more than one environment variable or argument may hold, so
+# this request is written to a file and read by the CGI from there)
+python3 - "$TMP/tenFull.body" <<'PY'
+import json, sys, urllib.parse
+payload = json.dumps({"sequences": [{"name": "s%d" % i, "sequence": "ACGT" * 25000} for i in range(10)],
+                      "options": {"max_multimaps": 1, "surject": True, "surject_target": None}})
+open(sys.argv[1], "w").write("cmd=map&payload=" + urllib.parse.quote(payload))
+PY
+: > "$REC"
+out=$(env -i HGDB_CONF="$TMP/defaults.conf" REMOTE_ADDR=127.0.0.1 \
+    REQUEST_METHOD=POST CONTENT_TYPE=application/x-www-form-urlencoded \
+    CONTENT_LENGTH=$(wc -c < "$TMP/tenFull.body") "$CGI" < "$TMP/tenFull.body" 2>&1)
+check_eq "default limits: ten sequences of 100,000 bases are accepted" "$(mock_count)" "1"
+check_contains "... and the job is taken" "$out" '"job_id"'
+: > "$REC"
+out=$(cgi_post "$TMP/defaults.conf" "$(payload_n 11 ACGT)")
+check_contains "default limits: an eleventh sequence is refused" "$out" "too many sequences"
+
 # ============================================================= off switch
 section "off switch (pangenomeTools)"
 
@@ -948,6 +969,99 @@ else
         check_contains "quickLift: converting again gives a link" "$out" '"url":"hgTracks?db=hg38'
         check_eq "... through the same hub file, not a second one" \
             "$(find "$TMP/trash/pangenomeQuickLift" -name 'hub*.txt' 2>/dev/null | grep -c .)" "1"
+    fi
+
+    # ---- the chain the lifted tracks are drawn through ----
+    #
+    # Built from the blocks of a translation.  Read back from the files, with
+    # bigBedToBed: one row a chain, and one row a block in the link file.
+    if [ ! -x "$BOX/loader/bedToBigBed" ] || [ -z "$BB2BED" ]; then
+        echo "  NOT RUN: the chain checks (bedToBigBed or bigBedToBed not found)"
+        notRun="the chain checks"
+    else
+    blk() {                          # blk <srcStart> <srcEnd> <tgtStart> <tgtEnd> [strand]
+        printf '{"haplotype":"GRCh38#0#chr1","source_start":%s,"source_end":%s,"target_start":%s,"target_end":%s,"strand":"%s"}' \
+            "$1" "$2" "$3" "$4" "${5:-+}"
+    }
+    ql_payload() {                   # ql_payload <blocks, comma separated>
+        printf '{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38","position":"chr1:20001-20300","hideTracks":"off","blocks":[%s]}' "$1"
+    }
+    # chains_of <blocks>: "start-end strand qStart-qEnd" for each chain, then
+    # "| start-end@q" for each block, of the chain a conversion just wrote
+    chains_of() {
+        local before o f
+        before=$(find "$TMP/trash/pangenomeQuickLift" -name 'chain*.bb' ! -name '*.link.bb' | sort)
+        o=$(cgi_box "$QCONF" "cmd=quickLift&payload=$(enc "$(ql_payload "$1")")")
+        f=$(comm -13 <(printf '%s\n' "$before") \
+                     <(find "$TMP/trash/pangenomeQuickLift" -name 'chain*.bb' ! -name '*.link.bb' | sort) | head -1)
+        if [ -z "$f" ]; then printf '%s' "$o" | tail -1 | cut -c1-160; return; fi
+        "$BB2BED" "$f" stdout | awk -F'\t' '{printf "%s-%s %s %s-%s ", $2, $3, $6, $10, $11}'
+        printf '|'
+        "$BB2BED" "${f%.bb}.link.bb" stdout | awk -F'\t' '{printf " %s-%s@%s", $2, $3, $5}'
+    }
+    Q1=248956422                     # chr1's length: the reverse strand counts from its end
+    check_eq "chain: two blocks in order, a gap between, are one chain of two blocks" \
+        "$(chains_of "$(blk 11000 11100 20000 20100),$(blk 11150 11250 20200 20300)")" \
+        "20000-20300 + 11000-11250 | 20000-20100@11000 20200-20300@11150"
+    check_eq "chain: the blocks may come in any order" \
+        "$(chains_of "$(blk 11150 11250 20200 20300),$(blk 11000 11100 20000 20100)")" \
+        "20000-20300 + 11000-11250 | 20000-20100@11000 20200-20300@11150"
+    check_eq "chain: a block on the other strand is a chain of its own, counted from the far end" \
+        "$(chains_of "$(blk 11000 11100 20000 20100),$(blk 11150 11250 20200 20300 -)")" \
+        "20000-20100 + 11000-11100 20200-20300 - $((Q1 - 11250))-$((Q1 - 11150)) | 20000-20100@11000 20200-20300@$((Q1 - 11250))"
+    check_eq "chain: a block that goes back on the source starts another chain" \
+        "$(chains_of "$(blk 11300 11400 20000 20100),$(blk 11000 11100 20200 20300)")" \
+        "20000-20100 + 11300-11400 20200-20300 + 11000-11100 | 20000-20100@11300 20200-20300@11000"
+    check_contains "chain: a block with nothing in it is refused" \
+        "$(chains_of "$(blk 11000 11000 20000 20100)")" "empty or out-of-range"
+    check_contains "chain: a block off the end of the source sequence is refused" \
+        "$(chains_of "$(blk -5 100 20000 20105)")" "empty or out-of-range"
+    check_contains "chain: no blocks at all is said plainly" \
+        "$(chains_of "")" "returned no blocks"
+    { echo "include $QCONF"; echo "pangenome.maxBlocks=2"; } > "$TMP/fewBlocks.conf"
+    out=$(cgi_box "$TMP/fewBlocks.conf" "cmd=quickLift&payload=$(enc "$(ql_payload "$(blk 1 2 10 11),$(blk 3 4 12 13),$(blk 5 6 14 15)")")")
+    check_contains "chain: more blocks than the limit are refused" "$out" "too many blocks"
+
+    # A hub file is kept from one conversion to the next, and trash is filed by
+    # day: a hub from another day gets today's chain, which is not in its own
+    # directory.  Named by base name alone, the chain was not found after midnight.
+    mkdir -p "$TMP/trash/pangenomeQuickLift/000"
+    OLDHUB="../trash/pangenomeQuickLift/000/hub_yesterday.txt"
+    echo "hub old" > "$BOX/$OLDHUB"
+    out=$(cgi_box "$QCONF" \
+        "cmd=quickLift&payload=$(enc "$QL_FULL")&pangenomeQuickLift-hg38-hg38=$(enc "$OLDHUB")")
+    check_contains "a hub from another day: the conversion still gives a link" "$out" '"url":"hgTracks?db=hg38'
+    named=$(grep '^bigDataUrl ' "$BOX/$OLDHUB" | tail -1 | cut -d' ' -f2)
+    check_contains "... its hub file is the one kept" "$(head -1 "$BOX/$OLDHUB")" "hub pangenomeLift"
+    check_eq "... and the chain it names is there, from where the hub is" \
+        "$([ -n "$named" ] && [ -e "$TMP/trash/pangenomeQuickLift/000/$named" ] && echo found || echo "missing: $named")" "found"
+    for u in $(grep '^quickLiftUrl ' "$BOX/$OLDHUB" | cut -d' ' -f2 | sort -u); do
+        check_eq "... as is the chain each lifted track names" \
+            "$([ -e "$TMP/trash/pangenomeQuickLift/000/$u" ] && echo found || echo "missing: $u")" "found"
+    done
+
+    # A command that aborts half way: the answer is still JSON, and the
+    # session is left on the assembly it was on, not on the one borrowed to
+    # read the source's tracks.
+    out=$(cgi_box "$QCONF" "page=convert&db=mm39")
+    ABSID=$(printf '%s' "$out" | grep -o 'hgsid=[0-9]*_[A-Za-z0-9]*' | head -1)
+    chmod -R a-w "$TMP/trash/pangenomeQuickLift"
+    out=$(cgi_box "$QCONF" "cmd=quickLift&$ABSID&payload=$(enc "$QL_FULL")")
+    chmod -R u+w "$TMP/trash/pangenomeQuickLift"
+    check_contains "an abort inside a conversion is answered as JSON" "$out" '{"status":"error","error":"the request could not be completed'
+    check_not_contains "... and not as an HTML page" "$out" "<!DOCTYPE"
+    DUMP2=""
+    for cand in "/usr/local/apache/cgi-bin-$(id -un)/cartDump" /usr/local/apache/cgi-bin/cartDump; do
+        [ -x "$cand" ] && { DUMP2="$cand"; break; }
+    done
+    if [ -z "$DUMP2" ] || [ -z "$ABSID" ]; then
+        echo "  NOT RUN: the session-after-an-abort check (no cartDump, or no session id)"
+        notRun="the session-after-an-abort check"
+    else
+        dump=$(cd "$BOX" && env -i HGDB_CONF="$QCONF" REMOTE_ADDR=127.0.0.1 SERVER_SOFTWARE=Apache \
+            REQUEST_METHOD=GET QUERY_STRING="$ABSID" "$DUMP2" 2>&1)
+        check_contains "... and the session is still on its own assembly" "$dump" "db mm39"
+    fi
     fi
 
     # a long error from the mapping server, met while fetching the blocks
