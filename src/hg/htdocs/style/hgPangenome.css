@@ -323,9 +323,9 @@
  * table, as hgBlat opens its query-sequence and share panels. */
 .pgrPanel { padding:14px 18px; border-bottom:1px solid var(--line); background:var(--panel); overflow-x:auto; }
 .pgrNotes { padding:2px 18px 6px; }
-/* The bar above the table saying it is narrowed to one haplotype (.on).
- * Toggled with the hidden attribute, which a display:flex rule would
- * otherwise win over. */
+/* A bar above a table saying what it is showing (.on): PanLift's
+ * all-haplotypes page uses it.  Toggled with the hidden attribute, which a
+ * display:flex rule would otherwise win over. */
 .pgrBar[hidden] { display:none; }
 .pgrBar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:8px 18px 4px;
     padding:9px 12px; background:var(--panel); box-shadow:inset 3px 0 0 var(--line);

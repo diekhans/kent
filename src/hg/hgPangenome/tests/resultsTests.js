@@ -382,7 +382,7 @@ t.test('an unknown haplotype has no assembly', function () {
     t.isNull(R.pgrAssembly('toString'), 'a name Object.prototype has');
 });
 
-t.suite('one haplotype on its own');
+t.suite('one haplotype at every hit');
 t.test('every placement of every query is a place to fill, from the rows alone', function () {
     R.pgrMapping = null;
     R.pgrRows = [row({ query: 'a', placements: 3 }), row({ query: 'a', placement: 2, placements: 3 }),
@@ -455,7 +455,7 @@ t.test('the coverage floor hides rows under it and cannot go below the install f
     t.ok(R.pgrShown(row({ coverage: 50 })), 'at the default floor');
     t.notOk(R.pgrShown(row({ coverage: 49.9 })), 'under it');
     t.ok(R.pgrShown(row({ coverage: null })), 'a row with no figure is not hidden by it');
-    t.notOk(R.pgrShown(row({ extra: true })), 'rows aligned on request wait for their haplotype');
+    t.notOk(R.pgrShown(row({ extra: true })), 'rows aligned on request, for the track, are not in the table');
     R.pgrSetCovFloor('90');
     t.notOk(R.pgrShown(row({ coverage: 89 })), 'raised to 90');
     R.pgrSetCovFloor('10');
@@ -646,12 +646,4 @@ t.test('a hit already asked for, or already tried, is not asked for again', func
     x.S.pgrFillSoon(x.dt);
     t.eq(x.live(), 0, 'nor once it has been answered');
 });
-t.test('a table narrowed to one haplotype asks for nothing here', function () {
-    var x = waitingPage();
-    x.S.pgrFocus = 'HG00097#2';
-    x.dt.shown = [waiting()];
-    x.S.pgrFillSoon(x.dt);
-    t.eq(x.timers.length, 0, 'that view places its own rows');
-});
-
 process.exit(t.report());
