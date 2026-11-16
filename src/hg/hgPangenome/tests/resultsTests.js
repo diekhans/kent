@@ -83,14 +83,53 @@ t.test('a contig name cannot inject markup', function () {
 });
 
 t.suite('coverage cell');
-t.test('the bar covers the aligned extent, the figure is the coverage', function () {
-    var h = R.pgrCoverageCell(row({ qStart: 250, qEnd: 750, coverage: 49.5 }));
-    t.contains(h, 'left:25.0%;width:50.0%', 'extent 251-750 of 1000');
+t.test('the bar shows where on the query it aligned, the figure how much', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '250S500M250S', coverage: 49.5 }));
+    t.contains(h, 'left:25.0%;width:50.0%', 'bases 251-750 of 1000');
     t.contains(h, '49.5%', 'coverage figure');
     t.contains(h, 'Bases 251-750 of your 1,000 bp', 'tooltip is 1-based');
 });
+t.test('a quarter aligned is a quarter of the bar, not all of it', function () {
+    // What the mapping server sends for four copies of a 20 kb sequence: the
+    // query extent it reports runs to the end of the clipped part.
+    var h = R.pgrCoverageCell(row({ queryLength: 80000, cigar: '20000M60000S', qStart: 0,
+                                    qEnd: 80000, coverage: 24.97 }));
+    t.contains(h, 'left:0.0%;width:25.0%', 'the first quarter');
+    t.notOk(/width:100/.test(h), 'not the whole bar');
+    t.contains(h, 'Bases 1-20,000 of your 80,000 bp', 'tooltip says which bases');
+});
+t.test('each aligned block is its own piece, as on hgBlat', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '100M300I200M400S', coverage: 30 }));
+    t.contains(h, 'left:0.0%;width:10.0%', 'the first block');
+    t.contains(h, 'left:40.0%;width:20.0%', 'the second, after the bases that did not align');
+    t.eq(h.split('<i ').length - 1, 2, 'two pieces');
+});
+t.test('blocks too close to tell apart on the bar are drawn as one', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '500M1I499M', coverage: 99.9 }));
+    t.eq(h.split('<i ').length - 1, 1, 'one piece');
+    t.contains(h, 'left:0.0%;width:100.0%', 'the whole query');
+});
+t.test('a deletion does not break the bar: the query is unbroken there', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '400M50D600M' }));
+    t.eq(h.split('<i ').length - 1, 1, 'one piece');
+});
+t.test('on the reverse strand the bar is turned round to the query as given', function () {
+    // The CIGAR runs along the reversed query, as in SAM: the 200 aligned
+    // bases here are the query's last 200.
+    var h = R.pgrCoverageCell(row({ cigar: '200M800S', strand: '-', coverage: 20 }));
+    t.contains(h, 'left:80.0%;width:20.0%', 'the last fifth');
+    t.contains(h, 'Bases 801-1,000 of', 'tooltip');
+});
+t.test('a CIGAR that does not add up to the query falls back to the extent given', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '500M', qStart: 250, qEnd: 750 }));
+    t.contains(h, 'left:25.0%;width:50.0%', 'the extent');
+    t.isNull(R.pgrQuerySegments('500M', '+', 1000), 'too short');
+    t.isNull(R.pgrQuerySegments('1000M junk', '+', 1000), 'unreadable');
+    t.isNull(R.pgrQuerySegments('1000S', '+', 1000), 'nothing aligned');
+    t.isNull(R.pgrQuerySegments(null, '+', 1000), 'none');
+});
 t.test('a row with no extent still shows its coverage', function () {
-    var h = R.pgrCoverageCell(row({ qStart: null, qEnd: null }));
+    var h = R.pgrCoverageCell(row({ cigar: null, qStart: null, qEnd: null }));
     t.contains(h, '98.3%', 'figure');
     t.notOk(/pgrCov"/.test(h), 'no bar');
 });
@@ -204,6 +243,20 @@ t.test('the query extent is carried for the coverage bar', function () {
     t.eq(r.qStart, 3, 'qStart');
     t.eq(r.qEnd, 13, 'qEnd');
     t.eq(r.identity, 99.5, 'identity as a percentage');
+});
+t.test('the extent is read off the CIGAR, not taken from the record', function () {
+    // The record's own extent counts the clipped end as aligned.
+    var r = { queryLength: 80000 };
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'GRCh38#0#chr2', target_start: 10,
+                          target_end: 20010, query_start: 0, query_end: 80000, coverage: 24.97,
+                          identity: 1, strand: '+', cigar: '20000M60000S' });
+    t.eq(r.qStart, 0, 'qStart');
+    t.eq(r.qEnd, 20000, 'qEnd is the last aligned base');
+    var s = { queryLength: 80000 };
+    R.pgrApplySurjection(s, { surjection: { status: 'ok', target: 'GRCh38#0#chr2', position: 10,
+                                           strand: '-', cigar: '20000M60000S' } });
+    t.eq(s.qStart, 60000, 'the mapping\'s own surjection gets one too, turned round');
+    t.eq(s.qEnd, 80000, 'to the end of the query');
 });
 t.test('a record without one leaves it unset, not zero', function () {
     var r = {};

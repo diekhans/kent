@@ -245,6 +245,38 @@ function pgrCigarSpan(cigar) {
     return span;
 }
 
+// The parts of the query that aligned, as [start, end) pairs on the query as it
+// was given: one per run of matched bases in the CIGAR, which are the blocks of
+// a PSL - what hgBlat draws its coverage bar from.  Clipped ends and inserted
+// bases are query that did not align, so they are the gaps.
+//
+// From the CIGAR and not from the record's query_start/query_end: the mapping
+// server counts a clipped end inside those, so a sequence a quarter of which
+// aligned came back as aligned from its first base to its last.  A CIGAR on
+// the reverse strand is written along the reversed query, as in SAM, so its
+// runs are turned round.  Null when the CIGAR does not account for the whole
+// query, which is when it cannot be trusted to say where on it anything is.
+function pgrQuerySegments(cigar, strand, qSize) {
+    if (!cigar || !qSize) { return null; }
+    var segs = [], q = 0, read = 0, re = /(\d+)([MIDNSHP=X])/g, m;
+    while ((m = re.exec(cigar)) !== null) {
+        var n = parseInt(m[1], 10), op = m[2];
+        read += m[0].length;
+        if (op === "M" || op === "=" || op === "X") {
+            var last = segs[segs.length - 1];
+            if (last && last[1] === q) { last[1] = q + n; } else { segs.push([q, q + n]); }
+            q += n;
+        } else if (op === "I" || op === "S" || op === "H") {
+            q += n;
+        }
+    }
+    if (read !== cigar.length || q !== qSize || !segs.length) { return null; }
+    if (strand === "-") {
+        segs = segs.map(function (g) { return [qSize - g[1], qSize - g[0]]; }).reverse();
+    }
+    return segs;
+}
+
 // ---- transport -------------------------------------------------------------
 
 function pgrCheck(resp) {
@@ -405,9 +437,14 @@ function pgrApplyRecord(row, rec) {
     row.deleted = rec.deleted;
     row.identity = rec.identity == null ? null : rec.identity * 100;
     // Where on the query the alignment runs, 0-based and half-open like the
-    // target coordinates, for the coverage bar.  Optional: an older service
-    // does not send them, and the bar then says only how much, not where.
-    if (rec.query_start != null && rec.query_end != null) {
+    // target coordinates: from its first aligned base to its last, read off
+    // the CIGAR.  The record's own figures stand in only when the CIGAR cannot
+    // be read that way.
+    var segs = pgrQuerySegments(rec.cigar, rec.strand, row.queryLength);
+    if (segs) {
+        row.qStart = segs[0][0];
+        row.qEnd = segs[segs.length - 1][1];
+    } else if (rec.query_start != null && rec.query_end != null) {
         row.qStart = rec.query_start;
         row.qEnd = rec.query_end;
     }
@@ -440,6 +477,11 @@ function pgrApplySurjection(row, resp) {
     row.inserted = s.inserted;
     row.deleted = s.deleted;
     row.identity = s.identity == null ? null : s.identity * 100;
+    var segs = pgrQuerySegments(s.cigar, s.strand, row.queryLength);
+    if (segs) {
+        row.qStart = segs[0][0];
+        row.qEnd = segs[segs.length - 1][1];
+    }
 }
 
 // Records are keyed by "requested", the haplotype name as it was asked for.
@@ -504,19 +546,32 @@ function pgrActionsCell(r) {
 // here the coverage is the figure people compare haplotypes by, so it takes
 // that place and the range goes in the tooltip.  A row from the graded list,
 // which has no extent, still gets its figure.
+// The bar is the query, and the blue the parts of it that aligned here, where
+// they are - hgBlat's query-coverage bar, drawn from the same thing, the
+// alignment's blocks.  The figure after it is how much of the query that is.
 function pgrCoverageCell(r) {
     if (r.coverage == null) { return ""; }
     var pct = r.coverage.toFixed(1) + "%";
     var qSize = r.queryLength;
-    if (r.qStart == null || !qSize) {
+    var segs = pgrQuerySegments(r.cigar, r.strand, qSize) ||
+               ((r.qStart != null && qSize) ? [[r.qStart, r.qEnd]] : null);
+    if (!segs) {
         return '<span class="pgrCovNum">' + pct + "</span>";
     }
-    var left = r.qStart / qSize * 100;
-    var width = (r.qEnd - r.qStart) / qSize * 100;
-    var tip = "Bases " + pgrFmt(r.qStart + 1) + "-" + pgrFmt(r.qEnd) + " of your " +
-              pgrFmt(qSize) + " bp sequence aligned here, " + pct + " of it in all";
-    return '<span class="pgrCovWrap" title="' + tip + '"><span class="pgrCov">' +
-           '<i style="left:' + left.toFixed(1) + "%;width:" + width.toFixed(1) + '%"></i>' +
+    // Runs closer together than the bar can show are drawn as one: an
+    // alignment of a long sequence can have hundreds.
+    var drawn = [], join = qSize / 400;
+    segs.forEach(function (g) {
+        var last = drawn[drawn.length - 1];
+        if (last && g[0] - last[1] < join) { last[1] = g[1]; } else { drawn.push([g[0], g[1]]); }
+    });
+    var bars = drawn.map(function (g) {
+        return '<i style="left:' + (g[0] / qSize * 100).toFixed(1) + "%;width:" +
+               ((g[1] - g[0]) / qSize * 100).toFixed(1) + '%"></i>';
+    }).join("");
+    var tip = "Bases " + pgrFmt(segs[0][0] + 1) + "-" + pgrFmt(segs[segs.length - 1][1]) +
+              " of your " + pgrFmt(qSize) + " bp sequence aligned here, " + pct + " of it in all";
+    return '<span class="pgrCovWrap" title="' + tip + '"><span class="pgrCov">' + bars +
            '</span><span class="pgrCovNum">' + pct + "</span></span>";
 }
 
