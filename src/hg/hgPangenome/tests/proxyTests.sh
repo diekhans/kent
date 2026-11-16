@@ -869,12 +869,6 @@ else
         > "$BOX/$THEIRS"
     cp "$BOX/$THEIRS" "$TMP/theirsBefore.txt"
     theirs_state() { cmp -s "$BOX/$THEIRS" "$TMP/theirsBefore.txt" && echo unchanged || echo changed; }
-    out=$(cgi_box "$QCONF" "cmd=liftCheck&db=hg38&hubQuickLift-hg38=$(enc "$THEIRS")")
-    check_contains "liftCheck: the source's tracks are counted" "$out" '"tracks":'
-    check_not_contains "... and the count is a number" "$out" '"tracks":null'
-    check_eq "... and hgConvert's quickLift hub is left as it was" "$(theirs_state)" "unchanged"
-    check_eq "... and no file of ours is left beside it" \
-        "$(find "$TMP/trash/quickLift" -type f | grep -c .)" "1"
 
     # pangenomeQuickLift-<src>-<tgt> is where we keep the name of our own hub
     # file between conversions, and that file is written over.  A cart variable
@@ -890,13 +884,15 @@ else
         notRun="the hub file checks (no bedToBigBed)"
     else
         out=$(cgi_box "$QCONF" \
-            "cmd=quickLift&payload=$(enc "$QL_FULL")&pangenomeQuickLift-hg38-hg38=$(enc "$VICTIM")")
+            "cmd=quickLift&payload=$(enc "$QL_FULL")&pangenomeQuickLift-hg38-hg38=$(enc "$VICTIM")&hubQuickLift-hg38=$(enc "$THEIRS")")
         check_contains "quickLift: a whole conversion gives a browser link" "$out" '"url":"hgTracks?db=hg38'
         check_eq "... and a file named in the cart that is not ours is not written over" \
             "$(head -1 "$VICTIM")" "somebody else's file"
         check_eq "... and the hub is in our trash directory" \
             "$(find "$TMP/trash/pangenomeQuickLift" -name 'hub*.txt' 2>/dev/null | grep -c .)" "1"
-        check_eq "... and hgConvert's quickLift hub is still as it was" "$(theirs_state)" "unchanged"
+        check_eq "... and hgConvert's quickLift hub is left as it was" "$(theirs_state)" "unchanged"
+        check_eq "... and no file of ours is left beside it" \
+            "$(find "$TMP/trash/quickLift" -type f | grep -c .)" "1"
 
         # The other half: a name that is ours is used again.  A new file for
         # every conversion is a new hub attached to the cart every time.

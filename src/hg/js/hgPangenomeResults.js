@@ -341,10 +341,6 @@ function pgrRowsFromBatch(res, aln, index, placements, batch) {
             db: pgrAssembly(rec.requested),
             isCarrier: !!carriers[key],
             isRepresentative: key === repKey,
-            isReference: !!(aln.haplotypes &&
-                            aln.haplotypes.representative_is_reference) &&
-                         key === repKey,
-            placementScore: aln.score,
             mapq: aln.mapping_quality
         };
         pgrApplyRecord(row, rec);
@@ -368,8 +364,6 @@ function pgrRowsFromMapping(res, aln, index, placements) {
             db: pgrAssembly(c.haplotype),
             isCarrier: false,
             isRepresentative: pgrHapKey(c.haplotype) === repKey,
-            isReference: false,
-            placementScore: aln.score,
             mapq: aln.mapping_quality,
             coverage: pgrPct(c.coverage),
             listIdentity: pgrPct(c.identity)
@@ -404,13 +398,11 @@ function pgrApplyRecord(row, rec) {
     row.end = tgt.offset + rec.target_end;
     row.strand = rec.strand;
     row.cigar = rec.cigar;
-    row.score = rec.score;
     row.surjMapq = rec.mapping_quality;
     row.matches = rec.matches;
     row.mismatches = rec.mismatches;
     row.inserted = rec.inserted;
     row.deleted = rec.deleted;
-    row.alignedBases = rec.aligned_bases;
     row.identity = rec.identity == null ? null : rec.identity * 100;
     // Where on the query the alignment runs, 0-based and half-open like the
     // target coordinates, for the coverage bar.  Optional: an older service
@@ -442,13 +434,11 @@ function pgrApplySurjection(row, resp) {
     row.end = row.start + pgrCigarSpan(s.cigar);
     row.strand = s.strand;
     row.cigar = s.cigar;
-    row.score = s.score;
     row.surjMapq = s.mapping_quality;
     row.matches = s.matches;
     row.mismatches = s.mismatches;
     row.inserted = s.inserted;
     row.deleted = s.deleted;
-    row.alignedBases = s.aligned_bases;
     row.identity = s.identity == null ? null : s.identity * 100;
 }
 
@@ -868,9 +858,7 @@ function pgrCacheWrite(job) {
             }),
             queries: pgrQueryCount,
             queryNames: pgrQueryNames,
-            note: pgrNote,
             places: pgrPlaceList,
-            loaded: pgrLoaded,
             minShown: pgrMinShown,
             full: pgrFull
         }));
@@ -1088,7 +1076,7 @@ function pgrRefresh() {
     if (count) { count.textContent = pgrFmt(rows.length); }
     var box = document.getElementById("pgrNotes");
     if (box) {
-        var notes = pgrNotes(rows, pgrNote, pgrQueryCount > 1, rows.some(function (r) { return r.hits > 1; }));
+        var notes = pgrNotes(rows, pgrQueryCount > 1, rows.some(function (r) { return r.hits > 1; }));
         var html = pgrNotesHtml(notes);
         if (box.innerHTML !== html) { box.innerHTML = html; }
         box.hidden = !notes.length;
@@ -1129,7 +1117,7 @@ function pgrRedrawKeep() {
     var dt = pgrDt;
     var st = dt ? { page: dt.page(), len: dt.page.len(), order: dt.order(), search: dt.search() } : null;
     var sel = pgrSelKey;
-    pgrDraw(pgrQueryCount, pgrRows, pgrNote);
+    pgrDraw(pgrQueryCount, pgrRows);
     if (st && pgrDt) {
         pgrDt.page.len(st.len).order(st.order).search(st.search).draw(false);
         pgrDt.page(st.page).draw(false);
@@ -1231,10 +1219,8 @@ function pgrShown(r) {
 var pgrMapping = null;      // the mapping's results, while this page has them
 var pgrQueryNames = [];     // query names in the order they were given
 var pgrQueryCount = 0;
-var pgrNote = null;
 var pgrDt = null;
 var pgrPlaceList = null;    // every (query, placement), from the mapping
-var pgrLoaded = {};         // the placements whose batch call has been made
 
 // Every (query, placement) the haplotype should have a row for.  From the
 // mapping when the page has it; otherwise from the rows, which name every
@@ -1300,8 +1286,6 @@ function pgrRowForHap(res, aln, index, hap, resp) {
             return pgrHapKey(n) === key;
         }),
         isRepresentative: !!rep && pgrHapKey(rep) === key,
-        isReference: false,
-        placementScore: aln.score,
         mapq: aln.mapping_quality,
         coverage: cov ? pgrPct(cov.coverage) : null,
         listIdentity: cov ? pgrPct(cov.identity) : null,
@@ -1525,10 +1509,9 @@ function pgrSelect(dt, rank) {
 }
 
 // What is worth saying about these rows, beyond the rows themselves.
-function pgrNotes(rows, note, multiQuery, multiPlace) {
+function pgrNotes(rows, multiQuery, multiPlace) {
     var placed = rows.filter(function (r) { return r.contig != null || r.pending; }).length;
     var notes = [];
-    if (note) { notes.push(note); }
     if (placed < rows.length) {
         // Only when the batch call failed and the graded list stood in for it.
         notes.push(pgrFmt(rows.length - placed) + " could not be placed, and show " +
@@ -1580,7 +1563,7 @@ function pgrNotesHtml(notes) {
     return notes.map(function (n) { return '<div class="pgrNote">' + n + "</div>"; }).join("");
 }
 
-function pgrDraw(queries, allRows, note) {
+function pgrDraw(queries, allRows) {
     // Drawn again after placements are added, so let go of the last table: its
     // DataTable, its selection (ranks change), and remember whether the plot
     // was open, to open it again on the new rows.
@@ -1613,7 +1596,7 @@ function pgrDraw(queries, allRows, note) {
         sectTtl.appendChild(acts);
     }
 
-    var notes = pgrNotes(rows, note, multiQuery, multiPlace);
+    var notes = pgrNotes(rows, multiQuery, multiPlace);
 
     // hgBlat's columns, with the two it has no need for - which sample, and
     // which of its haplotypes - in front.
@@ -1932,12 +1915,10 @@ function pgrStart() {
         pgrNumberHits();
         pgrQueryCount = cached.queries;
         pgrQueryNames = cached.queryNames || [];
-        pgrNote = cached.note || null;
         pgrPlaceList = cached.places || null;
-        pgrLoaded = cached.loaded || {};
         pgrMinShown = (typeof cached.minShown === "number") ? cached.minShown : null;
         pgrFull = cached.full || {};
-        pgrDraw(cached.queries, cached.rows, pgrNote);
+        pgrDraw(cached.queries, cached.rows);
         pgrPlaceRest();             // left before the rest were placed
         return;
     }
@@ -1975,7 +1956,6 @@ function pgrStart() {
             return function () {
                 return pgrBatchRows(j.res, j.aln, j.index).then(function (rows) {
                     j.rows = rows;
-                    pgrLoaded[pgrPlaceKey(j.res.name, j.index)] = true;
                 });
             };
         }), 3).then(function () {
@@ -1992,9 +1972,8 @@ function pgrStart() {
             }
             pgrRows = rows;
             pgrRerank();
-            pgrNote = null;
             pgrCacheWrite(job);
-            pgrDraw(pgrQueryCount, pgrRows, pgrNote);
+            pgrDraw(pgrQueryCount, pgrRows);
             pgrPlaceRest();
         }
     }).catch(function (err) {

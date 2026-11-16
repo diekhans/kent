@@ -67,7 +67,7 @@
  *   pangenome.pollIntervalMs poll interval in ms; default 1500
  *   pangenome.maxSequences   max sequences per submit (server-enforced); default 50
  *   pangenome.maxSeqLen      max length of one sequence in bp; default 100000
- *   pangenome.maxRequestBytes max raw payload size; default 10000000
+ *   pangenome.maxRequestBytes max raw payload size; default 500000
  *   pangenome.minHapCoverage only report haplotypes matching at least this
  *                            percentage (0-100) on mapping results; unset means
  *                            the middleware's own default.  The default returns
@@ -478,8 +478,6 @@ static void pgJobFaPath(char *jobId, char *buf, int bufSize)
 safef(buf, bufSize, "../trash/pangenomeSs/pangenomeJob_%s.fa", jobId);
 }
 
-static boolean pgValidJobId(char *jobId);
-
 static void pgStashQuerySeqs(char *payload, char *response)
 /* Write the submitted sequences to a FASTA named after the job.
  *
@@ -774,17 +772,14 @@ if (errCatchStart(errCatch))
     struct jsonElement *root = jsonParse(payload);
     char *tgt = jsonOptionalStringField(root, "tgt", NULL);
     char *jobId = jsonOptionalStringField(root, "job_id", NULL);
-    char *gaf = jsonOptionalStringField(root, "gaf", NULL);
     char *name = jsonOptionalStringField(root, "name", NULL);
     if (isEmpty(tgt))
         result = "missing 'tgt' haplotype";
     else if (!pgValidHapName(tgt))
         result = "'tgt' must name a haplotype, such as HG00097#1";
-    else if (isEmpty(jobId) && isEmpty(gaf))
-        result = "need either 'job_id' or 'gaf'";
-    else if (!isEmpty(jobId) && !pgValidJobId(jobId))
-        result = "invalid 'job_id'";
-    else if (!isEmpty(jobId) && isEmpty(name))
+    else if (!pgValidJobId(jobId))
+        result = "missing or invalid 'job_id'";
+    else if (isEmpty(name))
         result = "missing 'name' of the sequence to re-surject";
     }
 errCatchEnd(errCatch);
@@ -828,13 +823,6 @@ if (sameString(cmd, "map"))
     /* Limits agreed with the middleware team; keep both sides identical. */
     int maxSeqs = atoi(cfgOr("pangenome.maxSequences", "10"));
     int maxSeqLen = atoi(cfgOr("pangenome.maxSeqLen", "100000"));      /* 100 kb / read */
-    int maxBytes = atoi(cfgOr("pangenome.maxRequestBytes", "10000000")); /* 10 MB body */
-    if (strlen(payload) > (size_t)maxBytes)
-        {
-        emitJsonError("request too large: %lu bytes (limit %d)",
-                      (unsigned long)strlen(payload), maxBytes);
-        return;
-        }
     int maxMultimaps = atoi(cfgOr("pangenome.maxMultimapsLimit", "3"));
     char *bad = pgValidatePayload(payload, maxSeqs, maxSeqLen, maxMultimaps);
     if (bad != NULL)
@@ -2248,69 +2236,6 @@ emitJson(out->string);
 dyStringFree(&out);
 }
 
-static void doLiftCheck()
-/* Can this assembly's annotations be carried over at all?
- *
- * Asked by the conversion page before the user submits, so that "nothing is
- * showing on this assembly" is said while they can still do something about
- * it, rather than after the conversion has run.  It is the same question
- * doQuickLift answers, so it is answered by the same code: trackHubBuild picks
- * the tracks, and we count what it wrote.
- *
- * Needs the cart - that is where the visibilities are - so it comes through
- * the cart shell and writes its own JSON header. */
-{
-char *db = cgiOptionalString("db");
-if (!pgValidDb(db))
-    {
-    emitJsonError("missing or malformed assembly name");
-    return;
-    }
-char *savedDb = cloneString(cartUsualString(cart, "db", ""));
-char *srcName = pgAttachAssembly(db);
-cartSetString(cart, "db", srcName);
-
-struct trackDb *badList = NULL;
-char *built = pgBuildSourceHub(srcName, &badList);
-pgRestoreDb(savedDb);
-
-if (built == NULL)
-    {
-    /* Not an answer, but not a reason to stop the user either: the conversion
-     * itself will report whatever is really wrong. */
-    emitJson("{\"status\":\"ok\",\"tracks\":null}");
-    return;
-    }
-
-/* One "track" line per stanza.  Counting them is enough: the question is only
- * whether anything at all came through. */
-int count = 0;
-struct lineFile *lf = lineFileMayOpen(built, TRUE);
-if (lf != NULL)
-    {
-    char *line;
-    while (lineFileNext(lf, &line, NULL))
-        if (startsWith("track ", skipLeadingSpaces(line)))
-            count++;
-    lineFileClose(&lf);
-    }
-unlink(built);
-
-struct dyString *skipped = dyStringNew(256);
-struct trackDb *bad;
-for (bad = badList; bad != NULL; bad = bad->next)
-    pgNote(skipped, bad);
-
-struct dyString *out = dyStringNew(300);
-dyStringPrintf(out, "{\"status\":\"ok\",\"tracks\":%d", count);
-if (skipped->stringSize > 0)
-    dyStringPrintf(out, ",\"skipped\":\"%s\"", jsonStringEscape(skipped->string));
-dyStringAppend(out, "}");
-emitJson(out->string);
-dyStringFree(&out);
-dyStringFree(&skipped);
-}
-
 static void doQuickLift(char *payload, boolean wide)
 /* Build a chain from the blocks the page already has, wrap the source's
  * annotation tracks in a hub that points at it, and hand back a Genome Browser
@@ -2430,7 +2355,6 @@ if (qSize == 0)
  * Since we were already making this call for the padding, fetching all of it
  * costs nothing extra and keeps the request small.  Blocks in the payload are
  * still honoured if present, as a fallback when the fetch fails. */
-long padded = 0;
 char *fetchErr = NULL;
 if (!isEmpty(tgtHap) && srcStart >= 0 && srcEnd > srcStart)
     {
@@ -2446,7 +2370,6 @@ if (!isEmpty(tgtHap) && srcStart >= 0 && srcEnd > srcStart)
         if (wider != NULL)
             {
             root = wider;
-            padded = to - from;
             fetchErr = NULL;
             }
         }
@@ -2637,11 +2560,6 @@ dyStringPrintf(out, "{\"status\":\"ok\",\"url\":\"%s\",\"tracks\":\"%s\"",
                jsonStringEscape(url->string), jsonStringEscape(shown->string));
 if (skipped->stringSize > 0)
     dyStringPrintf(out, ",\"skipped\":\"%s\"", jsonStringEscape(skipped->string));
-/* How much source sequence the chain covers.  The page uses this to decide
- * whether asking for a wider one is worth it, and it is the honest answer to
- * "how far can I pan before the annotations stop". */
-if (padded > 0)
-    dyStringPrintf(out, ",\"chainSpan\":%ld", padded);
 dyStringAppend(out, "}");
 emitJson(out->string);
 dyStringFree(&out);
@@ -3966,7 +3884,6 @@ if (quickLiftEnabled(cart))
     /* Filled in by the page once it has asked what the source has showing.
      * Saying "nothing to carry over" here, before the Submit, is the whole
      * point: said afterwards it is a wasted conversion. */
-    printf("<div id='pgcLiftWarn' class='pgWarn' style='display:none'></div>\n");
     printf("</td></tr>\n");
     }
 
@@ -4006,13 +3923,6 @@ if (!pgToolsOn())
     cartWebStart(cart, NULL, "Pangenome tools");
     printf("<p>PanView and PanLift are not available on this server.</p>\n");
     cartWebEnd();
-    return;
-    }
-
-/* Asked before a conversion is submitted, so it needs the cart too. */
-if (sameOk(cgiOptionalString("cmd"), "liftCheck"))
-    {
-    doLiftCheck();
     return;
     }
 
@@ -4421,8 +4331,7 @@ if (sameOk(cmd, "alignTrack"))
     return 0;
     }
 
-if (sameOk(cmd, "quickLift") || sameOk(cmd, "extendChain") || sameOk(cmd, "liftCheck") ||
-    sameOk(cmd, "refAnnot"))
+if (sameOk(cmd, "quickLift") || sameOk(cmd, "extendChain") || sameOk(cmd, "refAnnot"))
     {
     struct errCatch *errCatch = errCatchNew();
     if (errCatchStart(errCatch))

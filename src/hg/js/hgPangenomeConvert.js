@@ -728,20 +728,6 @@ function showSourceLabel() {
     el2.textContent = text;
 }
 
-// Changing the source invalidates anything computed for the previous one.
-function onSourceChange() {
-    reachable = null;
-    reachableScored = false;
-    reachableCache = null;
-    reachableCacheScored = false;
-    if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
-    fillTargets($("pgcFilter").value);
-    describeSource(null);
-    loadContigs();
-    liftCheckFor = null;        // a new source is a new question
-    checkLiftable();
-}
-
 // Make sure the page opens in a state that can actually be converted: if the
 // inherited assembly is not a pangenome haplotype, or there is no position to
 // go with it, fall back to a configured example instead of an unusable form.
@@ -1277,53 +1263,6 @@ function hideTargetTracks() {
 var lastRequest = null;
 var lastBlocks = null;         // per target haplotype, when annotations were asked for
 var lastSource = null;         // the source the blocks were computed from
-
-// Ask whether the source has anything the browser could carry over, and say
-// so on the form rather than after a conversion has run.
-//
-// The usual way to end up with nothing is the second leg of two conversions:
-// arriving somewhere with "hide the target's own tracks" checked turns off
-// everything that assembly has, and the annotations carried in are skipped
-// deliberately, so a conversion onward from there has nothing left to take.
-// That is worth knowing before pressing Submit, not after.
-var liftCheckFor = null;        // the db the last answer was about
-
-function showLiftWarning(html) {
-    var el = $("pgcLiftWarn");
-    if (!el) { return; }
-    el.innerHTML = html || "";
-    el.style.display = html ? "" : "none";
-}
-
-function checkLiftable() {
-    if (!quickLiftWanted()) { showLiftWarning(null); return; }
-    var db = assemblyForHap(currentSourceHap());
-    if (!db) { showLiftWarning(null); return; }
-    if (db === liftCheckFor) { return; }       // already answered for this one
-    liftCheckFor = db;
-    // The cart holds the visibilities this is a question about, so it has to go
-    // to the user's own session rather than a fresh one.
-    var url = selfUrl() + "?cmd=liftCheck&db=" + encodeURIComponent(db) +
-              (CFG.hgsid ? "&hgsid=" + encodeURIComponent(CFG.hgsid) : "");
-    fetch(url, { headers: { Accept: "application/json" } })
-        .then(function (r) { return r.json(); }).then(function (resp) {
-        if (db !== liftCheckFor) { return; }   // the source moved on meanwhile
-        // A null count means the check could not run; the conversion itself
-        // will report whatever is wrong, so say nothing here.
-        if (!resp || resp.tracks === null || resp.tracks === undefined) {
-            showLiftWarning(null);
-            return;
-        }
-        if (resp.tracks > 0) { showLiftWarning(null); return; }
-        showLiftWarning(
-            "No tracks are showing on this assembly, so there would be " +
-            "nothing to carry over. If you arrived here from another " +
-            "conversion, its tracks were hidden on the way in - " +
-            "<a href='../cgi-bin/hgTracks?db=" + encodeURIComponent(db) +
-            "' target='_blank'>turn some on</a> and come back, or uncheck " +
-            "Annotations to convert the position alone.");
-    }).catch(function () { showLiftWarning(null); });
-}
 
 function quickLiftWanted() {
     var box = $("pgcQuickLift");
@@ -2352,13 +2291,7 @@ function init() {
     $("pgcFilter").addEventListener("input", function () {
         fillTargets($("pgcFilter").value);
     });
-    // No listener on the source: it is not a control any more.  onSourceChange
-    // still runs once, from fillSources, to set up everything derived from it.
-    // Ticking Annotations asks the question for the first time; unticking it
-    // makes the answer irrelevant.
-    if ($("pgcQuickLift")) {
-        $("pgcQuickLift").addEventListener("change", checkLiftable);
-    }
+    // No listener on the source: it is not a control any more.
     $("pgcTargets").addEventListener("change", function () {
         fillTargets($("pgcFilter").value);      // refresh the "N selected" line
     });
@@ -2406,10 +2339,6 @@ function init() {
     }
 
     loadHaplotypes();
-    // Ask on the way in as well as on a change: arriving here from a browser
-    // page whose tracks were hidden is exactly the case worth warning about,
-    // and the source has not changed at that point.
-    checkLiftable();
 }
 
 if (document.readyState === "loading")

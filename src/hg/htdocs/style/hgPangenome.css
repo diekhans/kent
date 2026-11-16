@@ -42,14 +42,6 @@
 
 .pgMuted { color: #666666; font-size: 0.9em; }
 
-.pgHapPreview {
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.85em;
-    line-height: 1.5; word-break: break-all;
-}
-
-.pgHapMore { margin-top: 6px; }
-.pgHapMore > summary { cursor: pointer; color: #121E9A; }
-
 /* ---- Plain UCSC-blue text buttons ("Retry") ---- */
 
 .pgDlBtn {
@@ -58,19 +50,11 @@
 }
 .pgDlBtn:hover { color: #aa3333; }
 
-/* ---- Surjection ---- */
-
-.pgSurjectLink { margin-top: 4px; font-size: 0.9em; }
-.pgSurjectLink a { color: #121E9A; }
-
 /* ---- Coordinate conversion page ---- */
 
 .pgcSrcHap { font-family: Monaco, 'andale mono', 'lucida console', monospace; font-weight: bold; }
 .pgcTargets { min-width: 22em; font-family: Monaco, 'andale mono', 'lucida console', monospace;
               font-size: 0.85em; margin-top: 3px; }
-.pgcFrom { margin: 6px 0 10px; font-size: 0.9em; }
-.pgcInterval { padding: 3px 0; border-bottom: 1px solid #eef0f2; }
-.pgcInterval:last-child { border-bottom: none; }
 /* The target picker: a search line, the chosen targets as chips, and two
  * panes - the populations with their counts, and the haplotypes of the one
  * picked as checkboxes.  Neutral, quiet, one accent for "chosen". */
@@ -129,54 +113,13 @@
     .pgcPops { flex-basis: auto; max-height: 180px; border-right: 0; border-bottom: 1px solid #e1e4e8; }
     .pgcHapsList { max-height: 260px; }
 }
-.pgcCardPop { margin-left: 10px; color: #555; font-size: 0.85em; font-weight: normal; }
 #pgrPclaiPlot { margin: 0 0 12px; border: 1px solid #d0d0d0; }
-.pgcViewLink { margin-left: 12px; color: #121E9A; }
 
 /* Carrying the source's annotations onto the target (QuickLift). */
-.pgcAnnot {
-    margin-top: 6px;
-    padding-top: 6px;
-    border-top: 1px solid #cccccc;
-}
-.pgcAnnot .pgDlBtn {
-    margin-right: 6px;
-}
 /* The second option is not subordinate to the first - both are choices about
  * the same conversion - so it sits on the same margin. */
 #pgcHideRow {
     margin-top: 4px;
-}
-
-/* The "?" beside an option, and the note it reveals. */
-.pgHelp {
-    display: inline-block;
-    width: 1.1em;
-    height: 1.1em;
-    line-height: 1.1em;
-    text-align: center;
-    border: 1px solid #121E9A;
-    border-radius: 50%;
-    font-size: 0.85em;
-    font-weight: bold;
-    text-decoration: none;
-}
-.pgHelpBox {
-    background-color: #fffee8;
-    border: 1px solid #cccccc;
-    padding: 8px 10px;
-    margin: 6px 0;
-    max-width: 60em;
-}
-
-/* A caution on the conversion form: something the user can still fix before
- * they submit, so it reads as advice rather than as an error. */
-.pgWarn {
-    margin-top: 0.5em;
-    padding: 0.4em 0.6em;
-    background: #fdf6e3;
-    border-left: 3px solid #d9a520;
-    font-size: 0.9em;
 }
 
 /* The source, stated rather than asked for.  Reads as a heading for the row,
@@ -330,7 +273,6 @@
 .pgrBar { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:8px 18px 4px;
     padding:9px 12px; background:var(--panel); box-shadow:inset 3px 0 0 var(--line);
     border:1px solid var(--lineSoft); font-size:14px; color:var(--ink); }
-.pgrBar.warn { box-shadow:inset 3px 0 0 #b45309; }
 .pgrBar.on { background:var(--sel); border-color:var(--sel); box-shadow:inset 3px 0 0 var(--navy); }
 .pgrBar > span { flex:1 1 320px; }
 .pgrBar > .gbSpinner { flex:0 0 auto; }
@@ -562,8 +504,4 @@ svg.pgcHist .bar:hover rect:not(.hit), svg.pgcHist .bar:focus rect:not(.hit) { f
 .pgpSwatch { display:inline-block; width:10px; height:10px; border:1px solid var(--btnLine);
     vertical-align:-1px; margin-right:5px; }
 
-/* ---- page=svOpen (hgPangenomeSvOpen.js): the step from an SV's details page
- * to one haplotype in the browser ---- */
-.pgsOpen { max-width: 60em; padding: 8px 0; font-size: 1.05em; }
-.pgsOpen p { margin: 0 0 8px; }
 #pgcTable td.pgcUnsure, .pgcStatText.pgcUnsure { color:#b45309; }
