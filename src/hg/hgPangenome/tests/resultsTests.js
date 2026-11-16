@@ -373,4 +373,91 @@ t.test('the strip offers each reference and none, the current one selected', fun
     t.eq(annotPage({ annotRefs: [] }).R.pgrAnnotControl(), '', 'nothing when QuickLift is off');
 });
 
+t.suite('a waiting row on the page is placed');
+// A table whose search box holds "term" and whose current page shows "shown";
+// timers are kept instead of run, and the hits asked for are recorded.
+function waitingPage() {
+    var timers = [], asked = [], cleared = 0;
+    var S = loadResults({
+        pangenomePclai: false,
+        setTimeout: function (fn, ms) { timers.push({ fn: fn, ms: ms }); return timers.length; },
+        clearTimeout: function (id) { if (timers[id - 1]) { timers[id - 1].fn = null; cleared++; } }
+    });
+    S.pgrPlaceAll = function (p) { asked.push(p.query + '/' + p.index); };
+    var dt = { term: '', shown: [],
+               search: function () { return dt.term; },
+               rows: function () { return { data: function () { return { toArray: function () { return dt.shown; } }; } }; } };
+    var live = function () { return timers.filter(function (x) { return x.fn; }).length; };
+    var run = function () { timers.forEach(function (x) { if (x.fn) { var f = x.fn; x.fn = null; f(); } }); };
+    return { S: S, dt: dt, timers: timers, asked: asked, run: run, live: live, cleared: function () { return cleared; } };
+}
+function waiting(over) {
+    var r = row({ contig: null, pending: true });
+    Object.keys(over || {}).forEach(function (k) { r[k] = over[k]; });
+    return r;
+}
+t.test('a search that shows a waiting row asks for its hit, after a pause', function () {
+    var x = waitingPage();
+    x.dt.term = 'CHM13';
+    x.dt.shown = [waiting({ hap: 'CHM13#0', placement: 2 })];
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.asked.length, 0, 'nothing asked while the reader may still be typing');
+    t.eq(x.timers.length, 1, 'one timer set');
+    t.eq(x.timers[0].ms, x.S.PGR_FILL_WAIT, 'for the pause');
+    x.run();
+    t.deepEq(x.asked, ['q1/2'], 'the hit of the row shown, once');
+});
+t.test('each keystroke restarts the pause, and only the last text is acted on', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting({ placement: 1 })];
+    ['H', 'HG', 'HG0'].forEach(function (term) { x.dt.term = term; x.S.pgrFillSoon(x.dt); });
+    t.eq(x.cleared(), 2, 'the two earlier timers were cancelled');
+    x.run();
+    t.deepEq(x.asked, ['q1/1'], 'asked once');
+});
+t.test('a sort that brings a waiting row up asks for it too, with no search', function () {
+    var x = waitingPage();
+    x.dt.shown = [row(), waiting({ placement: 0 }), waiting({ hap: 'HG01234#1', placement: 1 })];
+    x.S.pgrFillSoon(x.dt);
+    x.run();
+    t.deepEq(x.asked.sort(), ['q1/0', 'q1/1'], 'each hit with a waiting row, once');
+});
+t.test('redraws while the pause runs do not put it off or add another', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting()];
+    x.S.pgrFillSoon(x.dt);
+    x.S.pgrFillSoon(x.dt);
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 1, 'still the one timer');
+    t.eq(x.cleared(), 0, 'not restarted');
+});
+t.test('nothing is asked when no row on the page is waiting', function () {
+    var x = waitingPage();
+    x.dt.term = 'HG00097';
+    x.dt.shown = [row()];
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 0, 'no timer for a page of placed rows');
+    x.dt.term = '';
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 0, 'nor for an emptied search');
+});
+t.test('a hit already asked for, or already tried, is not asked for again', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting({ placement: 0 })];
+    x.S.pgrFullBusy[x.S.pgrPlaceKey('q1', 0)] = new Promise(function () {});
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.live(), 0, 'not while its request is out');
+    x.S.pgrFullBusy[x.S.pgrPlaceKey('q1', 0)] = null;
+    x.S.pgrFull[x.S.pgrPlaceKey('q1', 0)] = true;
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.live(), 0, 'nor once it has been answered');
+});
+t.test('a table narrowed to one haplotype asks for nothing here', function () {
+    var x = waitingPage();
+    x.S.pgrFocus = 'HG00097#2';
+    x.dt.shown = [waiting()];
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 0, 'that view places its own rows');
+});
+
 process.exit(t.report());

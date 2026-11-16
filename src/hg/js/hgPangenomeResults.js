@@ -923,9 +923,11 @@ var pgrBatchErrs = [];
 // but places only the best pgrSurjectCount() by coverage straight away, as one
 // batch call per hit.  The rest are "pending": listed with their coverage and
 // identity, and placed by one more batch call for the whole hit.  That call
-// goes out only when the reader turns to another page - Next, Previous, a page
-// number, or more rows a page - that shows a pending row (pgrFillPage); a sort
-// or a filter asks for nothing.  With pangenome.resultsPlaceAllAtLoad on it
+// goes out when a pending row comes onto the page being shown, however it got
+// there: at once when the reader turns to another page - Next, Previous, a
+// page number, or more rows a page (pgrFillPage) - and after a short pause
+// when a search, a sort or a filter brings one up (pgrFillSoon).  With
+// pangenome.resultsPlaceAllAtLoad on it
 // goes out instead as soon as the first table is up (pgrPlaceRest), one hit at
 // a time.
 
@@ -953,6 +955,40 @@ function pgrFillPage(dt) {
         if (r.pending) { want[pgrPlaceKey(r.query, r.placement)] = { query: r.query, index: r.placement }; }
     });
     Object.keys(want).forEach(function (k) { pgrPlaceAll(want[k]); });
+}
+
+// A pending row on the page is never left saying "finding position": whatever
+// drew it there - a search, a sort, the coverage floor - its hit is placed once
+// the table has been still for a moment.  Called on every draw.  Typing in the
+// search box restarts the pause, so the graph server is asked once, for what
+// the reader ended up looking for; any other draw leaves a pause already
+// running alone, so the redraws of a table filling in cannot put it off.
+var PGR_FILL_WAIT = 600;    // ms the table is still before the graph server is asked
+var pgrSearchTerm = "";
+var pgrFillTimer = null;
+
+// Is a row on this page waiting for a position nobody has asked for yet?
+function pgrPageWaits(dt) {
+    return dt.rows({ page: "current", search: "applied" }).data().toArray().some(function (r) {
+        var key = pgrPlaceKey(r.query, r.placement);
+        return r.pending && !pgrFull[key] && !pgrFullBusy[key];
+    });
+}
+
+function pgrFillSoon(dt) {
+    var term = dt.search() || "";
+    var typed = term !== pgrSearchTerm;
+    pgrSearchTerm = term;
+    if (pgrFillTimer) {
+        if (!typed) { return; }
+        clearTimeout(pgrFillTimer);
+        pgrFillTimer = null;
+    }
+    if (pgrFocus || !pgrPageWaits(dt)) { return; }
+    pgrFillTimer = setTimeout(function () {
+        pgrFillTimer = null;
+        pgrFillPage(dt);
+    }, PGR_FILL_WAIT);
 }
 
 // Resolves once this hit's rows are placed, or could not be; a hit already
@@ -1864,13 +1900,16 @@ function pgrDraw(queries, allRows, note) {
         if (d) { pgrSelect(dt, d.rank); }
     });
     // The highlight survives sorting and filtering.  Turning to another page
-    // places the hits of its rows still waiting for a position; sorting and
-    // filtering do not, so they never wait on the graph server.
+    // places the hits of its rows still waiting for a position at once; a
+    // search, a sort or a filter that brings one up does after a pause
+    // (pgrFillSoon).
     var paged = false;
+    pgrSearchTerm = dt.search() || "";
     dt.on("page", function () { paged = true; });
     dt.on("draw", function () {
         if (pgrSelRank !== null) { pgrSelect(dt, pgrSelRank); }
         if (paged) { paged = false; pgrFillPage(dt); }
+        pgrFillSoon(dt);
         pgrFillLoci(dt);
     });
     dt.on("length", function (e, settings, len) {
