@@ -25,7 +25,7 @@ var CFG = { pollIntervalMs: 5 };
 // response of "fail" is a request that does not get through.
 function start(responses, cfg, seqText, before) {
     var calls = [];
-    var i = -1;
+    var i = -1, submits = 0;
     var c = loader.load({
         ids: PAGE_IDS,
         readyState: 'loading',
@@ -34,7 +34,9 @@ function start(responses, cfg, seqText, before) {
             var isPoll = String(url).indexOf('cmd=poll') >= 0;
             var body;
             if (isPoll) { i = Math.min(i + 1, responses.poll.length - 1); body = responses.poll[i]; }
-            else body = responses.submit;
+            else body = Array.isArray(responses.submit)
+                        ? responses.submit[Math.min(submits++, responses.submit.length - 1)]
+                        : responses.submit;
             if (body === 'fail') return Promise.reject(new Error('network down'));
             return Promise.resolve({
                 ok: true, status: 200,
@@ -155,6 +157,31 @@ var jobFailed = start({ submit: QUEUED,
                         poll: [{ job_id: 'j1', status: 'error', error: 'engine exploded' }] });
 var blip = start({ submit: QUEUED, poll: ['fail', 'fail', DONE] });
 var lost = start({ submit: QUEUED, poll: ['fail'] });
+// what the CGI answers while the mapping server is restarting: an error, but
+// not the job's own
+var restart = { status: 'error', error: 'the mapping service is unavailable (HTTP 503)' };
+var served = start({ submit: QUEUED, poll: [restart, restart, DONE] });
+var down = start({ submit: QUEUED, poll: [restart] });
+var expired = start({ submit: QUEUED,
+    poll: [{ status: 'error', error: 'mapping server returned HTTP 404: {"error": "unknown or expired job"}' }] });
+// a search that never finishes: the clock is moved on after it has started
+var endless = start({ submit: QUEUED, poll: [RUNNING] });
+// Clear, and a second Submit, while a search is out
+var clearedForm = start({ submit: QUEUED, poll: [RUNNING] });
+var twiceForm = start({ submit: [QUEUED, { job_id: 'j2', status: 'queued', n_sequences: 1 }],
+                        poll: [RUNNING] });
+function pollsOf(c, job) {
+    return polls(c).filter(function (x) { return String(x.url).indexOf('job_id=' + job) >= 0; }).length;
+}
+setTimeout(function () {
+    require('vm').runInContext('Date.now = function () { return 1e15; };', endless.sandbox);
+    clearedForm.el.pgClear.dispatch('click');
+    clearedForm.pollsAtClear = polls(clearedForm).length;
+    twiceForm.firstAtClick = pollsOf(twiceForm, 'j1');
+    twiceForm.el.pgSubmit.dispatch('click');
+    twiceForm.submitsAfter = twiceForm.calls.filter(function (x) {
+        return x.opts && x.opts.method === 'POST'; }).length;
+}, 60);
 
 setTimeout(function () {
     t.suite('polling');
@@ -218,6 +245,47 @@ setTimeout(function () {
         t.contains(s, 'Lost contact with the mapping server', 'stated');
         t.contains(s, 'Retry', 'retry offered');
         t.eq(polls(lost).length, 4, 'three failures tolerated, the fourth ends it');
+    });
+
+    t.test('an error from the CGI while polling is a failed try, not a failed job', function () {
+        // One 503 while the mapping server restarted used to lose the job.
+        t.contains(String(served.window.location), 'page=results', 'the job was followed to its end');
+        t.notOk(/Job failed/.test(served.el.pgStatus.textContent), 'and never called failed');
+    });
+
+    t.test('such errors, kept up, end as lost contact, with the reason', function () {
+        var s = down.el.pgStatus.textContent;
+        t.contains(s, 'Lost contact with the mapping server', 'stated');
+        t.contains(s, 'unavailable (HTTP 503)', 'with what the server said');
+        t.eq(polls(down).length, 4, 'after three more tries');
+    });
+
+    t.test('a job the server no longer has is not tried again', function () {
+        t.contains(expired.el.pgStatus.textContent, 'Job failed', 'final at once');
+        t.contains(expired.el.pgStatus.textContent, 'unknown or expired job', 'with the reason');
+        t.eq(polls(expired).length, 1, 'one poll');
+    });
+
+    t.test('a search that never finishes is given up on', function () {
+        t.contains(endless.el.pgStatus.textContent, 'did not finish in 30 minutes', 'said so');
+        t.contains(endless.el.pgStatus.textContent, 'Retry', 'with a retry');
+        var n = polls(endless).length;
+        t.ok(n >= 1 && n < 40, 'and the polling stopped (' + n + ' polls)');
+    });
+
+    t.test('Clear lets a running search go', function () {
+        t.eq(polls(clearedForm).length <= clearedForm.pollsAtClear + 1, true,
+             'no more polls after it (' + clearedForm.pollsAtClear + ' then, ' +
+             polls(clearedForm).length + ' now)');
+        t.notOk(/page=results/.test(String(clearedForm.window.location)), 'and it goes nowhere');
+    });
+
+    t.test('a second Submit starts a second search and drops the first', function () {
+        t.eq(twiceForm.submitsAfter, 2, 'two submissions');
+        t.ok(pollsOf(twiceForm, 'j2') > 0, 'the second job is polled');
+        t.ok(pollsOf(twiceForm, 'j1') <= twiceForm.firstAtClick + 1,
+             'and the first no longer is (' + twiceForm.firstAtClick + ' polls at the click, ' +
+             pollsOf(twiceForm, 'j1') + ' at the end)');
     });
 
     process.exit(t.report());

@@ -698,4 +698,99 @@ t.test('a hit already asked for, or already tried, is not asked for again', func
     x.S.pgrFillSoon(x.dt);
     t.eq(x.live(), 0, 'nor once it has been answered');
 });
-process.exit(t.report());
+t.suite('position sort');
+t.test('sequence names sort in natural order, whatever the length of their numbers', function () {
+    var k = R.pgrContigSortKey;
+    t.ok(k('chr2') < k('chr10'), 'chr2 before chr10');
+    t.ok(k('CM087364.1') < k('CM094066.1'), 'accessions in numeric order');
+    // Keeping the last four digits made these two the same, and put a
+    // six-digit accession before a five-digit one.
+    t.notOk(k('CM087364.1') === k('CM097364.1'), 'names that differ early are not confused');
+    t.ok(k('CM99999.1') < k('CM100000.1'), 'five digits before six');
+    t.ok(k('JBIRDI010000011.1') < k('JBIRDI010000012.1'), 'long numbers kept whole');
+});
+
+t.suite('sequences that are not in the table');
+t.test('one the mapper found no place for, and one it could not map, are told apart', function () {
+    var out = R.pgrLeftOutFrom([
+        { name: 'ok1', status: 'mapped', alignments: [{}] },
+        { name: 'none1', status: 'unmapped', error: null, alignments: [] },
+        { name: 'bad1', status: 'error', error: 'sequence has no minimizers', alignments: [] }]);
+    t.eq(out.length, 2, 'the mapped one is not among them');
+    t.eq(out[0].error, null, 'not found: no reason to give');
+    t.eq(out[1].error, 'sequence has no minimizers', 'failed: the mapper\'s reason');
+    var notes = R.pgrLeftOutNotes(out, 3);
+    t.eq(notes[0], '1 of your 3 sequences did not map: none1.', 'how many, of how many, and which');
+    t.eq(notes[1], 'bad1 could not be mapped: sequence has no minimizers.', 'and why, of the other');
+});
+t.test('the mapping server\'s "mapped" with an empty alignment is a sequence not found', function () {
+    // What it really sends for a sequence it could not place: status mapped,
+    // and one alignment with no path, score, haplotype or position.
+    var none = { name: 'allN', status: 'mapped', error: null, query_length: 300,
+                 alignments: [{ primary: true, score: null, mapping_quality: 0, graph_path: '*',
+                                haplotypes: { count: 0, names: [] }, haplotype_coverage: [],
+                                surjection: null }] };
+    var real = { name: 'r1', status: 'mapped', alignments: [{ graph_path: '>1>2', score: 176,
+                 haplotype_coverage: [{ haplotype: 'CHM13#0', coverage: 100 }] }] };
+    t.notOk(R.pgrIsHit(none.alignments[0]), 'the empty alignment is not a hit');
+    t.ok(R.pgrIsHit(real.alignments[0]), 'a real one is');
+    t.eq(R.pgrHitCount(none), 0, 'so the sequence has no hits');
+    t.deepEq(R.pgrLeftOutFrom([real, none]), [{ name: 'allN', error: null }], 'and is named as not found');
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrMapping = [real, none];
+    x.pgrPlaceList = null;
+    t.deepEq(x.pgrPlaces().map(function (p) { return p.query + '/' + p.index; }), ['r1/0'],
+             'and nothing is asked of the server for it');
+});
+t.test('many not found are counted, not all listed; names cannot inject markup', function () {
+    var many = [];
+    for (var i = 0; i < 8; i++) { many.push({ name: 's' + i, error: null }); }
+    t.eq(R.pgrLeftOutNotes(many, 20)[0],
+         '8 of your 20 sequences did not map: s0, s1, s2, s3, s4 and 3 more.', 'five names and a count');
+    t.contains(R.pgrLeftOutNotes([{ name: '<b>x', error: null }], 2)[0], '&lt;b&gt;x', 'escaped');
+});
+t.test('they are in the notes above the table', function () {
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrLeftOut = [{ name: 'none1', error: null }];
+    x.pgrQueryCount = 4;
+    t.eq(x.pgrNotes([row()], true, false)[0], '1 of your 4 sequences did not map: none1.', 'first note');
+});
+
+t.suite('why a row has no position');
+t.test('the mapping server\'s reason is kept and shown on hover', function () {
+    var r = { queryLength: 100 };
+    R.pgrApplyRecord(r, { status: 'surjection_failed', detail: 'path "x" has no <anchors>' });
+    t.eq(r.placeDetail, 'path "x" has no <anchors>', 'kept');
+    var h = R.pgrPositionCell(r);
+    t.contains(h, 'title="path &quot;x&quot; has no &lt;anchors&gt;"', 'on hover, escaped');
+    t.contains(h, '>no alignment<', 'the short word still in the cell');
+    t.notOk(/title=/.test(R.pgrPositionCell({ placeFailed: true, placeStatus: 'surjection_failed' })),
+            'no hover text without one');
+});
+
+t.suite('a placement that failed');
+var failSaved = null, failMsgs = [];
+var F = loadResults({ pangenomePclai: false,
+                      fetch: function () { return Promise.reject(new Error('server down')); } });
+F.window.sessionStorage = { getItem: function () { return null; },
+                            setItem: function (k, v) { failSaved = JSON.parse(v); } };
+F.pgrFail = function (m) { failMsgs.push(m); };
+F.pgrRedrawKeep = function () {};
+F.pgrRows = [row({ contig: null, pending: true, rank: 0 })];
+F.pgrPlaceAll({ query: 'q1', index: 0 });
+
+setTimeout(function () {
+    t.test('on this page the rows stop waiting and say so', function () {
+        t.eq(F.pgrRows[0].pending, false, 'no longer waiting');
+        t.ok(F.pgrRows[0].placeFailed, 'marked as not placed');
+        t.contains(failMsgs[0] || '', 'server down', 'and the reason is given once, at the top');
+    });
+    t.test('but it is not remembered: the copy kept for the tab has them waiting still', function () {
+        t.ok(failSaved && failSaved.rows, 'a copy was written');
+        if (!failSaved) { return; }
+        t.eq(failSaved.rows[0].pending, true, 'waiting, so a reload asks again');
+        t.notOk(failSaved.rows[0].placeFailed, 'not failed');
+        t.notOk(failSaved.full && failSaved.full[F.pgrPlaceKey('q1', 0)], 'and the hit is not marked done');
+    });
+    process.exit(t.report());
+}, 30);

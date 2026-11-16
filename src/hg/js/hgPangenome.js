@@ -32,6 +32,7 @@ function readConfig() {
 }
 
 var POLL_MAX_ERRORS = 3;    // consecutive poll failures tolerated before giving up
+var POLL_MAX_MS = 30 * 60 * 1000;   // a job not done by then is given up on
 
 // ---- Transport --------------------------------------------------------------
 //
@@ -235,6 +236,7 @@ function showProgress(completed, total) {
 var api = null;             // created in init(), after readConfig()
 var lastPayload = null;
 var pollTimer = null;
+var runSeq = 0;             // the search the page is waiting for: see pollJob()
 
 function collectOptions() {
     var opts = {
@@ -274,30 +276,67 @@ function onSubmit() {
 function run() {
     var total = lastPayload.sequences.length;
     showProgress(0, total);
+    // A second Submit while this one is out starts its own search; the answer
+    // to this one is then not followed up.
+    var seq = ++runSeq;
 
     api.submit(lastPayload).then(function (resp) {
+        if (seq !== runSeq) return;
         // The proxy returns {status:"error",error} when it cannot reach the middleware.
         if (resp && resp.status === "error") throw new Error(resp.error || "server error");
         if (!resp || !resp.job_id) throw new Error("no job id in response");
         pollJob(resp.job_id, total);
     }).catch(function (err) {
+        if (seq !== runSeq) return;
         showFatal("Could not submit: " + err.message, run);
     });
 }
 
+// Is this answer to a poll the end of the job, or only of this try?
+//
+// A job the mapping server gave up on comes back as the job itself, with its
+// id and status "error".  Everything else the CGI reports the same way - the
+// server was restarting, the proxy timed out - is a failed try, and the job
+// may be perfectly well.  One of those used to lose the job.  The exception is
+// a job the server no longer has, which no number of tries will bring back.
+function pollEndsJob(job) {
+    if (!job || job.status !== "error") return false;
+    if (job.job_id) return true;
+    return /HTTP 404|unknown or expired job/.test(String(job.error || ""));
+}
+
 function pollJob(jobId, total) {
     var errCount = 0;
+    var started = Date.now();
+    var seq = ++runSeq;         // a later Submit, or Clear, ends this loop
+
+    function again() { pollTimer = window.setTimeout(tick, POLL_INTERVAL); }
+    function failedTry(message) {
+        errCount++;
+        if (errCount > POLL_MAX_ERRORS) {
+            showFatal("Lost contact with the mapping server: " + message, run);
+            return;
+        }
+        again();
+    }
 
     function tick() {
+        if (seq !== runSeq) return;
+        if (Date.now() - started > POLL_MAX_MS) {
+            showFatal("The mapping did not finish in " + (POLL_MAX_MS / 60000) +
+                      " minutes. The server may be busy.", run);
+            return;
+        }
         api.poll(jobId).then(function (job) {
-            errCount = 0;
-            var prog = job.progress || { completed: 0, total: total };
-
-            if (job.status === "error") {
+            if (seq !== runSeq) return;
+            if (pollEndsJob(job)) {
                 showFatal("Job failed: " + (job.error || "unknown error"), run);
                 return;
             }
-            if (job.status === "done") {
+            if (job && job.status === "error") { failedTry(job.error || "no answer"); return; }
+            errCount = 0;
+            var prog = (job && job.progress) || { completed: 0, total: total };
+            if (job && job.status === "done") {
                 hideStatus();
                 // Hand off to the results table, the way hgBlat moves from the
                 // search form to its hit list.  The job id is the whole of the
@@ -313,14 +352,10 @@ function pollJob(jobId, total) {
                 return;
             }
             showProgress(prog.completed, prog.total || total);
-            pollTimer = window.setTimeout(tick, POLL_INTERVAL);
+            again();
         }).catch(function (err) {
-            errCount++;
-            if (errCount > POLL_MAX_ERRORS) {
-                showFatal("Lost contact with the mapping server: " + err.message, run);
-                return;
-            }
-            pollTimer = window.setTimeout(tick, POLL_INTERVAL);
+            if (seq !== runSeq) return;
+            failedTry(err.message);
         });
     }
     tick();
@@ -349,6 +384,9 @@ function onClear() {
     $("pgFile").value = "";
     if ($("pgFileName")) $("pgFileName").textContent = "";
     formCount();
+    // A search still running is let go: nothing is waiting for it any more.
+    runSeq++;
+    if (pollTimer) { window.clearTimeout(pollTimer); pollTimer = null; }
     hideStatus();
 }
 

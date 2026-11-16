@@ -231,6 +231,16 @@ function pgrAssemblyLabel(db) {
     return (m ? decodeURIComponent(m[1]) : db).replace(/^hub_[0-9]+_/, "");
 }
 
+// A sequence name as text that sorts in natural order: each run of digits
+// padded on the left, so chr2 comes before chr10 and CM087364.1 before
+// CM094066.1.  Padded, never cut: keeping only the last four digits made
+// CM087364 and CM097364 the same name.
+function pgrContigSortKey(contig) {
+    return String(contig).replace(/\d+/g, function (n) {
+        return n.length >= 12 ? n : ("000000000000" + n).slice(-12);
+    });
+}
+
 // Identity and coverage come back as percentages (0-100), not fractions.
 function pgrPct(v) {
     return (v == null || isNaN(v)) ? null : Number(v);
@@ -419,6 +429,7 @@ function pgrApplyRecord(row, rec) {
     if (rec.status !== "ok") {
         row.placeFailed = true;
         row.placeStatus = rec.status;
+        if (rec.detail) { row.placeDetail = String(rec.detail); }
         return;
     }
     // target_start/end are local to the fragment named in "haplotype", and that
@@ -462,6 +473,7 @@ function pgrApplySurjection(row, resp) {
         // "not present" for that, as it does for the batch call's "no_anchors".
         row.placeStatus = (s && /^no_anchors/.test(s.detail || "")) ? "no_anchors"
                                                                     : (s && s.status);
+        if (s && s.detail) { row.placeDetail = String(s.detail); }
         return;
     }
     var tgt = pgrSplitTarget(s.target);
@@ -523,7 +535,10 @@ function pgrUnplacedText(r) {
 
 function pgrPositionCell(r) {
     if (r.contig == null) {
-        return '<span class="pgrUnplaced">' + pgrUnplacedText(r) + "</span>";
+        // The mapping server's own reason, where it gave one, on hover.
+        return '<span class="pgrUnplaced"' +
+               (r.placeDetail ? ' title="' + pgrEsc(r.placeDetail) + '"' : "") + ">" +
+               pgrUnplacedText(r) + "</span>";
     }
     var rank = ' data-rank="' + r.rank + '"';
     return '<a href="#"' + rank + ' data-act="browser" ' +
@@ -906,16 +921,24 @@ function pgrCacheWrite(job) {
         window.sessionStorage.setItem(pgrCacheKey(job), JSON.stringify({
             // Only what the table is drawn from.  The mapping response itself is
             // far larger, and is fetched again in the rare case it is needed.
+            // Failures are not kept: a lookup or a placement that failed is
+            // tried again when the page is next opened.
             rows: pgrRows.map(function (r) {
-                if (!r.locusFailed) { return r; }
+                if (!r.locusFailed && !r.placeRetry) { return r; }
                 var copy = Object.assign({}, r);
                 delete copy.locusFailed;
+                if (copy.placeRetry) {
+                    delete copy.placeRetry;
+                    delete copy.placeFailed;
+                    copy.pending = true;
+                }
                 return copy;
             }),
             queries: pgrQueryCount,
             queryNames: pgrQueryNames,
             places: pgrPlaceList,
             minShown: pgrMinShown,
+            leftOut: pgrLeftOut,
             full: pgrFull
         }));
     } catch (e) { /* no memory to spare; the page will just rebuild it */ }
@@ -937,7 +960,7 @@ function pgrPlaceKey(query, index) {
 // The batch call for one placement, falling back to the graded list when it
 // fails, as the table always has.
 function pgrBatchRows(res, aln, index) {
-    var placements = (res.alignments || []).length;
+    var placements = pgrHitCount(res);
     var fallBack = function (why) {
         pgrBatchErrs.push(why || "no answer");
         return pgrRowsFromMapping(res, aln, index, placements);
@@ -983,7 +1006,7 @@ var pgrBatchErrs = [];
 function pgrPendingRows(res, aln, index, placed) {
     var have = Object.create(null);
     placed.forEach(function (r) { have[pgrHapKey(r.hap)] = true; });
-    return pgrRowsFromMapping(res, aln, index, (res.alignments || []).length)
+    return pgrRowsFromMapping(res, aln, index, pgrHitCount(res))
         .filter(function (r) {
             return !have[pgrHapKey(r.hap)] &&
                    !(r.coverage != null && r.coverage < pgrMinCoverage());
@@ -992,6 +1015,57 @@ function pgrPendingRows(res, aln, index, placed) {
 }
 
 var pgrFull = {};           // hits whose every haplotype has been placed
+
+// Is this one of a sequence's places in the graph?  For a sequence it could
+// not place the mapping server still answers "mapped", with one alignment
+// that is none: its path is "*", it has no score, no haplotype carries it and
+// there is no position.  That is not a hit, and a sequence with nothing else
+// was not found.
+function pgrIsHit(aln) {
+    if (!aln || aln.graph_path === "*") { return false; }
+    // The same said without the path: no haplotype carries it, none is graded
+    // for it, and it has no position.
+    return !(aln.haplotypes && aln.haplotypes.count === 0 &&
+             !(aln.haplotype_coverage || []).length && !aln.surjection);
+}
+
+// How many places a sequence was found at.
+function pgrHitCount(res) {
+    return ((res && res.alignments) || []).filter(pgrIsHit).length;
+}
+
+// The sequences of the job that are not in the table, and why: one the mapper
+// found no place for, or one it could not map, with the reason it gave.
+var pgrLeftOut = [];        // {name, error} - error null for "not found"
+
+function pgrLeftOutFrom(results) {
+    return (results || []).filter(function (res) {
+        return !pgrHitCount(res);
+    }).map(function (res) {
+        return { name: res.name,
+                 error: res.status === "error" ? String(res.error || "the mapper failed") : null };
+    });
+}
+
+// What the notes say of them: how many of the job's sequences did not map,
+// and which, by the names they were given; then each failure with its reason.
+function pgrLeftOutNotes(leftOut, total) {
+    var notes = [];
+    var missing = leftOut.filter(function (x) { return x.error === null; })
+                         .map(function (x) { return pgrEsc(x.name); });
+    if (missing.length) {
+        notes.push(pgrFmt(missing.length) + (total ? " of your " + pgrFmt(total) : "") +
+                   (missing.length === 1 && !total ? " sequence" : " sequences") +
+                   " did not map: " +
+                   (missing.length > 5 ? missing.slice(0, 5).join(", ") + " and " +
+                                         pgrFmt(missing.length - 5) + " more"
+                                       : missing.join(", ")) + ".");
+    }
+    leftOut.filter(function (x) { return x.error !== null; }).forEach(function (x) {
+        notes.push(pgrEsc(x.name) + " could not be mapped: " + pgrEsc(x.error) + ".");
+    });
+    return notes;
+}
 var pgrFullBusy = {};
 
 // Place every pending row of the hits on the page now drawn: called when the
@@ -1053,7 +1127,7 @@ function pgrPlaceAll(p) {
                 if (!batch || !batch.haplotypes) {
                     throw new Error((batch && (batch.error || batch.status)) || "no answer");
                 }
-                return pgrRowsFromBatch(res, aln, p.index, (res.alignments || []).length, batch);
+                return pgrRowsFromBatch(res, aln, p.index, pgrHitCount(res), batch);
             });
     }).then(function (rows) {
         var have = Object.create(null);
@@ -1076,13 +1150,16 @@ function pgrPlaceAll(p) {
         pgrRerank();
     }).catch(function (err) {
         // Said once, at the top; the rows stay listed with what they had.
+        // Not marked as done for good: the rows stop waiting, so this page
+        // does not ask again, but the copy kept for the tab has them waiting
+        // still (pgrCacheWrite), and a reload tries once more.
         pgrRows.forEach(function (r) {
             if (r.pending && r.query === p.query && r.placement === p.index) {
                 r.pending = false;
                 r.placeFailed = true;
+                r.placeRetry = true;
             }
         });
-        pgrFull[key] = true;
         pgrFail("Could not place the rest of the haplotypes: " + err.message + ".");
     }).then(function () {
         pgrFullBusy[key] = null;
@@ -1287,7 +1364,7 @@ function pgrPlaces() {
     if (pgrMapping) {
         pgrMapping.forEach(function (res) {
             (res.alignments || []).forEach(function (aln, index) {
-                out.push({ query: res.name, index: index });
+                if (pgrIsHit(aln)) { out.push({ query: res.name, index: index }); }
             });
         });
         return out;
@@ -1335,7 +1412,7 @@ function pgrRowForHap(res, aln, index, hap, resp) {
         query: res.name,
         queryLength: res.query_length,
         placement: index,
-        placements: (res.alignments || []).length,
+        placements: pgrHitCount(res),
         hap: pgrHapShort(hap),
         db: pgrAssembly(hap),
         isCarrier: ((aln.haplotypes && aln.haplotypes.names) || []).some(function (n) {
@@ -1459,7 +1536,8 @@ function pgrDetailHtml(r) {
         tiles.push(pgrTile("Hit", pgrHitText(r),
                            "Which of the places in the graph this sequence aligned to."));
     }
-    var where = r.contig == null ? pgrUnplacedText(r) :
+    var where = r.contig == null ? pgrUnplacedText(r) +
+                    (r.placeDetail ? " (" + pgrEsc(r.placeDetail) + ")" : "") :
                 pgrEsc(r.contig) + ":" + pgrFmt(r.start + 1) + "-" + pgrFmt(r.end);
     var acts = (r.contig == null) ? "" :
         '<div class="pgrDetailActions">' +
@@ -1567,7 +1645,7 @@ function pgrSelect(dt, rank) {
 // What is worth saying about these rows, beyond the rows themselves.
 function pgrNotes(rows, multiQuery, multiPlace) {
     var placed = rows.filter(function (r) { return r.contig != null || r.pending; }).length;
-    var notes = [];
+    var notes = pgrLeftOutNotes(pgrLeftOut, pgrQueryCount);
     if (placed < rows.length) {
         // Only when the batch call failed and the graded list stood in for it.
         notes.push(pgrFmt(rows.length - placed) + " could not be placed, and show " +
@@ -1728,8 +1806,7 @@ function pgrDraw(queries, allRows) {
             if (type === "display") { return pgrPositionCell(r); }
             if (r.contig == null) { return type === "filter" ? pgrUnplacedText(r) : "￿"; }
             if (type === "filter") { return r.contig + ":" + (r.start + 1); }
-            return r.contig.replace(/\d+/g, function (n) { return ("0000" + n).slice(-4); }) +
-                   ":" + ("0000000000" + r.start).slice(-10);
+            return pgrContigSortKey(r.contig) + ":" + ("0000000000" + r.start).slice(-10);
         } });
     cols.push({ data: null, orderable: false, className: "actionsCol",
         render: function (d, type, r) { return type === "display" ? pgrActionsCell(r) : ""; } });
@@ -1839,6 +1916,10 @@ function pgrDraw(queries, allRows) {
         paged = true;
         try { window.localStorage.setItem("hgPangenome.pageLen", String(len)); } catch (err) { /* this page only */ }
     });
+    // The table drew its first page before these were attached, so that page
+    // is looked after here: its rows still waiting for a position are placed,
+    // as they are on any page turned to.
+    pgrFillPage(dt);
 
     document.getElementById("pgrTsvBtn").onclick = function () {
         var shown = dt.rows({ search: "applied", order: "applied" }).data().toArray();
@@ -1974,6 +2055,7 @@ function pgrStart() {
         pgrPlaceList = cached.places || null;
         pgrMinShown = (typeof cached.minShown === "number") ? cached.minShown : null;
         pgrFull = cached.full || {};
+        pgrLeftOut = cached.leftOut || [];
         pgrDraw(cached.queries, cached.rows);
         pgrPlaceRest();             // left before the rest were placed
         return;
@@ -1994,18 +2076,24 @@ function pgrStart() {
         pgrQueryNames = pgrMapping.map(function (res) { return res.name; });
         pgrQueryCount = pgrMapping.length;
         pgrPlaceList = pgrPlaces();
+        pgrLeftOut = pgrLeftOutFrom(pgrMapping);
         // One batch call per hit of each sequence, every hit at once.  Each
         // returns the haplotypes that carry it, best coverage first, already
         // surjected.
         var jobs = [];
         pgrMapping.forEach(function (res) {
             (res.alignments || []).forEach(function (aln, index) {
-                jobs.push({ res: res, aln: aln, index: index });
+                // Asked for only where there is something to place.
+                if (pgrIsHit(aln)) { jobs.push({ res: res, aln: aln, index: index }); }
             });
         });
         if (!jobs.length) {
-            pgrMessage(el, "This sequence was not found in any haplotype. " +
-                '<a href="' + pgrSelf + '">New search</a>.');
+            // Nothing to list: say why, where the mapper gave a reason.
+            var failed = pgrLeftOut.filter(function (x) { return x.error !== null; });
+            var none = pgrQueryCount > 1 ? "None of these sequences was found in any haplotype."
+                                         : "This sequence was not found in any haplotype.";
+            pgrMessage(el, (failed.length ? pgrLeftOutNotes(failed, pgrQueryCount).join(" ") : none) +
+                ' <a href="' + pgrSelf + '">New search</a>.');
             return null;
         }
         return pgrPool(jobs.map(function (j) {
