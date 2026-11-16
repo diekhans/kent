@@ -26,8 +26,9 @@
  *   cmd=liftoverAll  POST to {apiBase}/api/v1/liftover with tgt "*" in its
  *                 summary form - one row per haplotype in the graph, for
  *                 page=liftAll.  The request sent on is built here.
- *   cmd=alignTrack write the PSL/FASTA pair BLAT uses ("ss=") so the browser
- *                 draws the mapped sequence on the target haplotype.
+ *   cmd=alignTrack build a bigPsl custom track of the mapped sequence on the
+ *                 target haplotype, as hgBlat keeps its results, and answer
+ *                 with the browser link that draws it.
  *   cmd=surject   POST {apiBase}/api/v1/surject - re-place an alignment the
  *                 server still holds onto another haplotype, without mapping
  *                 the read again.  A 404 (the job aged out) comes back as
@@ -195,6 +196,7 @@
 #include <fcntl.h>
 #include <sys/file.h>
 #include "trashDir.h"
+#include "customTrack.h"
 #include "pipeline.h"
 #include "hdb.h"
 #include "cartTrackDb.h"
@@ -1907,8 +1909,8 @@ if (errCatchStart(errCatch))
      * name once it is attached: a GenArk accession, and a curated hub like hs1
      * (dbDb.nibPath "hub:...").  Both have to be resolved, because a caller
      * that sets the cart's db to the plain name looks to the browser like a
-     * database change - and that silently discards "ss", the very thing we are
-     * about to set. */
+     * database change, and the browser then resets the position we are about
+     * to set. */
     char *arkUrl = genarkUrl(db);
     if (arkUrl == NULL)
         hubConnectGetCuratedUrl(db, &arkUrl);
@@ -2704,36 +2706,47 @@ dyStringFree(&ql);
 
 /* ---- The mapped sequence as a track on the target ------------------------
  *
- * BLAT hands its results to the browser by writing a PSL and a FASTA into
- * trash and linking with "ss=<psl>+<fa>"; hgTracks then draws the native "Your
- * Sequence from Blat Search" track, with the query bases coloured against the
- * assembly (see userPslTg() in hgTracks).  Doing the same here means the read
- * is drawn the way a browser user already expects, rather than as a plain
- * custom track.
+ * hgBlat hands its results to the browser as a bigPsl custom track: the
+ * alignments and the query sequence in one bigBed file, drawn with the query
+ * bases coloured against the assembly.  Doing the same here means the read is
+ * drawn the way a browser user already expects, with the details pages hgc
+ * already has for that track type, and nothing of ours in hgTracks or hgc.
  *
- * Note the PSL's tName has to be the sequence name hgTracks itself uses -
- * loadUserPsl() compares it to chromName with sameString(), no chromAlias in
- * between - which for a GenArk assembly is the accession, not the chrN alias.
- * That is the opposite of the chain we write for quickLift, where the bigBed
- * is opened through chromAliasFindAliases and so wants the display name. */
+ * The alignment goes through a PSL on the way: pgWritePsl() turns the CIGAR
+ * into one, and pslToBigPsl and bedToBigBed do the rest (pgBigPslTrack).
+ *
+ * Note the PSL's tName is the assembly's own sequence name - on a GenArk
+ * assembly the accession, not the chrN alias - because that is what its
+ * chrom.sizes, which bedToBigBed checks against, is keyed by. */
 
 static boolean pgWritePsl(char *path, boolean append, char *qName, int qSize, char *cigar,
                           char *tName, int tSize, int tStart, char strand,
-                          int qStart, int *retTEnd, char **retError)
+                          long matches, long mismatches, int *retTEnd, char **retError)
 /* One PSL line for the alignment.  M/=/X advance both sides, I the query, D/N
- * the target - the same expansion a CIGAR gets anywhere else.
+ * the target, and S/H the query without aligning it - the same expansion a
+ * CIGAR gets in bamToPsl().  matches and mismatches are the mapping server's
+ * counts, or -1.
+ *
+ * The CIGAR comes from the page, so it is checked here as input: every
+ * operation a count and a known letter, and the alignment inside both the
+ * query and the target sequence.  FALSE and a reason if not.
  *
  * Expanding the CIGAR is ours; the record itself is kent's.  We fill in a
  * struct psl and let pslTabOut() write it, rather than printing twenty-one
  * tab-separated fields in an order we had to get right by hand. */
 {
 static char msg[256];
-int q = qStart, t = tStart;
-int blocks = 0, aligned = 0;
-int qNumIns = 0, qBaseIns = 0, tNumIns = 0, tBaseIns = 0;
+long q = 0, t = tStart, aligned = 0;
+int blocks = 0;
 
-/* Two passes: one to count the blocks so the arrays can be sized, one to fill
- * them.  A CIGAR cannot have more blocks than it has operations. */
+if (tStart < 0 || tStart >= tSize)
+    {
+    safef(msg, sizeof(msg), "the alignment starts outside %.100s", tName);
+    *retError = msg;
+    return FALSE;
+    }
+
+/* A CIGAR cannot have more blocks than it has operations. */
 int maxBlocks = 1;
 char *c;
 for (c = cigar; c != NULL && *c != '\0'; ++c)
@@ -2745,39 +2758,63 @@ AllocArray(blockSizes, maxBlocks);
 AllocArray(qStarts, maxBlocks);
 AllocArray(tStarts, maxBlocks);
 
+char *bad = NULL;
 char *p = cigar;
-while (p != NULL && *p != '\0')
+while (p != NULL && *p != '\0' && bad == NULL)
     {
-    char *end;
-    long n = strtol(p, &end, 10);
-    if (end == p || *end == '\0')
+    /* A count is digits only - strtol() would take a sign - and short enough
+     * that it cannot overflow. */
+    long n = 0;
+    int digits = 0;
+    while (isdigit((unsigned char)*p) && digits < 10)
+        {
+        n = n * 10 + (*p - '0');
+        ++p;
+        ++digits;
+        }
+    char op = *p;
+    if (digits == 0 || digits >= 10 || op == '\0')
+        {
+        bad = "the alignment's CIGAR cannot be read";
         break;
-    char op = *end;
-    p = end + 1;
+        }
+    ++p;
     if (op == 'M' || op == '=' || op == 'X')
         {
-        if (blocks < maxBlocks)
+        if (n > 0)
             {
-            blockSizes[blocks] = n;
-            qStarts[blocks] = q;
-            tStarts[blocks] = t;
-            ++blocks;
+            /* "10=1X5=" is one block of sixteen, not three that touch. */
+            if (blocks > 0 && qStarts[blocks-1] + blockSizes[blocks-1] == q &&
+                tStarts[blocks-1] + blockSizes[blocks-1] == t)
+                blockSizes[blocks-1] += n;
+            else
+                {
+                blockSizes[blocks] = n;
+                qStarts[blocks] = q;
+                tStarts[blocks] = t;
+                ++blocks;
+                }
             }
         aligned += n;
         q += n;
         t += n;
         }
-    else if (op == 'I')
-        { ++qNumIns; qBaseIns += n; q += n; }
-    else if (op == 'D' || op == 'N')
-        { ++tNumIns; tBaseIns += n; t += n; }
-    else if (op == 'S' || op == 'H')
+    else if (op == 'I' || op == 'S' || op == 'H')
         q += n;
+    else if (op == 'D' || op == 'N')
+        t += n;
+    else if (op != 'P')
+        bad = "the alignment's CIGAR cannot be read";
+    if (q > qSize)
+        bad = "the alignment is longer than the sequence";
+    else if (t > tSize)
+        bad = "the alignment runs past the end of its sequence in the assembly";
     }
-
-if (blocks == 0)
+if (bad == NULL && blocks == 0)
+    bad = "the alignment has no aligned blocks to draw";
+if (bad != NULL)
     {
-    safef(msg, sizeof(msg), "the alignment has no aligned blocks to draw");
+    safef(msg, sizeof(msg), "%s", bad);
     *retError = msg;
     freeMem(blockSizes); freeMem(qStarts); freeMem(tStarts);
     return FALSE;
@@ -2785,37 +2822,116 @@ if (blocks == 0)
 
 struct psl psl;
 ZeroVar(&psl);
-/* match is the aligned length: the mapping server does not tell us how many of
- * those bases actually agree.  It only affects the numbers on the details page
- * - the per-base mismatch colouring is done by hgTracks itself, from the FASTA
- * against the assembly, so what is drawn is right either way. */
-psl.match = aligned;
-psl.qNumInsert = qNumIns;
-psl.qBaseInsert = qBaseIns;
-psl.tNumInsert = tNumIns;
-psl.tBaseInsert = tBaseIns;
+/* The mapping server's own counts where it gave them and they add up to the
+ * aligned length; otherwise every aligned base is called a match.  Either way
+ * the per-base mismatch colouring is done by hgTracks itself, from the FASTA
+ * against the assembly; these are the numbers on the details page. */
+if (matches >= 0 && mismatches >= 0 && matches + mismatches == aligned)
+    {
+    psl.match = matches;
+    psl.misMatch = mismatches;
+    }
+else
+    psl.match = aligned;
 psl.strand[0] = strand;
 psl.qName = qName;
 psl.qSize = qSize;
-psl.qStart = qStart;
-psl.qEnd = q;
+/* From the first aligned base to the last: a clipped end is not part of the
+ * alignment.  On the reverse strand the CIGAR, and so the block starts, run
+ * along the reversed query, as PSL wants them, and only the overall range is
+ * turned round - as bamToPsl() does. */
+psl.qStart = qStarts[0];
+psl.qEnd = qStarts[blocks-1] + blockSizes[blocks-1];
+if (strand == '-')
+    reverseIntRange(&psl.qStart, &psl.qEnd, qSize);
 psl.tName = tName;
 psl.tSize = tSize;
-psl.tStart = tStart;
-psl.tEnd = t;
+psl.tStart = tStarts[0];
+psl.tEnd = tStarts[blocks-1] + blockSizes[blocks-1];
 psl.blockCount = blocks;
 psl.blockSizes = blockSizes;
 psl.qStarts = qStarts;
 psl.tStarts = tStarts;
+pslComputeInsertCounts(&psl);
 
 FILE *f = mustOpen(path, append ? "a" : "w");
 pslTabOut(&psl, f);
 carefulClose(&f);
 
-freeMem(blockSizes); freeMem(qStarts); freeMem(tStarts);
 if (retTEnd != NULL)
-    *retTEnd = t;
+    *retTEnd = psl.tEnd;
+freeMem(blockSizes); freeMem(qStarts); freeMem(tStarts);
 return TRUE;
+}
+
+static long pgCountField(struct jsonElement *obj, char *name)
+/* A whole number of bases from a request, or -1 if it is not there. */
+{
+struct jsonElement *el = jsonFindNamedField(obj, "", name);
+if (el == NULL || el->type != jsonNumber || el->val.jeNumber < 0)
+    return -1;
+return (long)el->val.jeNumber;
+}
+
+#define PG_SEQ_TRACK_NAME "PanView Seq"
+
+static char *pgBigPslTrack(char *pslFile, char *faFile, char *chromSizes, char **retError)
+/* The alignments as a bigPsl file, the way hgBlat keeps its results (hgc.c
+ * makeBigPsl, blatNewResultCt).  Returns the custom track line for hgTracks'
+ * hgct_customText, or NULL and a reason.
+ *
+ * pslToBigPsl puts the query sequence in the file, so the track needs no
+ * FASTA beside it and nothing in the cart: it is an ordinary custom track,
+ * which a change of assembly does not throw away and a saved session keeps.
+ * The track this replaced was the pair hgBlat's classic results use, a PSL
+ * and a FASTA named in the cart's "ss", which the browser drops whenever the
+ * assembly changes. */
+{
+static char msg[256];
+struct tempName bedTn, bbTn;
+trashDirDateFile(&bedTn, "pangenomeSs", "pangenomeSs", ".bigPsl");
+trashDirDateFile(&bbTn, "pangenomeSs", "pangenomeSs", ".bb");
+
+/* bedToBigBed wants its input sorted by sequence and start.  pslToBigPsl
+ * keeps the order it is given, so sort the PSL: no "sort" between the two. */
+struct psl *psl, *pslList = pslLoadAll(pslFile);
+slSort(&pslList, pslCmpTarget);
+struct tempName sortedTn;
+trashDirDateFile(&sortedTn, "pangenomeSs", "pangenomeSs", ".sorted.psl");
+FILE *f = mustOpen(sortedTn.forCgi, "w");
+for (psl = pslList; psl != NULL; psl = psl->next)
+    pslTabOut(psl, f);
+carefulClose(&f);
+
+char faArg[PATH_LEN];
+safef(faArg, sizeof(faArg), "-fa=%s", faFile);
+char *toBed[] = {"loader/pslToBigPsl", sortedTn.forCgi, faArg, bedTn.forCgi, NULL};
+struct pipeline *pl = pipelineOpen1(toBed, pipelineWrite | pipelineNoAbort, "/dev/null", NULL, 0);
+int status = pipelineClose(&pl);
+if (status == 0)
+    {
+    char *toBb[] = {"loader/bedToBigBed", "-verbose=0", "-extraIndex=name", "-tab",
+                    "-as=loader/bigPsl.as", "-type=bed12+13",
+                    bedTn.forCgi, chromSizes, bbTn.forCgi, NULL};
+    pl = pipelineOpen1(toBb, pipelineWrite | pipelineNoAbort, "/dev/null", NULL, 0);
+    status = pipelineClose(&pl);
+    }
+unlink(sortedTn.forCgi);
+unlink(bedTn.forCgi);
+if (status != 0 || !fileExists(bbTn.forCgi))
+    {
+    safef(msg, sizeof(msg), "could not build the sequence track (exit %d)", status);
+    *retError = msg;
+    return NULL;
+    }
+/* hgBlat's track line for a nucleotide search, under this tool's name. */
+struct dyString *line = dyStringNew(512);
+dyStringPrintf(line, "track type=bigPsl name=\"" PG_SEQ_TRACK_NAME "\" "
+    "description=\"Your Sequence from PanView\" visibility=pack showAll=on "
+    "indelDoubleInsert=on indelQueryInsert=on indelPolyA=on showDiffBasesAllScales=. "
+    "baseColorUseSequence=lfExtra baseColorDefault=diffBases "
+    "colorByStrand=\"0,0,0 0,0,150\" bigDataUrl=%s", bbTn.forCgi);
+return dyStringCannibalize(&line);
 }
 
 static boolean pgValidDna(char *seq)
@@ -3514,10 +3630,10 @@ dyStringFree(&out);
 #define PG_MAX_OTHER_HITS 50    /* more than any install asks the mapper for */
 
 static void doAlignTrack()
-/* Write the PSL/FASTA pair BLAT uses, and hand back a browser URL that draws
- * the read on the target.  Runs with the cart: "ss" has to be put there
- * directly, because the browser drops it when the database changes and
- * following this link to another assembly is exactly that. */
+/* Build the sequence track - the user's sequence aligned to one haplotype, as
+ * a bigPsl custom track - and hand back a browser URL that draws it and one
+ * for its base-by-base alignment.  Runs with the cart, for the session the
+ * links name and the assembly's hub. */
 {
 char *payload = cgiOptionalString("payload");
 if (isEmpty(payload))
@@ -3570,10 +3686,9 @@ if (sizes == NULL)
 int tSize = hashIntValDefault(sizes, contig, 0);
 if (tSize == 0)
     { emitJsonError("%s is not a sequence of %s", contig, db); return; }
-/* hgTracks holds chromName as the assembly's own sequence name - the accession
- * on a GenArk assembly - and loadUserPsl() compares a PSL's tName against it
- * with sameString(), no alias in between.  The chrN alias is only what gets
- * displayed, so the PSL and the position both use the name we were given. */
+/* The assembly's own sequence name - the accession on a GenArk assembly.  The
+ * chrN alias is only what gets displayed, so the track and the position both
+ * use the name we were given. */
 char *viewChrom = contig;
 
 struct tempName pslTn, faTn;
@@ -3587,8 +3702,13 @@ carefulClose(&fa);
 int tStart = (int)startEl->val.jeNumber;
 int tEnd = tStart;
 if (!pgWritePsl(pslTn.forCgi, FALSE, name, strlen(seq), cigar, viewChrom, tSize,
-                tStart, (strand[0] == '-') ? '-' : '+', 0, &tEnd, &err))
-    { emitJsonError("%s", err); return; }
+                tStart, (strand[0] == '-') ? '-' : '+', pgCountField(root, "matches"),
+                pgCountField(root, "mismatches"), &tEnd, &err))
+    {
+    unlink(faTn.forCgi);
+    emitJsonError("%s", err);
+    return;
+    }
 /* Every other place the sequence aligned on this haplotype goes in the same
  * track, as hgBlat's results do: the browser opens on the hit that was
  * clicked, and the others are there to be found.  Each is a contig, a start,
@@ -3614,23 +3734,15 @@ if (othersEl != NULL && othersEl->type == jsonList)
             continue;
         char *oErr = NULL;
         if (pgWritePsl(pslTn.forCgi, TRUE, name, strlen(seq), oCigar, oContig, oSize,
-                       (int)oStart->val.jeNumber, (oStrand[0] == '-') ? '-' : '+', 0,
+                       (int)oStart->val.jeNumber, (oStrand[0] == '-') ? '-' : '+',
+                       pgCountField(o, "matches"), pgCountField(o, "mismatches"),
                        NULL, &oErr))
             ++n;
         }
     }
 
-struct dyString *url = dyStringNew(600);
-/* The browser clears "ss" whenever the database changes (web.c, "hgBlat results
- * (hgUserPsl track)"), and following a link from here to another assembly is
- * exactly that.  So put the database, the position and ss into the cart now:
- * by the time hgTracks runs, its db is already the target and nothing looks
- * like a change.  The name has to be the one the browser resolves to, which for
- * a GenArk assembly is the decorated hub_<id>_ form. */
-/* Open on the whole alignment, not its first base: loadUserPsl only keeps a
- * PSL that overlaps the window, and a one-base window shows nothing useful
- * even when it technically does overlap.  A little padding either side keeps
- * the read off the edges. */
+/* Open on the whole alignment, not its first base: a one-base window shows
+ * nothing useful.  A little padding either side keeps the read off the edges. */
 int pad = (tEnd - tStart) / 10 + 20;
 int viewStart = tStart - pad;
 int viewEnd = tEnd + pad;
@@ -3638,37 +3750,45 @@ if (viewStart < 0)
     viewStart = 0;
 if (viewEnd > tSize)
     viewEnd = tSize;
+/* The name the browser resolves the assembly to, which for a GenArk assembly
+ * is the decorated hub_<id>_ form. */
 char *viewDb = pgAttachAssembly(db);
-char pos[512], ss[2048];
+char pos[512];
 safef(pos, sizeof(pos), "%s:%d-%d", viewChrom, viewStart + 1, viewEnd);
-safef(ss, sizeof(ss), "%s %s", pslTn.forCgi, faTn.forCgi);
+
+char *customText = pgBigPslTrack(pslTn.forCgi, faTn.forCgi, pgChromSizesFile(db, sizes, FALSE), &err);
+/* Both are in the bigPsl file now, the sequence included. */
+unlink(pslTn.forCgi);
+unlink(faTn.forCgi);
+if (customText == NULL)
+    { emitJsonError("%s", err); return; }
 cartSetString(cart, "db", viewDb);
 cartSetString(cart, "position", pos);
-cartSetString(cart, "ss", ss);
 if (dropLifts)
     pgForgetStaleHubs(NULL, FALSE);
-/* Name the track for this tool rather than leaving hgBlat's label on it. */
-cartSetString(cart, "ssShortLabel", "PanView Seq");
-cartSetString(cart, "ssLongLabel", "Your Sequence from PanView");
-/* The link names this request's own session.  The page sends no hgsid, so
- * this request began a new one, and db, position and ss above are in it and
- * nowhere else that matters.  It used to be left to the user's cookie to carry
- * them to the browser page, and the cookie's copy is whatever request of this
- * user finished last: a second click, or a second tab, between this answer and
- * the page opening, and the browser found another assembly there, took that
- * for a change of database and threw the sequence away. */
+
+/* Both links hand the browser the track line itself (hgct_customText), which
+ * whichever page opens first turns into a custom track of this session, and
+ * both name this request's own session.  The page sends no hgsid, so this
+ * request began a new one: a second click, or a second tab, has a session of
+ * its own and cannot change the assembly or the track under this one. */
 char *sid = cartSessionId(cart);
-dyStringPrintf(url, "hgTracks?hgsid=%s&db=%s&position=%s",
-               sid, cgiEncode(viewDb), cgiEncode(pos));
-/* The alignment details page, the same one hgBlat's "details" link opens:
- * hgc's htcUserAli takes the psl, the fasta and the query name in "i". */
-struct dyString *details = dyStringNew(700);
+char *ctName = customTrackTableFromLabel(PG_SEQ_TRACK_NAME);
+char *ctText = cgiEncode(customText);
+/* The track's visibility goes in the link as well.  When a reference's
+ * annotations come along the link gains hideTracks=on, and under that the
+ * browser shows only the tracks the link itself names. */
+struct dyString *url = dyStringNew(900);
+dyStringPrintf(url, "hgTracks?hgsid=%s&db=%s&position=%s&hgct_customText=%s&%s=pack",
+               sid, cgiEncode(viewDb), cgiEncode(pos), ctText, ctName);
+/* The base-by-base alignment, the page a click on the track's item leads to. */
+struct dyString *details = dyStringNew(900);
 dyStringPrintf(details,
-               "hgc?hgsid=%s&o=%d&g=htcUserAli&i=%s+%s+%s&c=%s&l=%d&r=%d&db=%s",
-               sid, tStart, cgiEncode(pslTn.forCgi), cgiEncode(faTn.forCgi),
-               cgiEncode(name), cgiEncode(viewChrom), tStart, tEnd,
-               cgiEncode(viewDb));
-struct dyString *out = dyStringNew(700);
+               "hgc?hgsid=%s&db=%s&g=htcBigPslAli&i=%s&c=%s&l=%d&r=%d&o=%d"
+               "&aliTable=%s&aliTrack=%s&hgct_customText=%s",
+               sid, cgiEncode(viewDb), cgiEncode(name), cgiEncode(viewChrom),
+               tStart, tEnd, tStart, ctName, ctName, ctText);
+struct dyString *out = dyStringNew(1800);
 /* "hgsid" is for the request that follows, cmd=refAnnot, which has to add its
  * hub to this same session. */
 dyStringPrintf(out, "{\"status\":\"ok\",\"url\":\"%s\","

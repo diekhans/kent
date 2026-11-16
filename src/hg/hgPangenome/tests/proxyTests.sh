@@ -840,6 +840,12 @@ else
                 "$(command -v bedToBigBed 2>/dev/null)"; do
         [ -n "$cand" ] && [ -x "$cand" ] && { ln -sf "$cand" "$BOX/loader/bedToBigBed"; break; }
     done
+    # the sequence track: the converter and the format's field list
+    for f in pslToBigPsl bigPsl.as; do
+        for dir in "/usr/local/apache/cgi-bin-$(id -un)/loader" /usr/local/apache/cgi-bin/loader; do
+            [ -e "$dir/$f" ] && { ln -sf "$dir/$f" "$BOX/loader/$f"; break; }
+        done
+    done
     enc() { ENC_S="$1" python3 -c 'import os, urllib.parse; print(urllib.parse.quote(os.environ["ENC_S"], safe=""))'; }
     cgi_box() {                      # cgi_box <conf> <urlencoded body>
         (cd "$BOX" && printf '%s' "$2" | env -i \
@@ -849,17 +855,82 @@ else
             "$CGI" 2>&1)
     }
 
-    # The sequence track is written into a session of this request's own, and
-    # both links name it.  Left to the user's cookie, a second click or a second
-    # tab changed the assembly before the browser page opened, and the browser
-    # then dropped the sequence.
-    AT_OK='{"db":"hg38","contig":"chr1","name":"q","sequence":"ACGTACGT","cigar":"8M","start":11000,"strand":"+"}'
-    out=$(cgi_box "$QCONF" "cmd=alignTrack&payload=$(enc "$AT_OK")")
-    check_contains "alignTrack: the track is written" "$out" '"status":"ok"'
+    # ---- the sequence track (cmd=alignTrack) ----
+    #
+    # The mapped sequence becomes a bigPsl custom track.  The checks read the
+    # finished file back with bigBedToBed, so they need that and the two
+    # programs the CGI runs.
+    BB2BED=""
+    for cand in "$(command -v bigBedToBed 2>/dev/null)" /cluster/bin/x86_64/bigBedToBed; do
+        [ -n "$cand" ] && [ -x "$cand" ] && { BB2BED="$cand"; break; }
+    done
+    if [ ! -e "$BOX/loader/pslToBigPsl" ] || [ ! -e "$BOX/loader/bigPsl.as" ] || \
+       [ ! -x "$BOX/loader/bedToBigBed" ] || [ -z "$BB2BED" ]; then
+        echo "  NOT RUN: the sequence track checks (pslToBigPsl, bigPsl.as, bedToBigBed or bigBedToBed not found)"
+        notRun="the sequence track checks"
+    else
+    SEQ40=$(python3 -c 'print("ACGT" * 10)')
+    AT_PART="\"db\":\"hg38\",\"contig\":\"chr1\",\"name\":\"q\",\"sequence\":\"$SEQ40\",\"start\":11000"
+    at() { cgi_box "$QCONF" "cmd=alignTrack&payload=$(enc "$1")"; }
+    # the track file an answer's link names, as tab-separated bigPsl rows
+    track_of() {                     # track_of <alignTrack answer>
+        local f
+        f=$(printf '%s' "$1" | grep -o 'bigDataUrl%3D[^"& ]*\.bb' | head -1 | sed 's/bigDataUrl%3D//; s/%2F/\//g; s/%2E/./g')
+        [ -n "$f" ] && (cd "$BOX" && "$BB2BED" "$f" stdout 2>&1)
+    }
+    col() { printf '%s' "$1" | cut -f"$2"; }
+
+    # It is written into a session of this request's own, and both links name
+    # it.  Left to the user's cookie, a second click or a second tab changed
+    # the assembly before the browser page opened.
+    out=$(at "{$AT_PART,\"cigar\":\"40M\",\"strand\":\"+\"}")
+    check_contains "alignTrack: the track is built" "$out" '"status":"ok"'
     ATSID=$(printf '%s' "$out" | grep -o '"hgsid":"[0-9]*_[A-Za-z0-9]*"' | cut -d'"' -f4)
-    check_contains "... into a session the answer names" "$out" '"hgsid":"'
-    check_contains "... and the browser link opens that session" "$out" "\"url\":\"hgTracks?hgsid=$ATSID&db=hg38&position=chr1"
-    check_contains "... as does the alignment link" "$out" "\"details\":\"hgc?hgsid=$ATSID&"
+    check_contains "... in a session the answer names" "$out" '"hgsid":"'
+    check_contains "... the browser link opens that session" "$out" "\"url\":\"hgTracks?hgsid=$ATSID&db=hg38&position=chr1"
+    check_contains "... and hands it the custom track" "$out" 'hgct_customText=track+type%3DbigPsl'
+    check_contains "... named as shown, so \"hide other tracks\" leaves it" "$out" '&ct_PanViewSeq_'
+    check_contains "... the alignment link opens the same session and track" "$out" \
+        "\"details\":\"hgc?hgsid=$ATSID&db=hg38&g=htcBigPslAli&i=q&c=chr1"
+    check_eq "... and only the track file is left: no PSL, no FASTA" \
+        "$(find "$TMP/trash/pangenomeSs" -type f ! -name '*.bb' | grep -c .)" "0"
+    row=$(track_of "$out")
+    check_eq "... which holds the alignment and the sequence" \
+        "$(col "$row" 1):$(col "$row" 2)-$(col "$row" 3) $(col "$row" 4) $(col "$row" 18)" \
+        "chr1:11000-11040 q $(printf '%s' "$SEQ40" | tr 'ACGT' 'acgt')"
+
+    # a clipped end is not part of the alignment: 10 of 40 bases aligned
+    row=$(track_of "$(at "{$AT_PART,\"cigar\":\"10M30S\",\"strand\":\"+\",\"matches\":9,\"mismatches\":1}")")
+    check_eq "alignTrack: a clipped end is left out of the query range" \
+        "$(col "$row" 13)-$(col "$row" 14) of $(col "$row" 16)" "0-10 of 40"
+    check_eq "... the mapping server's matches and mismatches are used" \
+        "$(col "$row" 21)/$(col "$row" 22)" "9/1"
+    check_eq "... and the target range is the aligned bases" \
+        "$(col "$row" 2)-$(col "$row" 3)" "11000-11010"
+    # on the reverse strand the range is on the query as it was given
+    row=$(track_of "$(at "{$AT_PART,\"cigar\":\"10M30S\",\"strand\":\"-\"}")")
+    check_eq "alignTrack: reverse strand, the query range is turned round" \
+        "$(col "$row" 6) $(col "$row" 13)-$(col "$row" 14)" "- 30-40"
+    check_eq "... and with no counts every aligned base is a match" \
+        "$(col "$row" 21)/$(col "$row" 22)" "10/0"
+    row=$(track_of "$(at "{$AT_PART,\"cigar\":\"5S4=1X5=3I10M2D10M2S\",\"strand\":\"+\"}")")
+    check_eq "alignTrack: runs that touch are one block, gaps separate blocks" \
+        "$(col "$row" 10) blocks $(col "$row" 11) at $(col "$row" 12) and $(col "$row" 17) q $(col "$row" 13)-$(col "$row" 14)" \
+        "3 blocks 10,10,10, at 0,10,22, and 5,18,28, q 5-38"
+    # every other hit on the haplotype goes in the same track
+    row=$(track_of "$(at "{$AT_PART,\"cigar\":\"40M\",\"strand\":\"+\",\"others\":[{\"contig\":\"chr2\",\"start\":500,\"strand\":\"-\",\"cigar\":\"20M20S\"},{\"contig\":\"chr1\",\"start\":100,\"strand\":\"+\",\"cigar\":\"40M\"},{\"contig\":\"noSuchSeq\",\"start\":1,\"strand\":\"+\",\"cigar\":\"40M\"}]}")")
+    check_eq "alignTrack: the other hits on the haplotype are in the track, sorted" \
+        "$(printf '%s\n' "$row" | cut -f1,2 | tr '\t\n' ': ')" "chr1:100 chr1:11000 chr2:500 "
+    # the CIGAR is input: anything odd is refused
+    for badCigar in "-5M45M" "10M30Z" "40" "M" "99999999999M" "50M" "10M 30S" "40S"; do
+        out=$(at "{$AT_PART,\"cigar\":\"$badCigar\",\"strand\":\"+\"}")
+        check_contains "alignTrack: CIGAR '$badCigar' refused" "$out" '"status":"error"'
+    done
+    out=$(at "{\"db\":\"hg38\",\"contig\":\"chr1\",\"name\":\"q\",\"sequence\":\"$SEQ40\",\"start\":999999999,\"cigar\":\"40M\"}")
+    check_contains "alignTrack: a start past the end of the sequence refused" "$out" "starts outside chr1"
+    check_eq "... and a refused request leaves no file behind" \
+        "$(find "$TMP/trash/pangenomeSs" -type f ! -name '*.bb' | grep -c .)" "0"
+    fi
 
     # hubQuickLift-<db> names the hub hgConvert's quickLift attached for this
     # user.  We ask the same library for the source's stanzas, and used to empty

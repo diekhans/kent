@@ -590,8 +590,7 @@ t.test('the opened URL keeps its genome and position and gains the hubs', functi
 });
 t.test('each opening has a session of its own, named by the server and passed on', function () {
     // The page's session is not sent: the server starts one for this opening.
-    // Shared, a second click changed the assembly under the first, and the
-    // browser then threw the sequence track away.
+    // Shared, a second click changed the assembly under the first.
     var sent = [];
     var x = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
         sent.push(opts.body);

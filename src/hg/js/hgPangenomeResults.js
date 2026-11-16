@@ -501,9 +501,9 @@ function pgrApplySurjection(row, resp) {
 // here - in hgBlat.js's design: the position as a link with a new-tab icon
 // after it, an "Alignment" link, a bar for the part of the query that aligned,
 // and identity in hgBlat's semantic colours.  The links cannot be plain hrefs
-// the way BLAT's are: the cart has to be armed with the PSL and the query FASTA
-// first, and that is a POST, so each carries the row's rank and an action and
-// goes through pgrAct() when clicked.
+// the way BLAT's are: the sequence's track has to be built first, and that is
+// a POST, so each carries the row's rank and an action and goes through
+// pgrAct() when clicked.
 
 // hgBlat.js's identity colours, so a percentage reads the same in both tools.
 function pgrIdColor(id) {
@@ -626,29 +626,30 @@ function pgrPickCell(r) {
 
 // ---- opening a row in the browser -----------------------------------------
 
-// The cart has to carry the PSL and the query FASTA before hgTracks can draw
-// the sequence, and writing them is a POST.  The query itself is not on this
-// page - it was left on the search form - so the job id goes instead and the
-// CGI reads the sequence back from the copy taken at submit time.
-// Armed afresh on every click, never reused: "ss" is a single cart variable,
-// so opening another row in between points it at that row's alignment, and a
-// remembered URL would then open this one with the other's sequence.
+// The sequence is drawn as a custom track, which the CGI builds for this row
+// (cmd=alignTrack, a POST) and hands back as two links: the browser on the
+// hit, and the base-by-base alignment.  The query itself is not on this page -
+// it was left on the search form - so the job id goes instead and the CGI
+// reads the sequence back from the copy taken at submit time.
+// Built afresh on every click, never reused: the track's file is a temporary
+// one, and each opening has a session of its own.
 function pgrArm(row, opening) {
     var payload = {
         db: row.db, contig: row.contig, name: row.query, job_id: pgrJobId(),
         cigar: row.cigar, start: row.start, strand: row.strand,
+        matches: row.matches, mismatches: row.mismatches,
         // Opening the browser: drop what was lifted onto the last haplotype.
         dropLifts: opening ? "on" : "off",
         // Every other hit of this sequence on this haplotype, drawn in the
         // same track as hgBlat draws all of a query's hits.
         others: opening ? pgrOtherHits(row).map(function (r) {
-            return { contig: r.contig, start: r.start, strand: r.strand, cigar: r.cigar };
+            return { contig: r.contig, start: r.start, strand: r.strand, cigar: r.cigar,
+                     matches: r.matches, mismatches: r.mismatches };
         }) : []
     };
     // No hgsid: the server starts a session for this one opening and names it
-    // in the links it answers with.  Sharing this page's session, or leaving
-    // it to the cookie, let a second click or a second tab change the
-    // assembly under the first, and the browser then drops the sequence.
+    // in the links it answers with, so a second click or a second tab cannot
+    // change the assembly under the first.
     var body = { cmd: "alignTrack", payload: JSON.stringify(payload) };
     return fetch(pgrSelf, {
         method: "POST",
