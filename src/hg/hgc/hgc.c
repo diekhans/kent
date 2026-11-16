@@ -8941,8 +8941,12 @@ return blockCount;
  * then renders the modern or classic body to match.  These are forward-declared here because
  * showSomeAlignment() sits above their definitions. */
 static boolean gAlnModern = FALSE;
+/* Set to have showSomeAlignmentModern() draw only the part of the alignment inside the browser
+ * window, the modern counterpart of showSomePartialDnaAlignment(). */
+static boolean gAlnInWindow = FALSE;
 static void showSomeAlignmentModern(struct psl *psl, bioSeq *oSeq, enum gfType qType,
                        int qStart, int qEnd, char *qName, int cdsS, int cdsE, boolean blatContext);
+static char *blatAsmLabel(char *database);
 
 void showSomeAlignment(struct psl *psl, bioSeq *oSeq,
                        enum gfType qType, int qStart, int qEnd,
@@ -9531,7 +9535,26 @@ char *bareAliTable = trackHubSkipHubName(aliTable);
 char *accForTitle = startsWith("ncbiRefSeq", bareAliTable) ? acc : accChopped;
 char title[1024];
 safef(title, sizeof title, "%s vs Genomic [%s]", accForTitle, aliTable);
-htmlFramesetStart(title);
+/* A user's sequence gets the modern single page here wherever htcUserAli() gives it one, so the
+ * whole alignment and the part in the window are the same kind of page.  blatContext as there:
+ * a tool other than hgBlat names the track with ssShortLabel. */
+boolean modern = startsWith("user", bareAliTable)
+                 && (cartUsualBoolean(cart, "blatNewPage", FALSE)
+                     || cfgOptionBooleanDefault("modernAlignPage", FALSE));
+boolean blatContext = isEmpty(cartOptionalString(cart, "ssShortLabel"));
+if (modern)
+    {
+    char pageTitle[256];
+    char *asmLabel = blatAsmLabel(database);
+    char *asmLabelHtml = htmlEncode(asmLabel);
+    safef(pageTitle, sizeof pageTitle, "%sBase Alignment: %s", blatContext ? "BLAT " : "",
+          asmLabelHtml);
+    webStartGbNoBanner(cart, database, pageTitle);
+    freeMem(asmLabelHtml);
+    freeMem(asmLabel);
+    }
+else
+    htmlFramesetStart(title);
 
 if (startsWith("user", bareAliTable))
     {
@@ -9550,6 +9573,9 @@ if (startsWith("user", bareAliTable))
 	cartRemove(cart, "ss");
 	errAbort("hgBlat temporary files not found");
 	}
+
+    if (ss == NULL)   // the cart no longer holds the sequence track; parseSs() would crash on it
+	errAbort("This alignment is no longer available. Please run the search again.");
 
     start = cartInt(cart, "o");
 
@@ -9653,6 +9679,15 @@ else
 
 if (startsWith("xeno", bareAliTable))
     errAbort("htcCdnaAliInWindow does not support translated alignments.");
+else if (modern)
+    {
+    gAlnInWindow = (partPsl != wholePsl);
+    showSomeAlignmentModern(wholePsl, rnaSeq, gftDna, 0, rnaSeq->size, NULL,
+                            cdsStart, cdsEnd, blatContext);
+    webEndGb();
+    cartCheckout(&cart);   // exit(0) skips main's checkout, as in htcUserAli()
+    exit(0);
+    }
 else
     showSomePartialDnaAlignment(partPsl, wholePsl, rnaSeq,
 				NULL, cdsStart, cdsEnd);
@@ -10040,6 +10075,14 @@ printf("<div class='blatAlnStrip'>"
        "<div class='blatAlnStat'><span class='k'>Strand</span><span class='v'>%s</span></div>"
        "</div>\n",
        qNameHtml, chromHtml, tStartC, tEndC, idColor, ident, matchC, qSizeC, psl->strand);
+if (gAlnInWindow)
+    {
+    char winStartC[32], winEndC[32];
+    sprintLongWithCommas(winStartC, winStart + 1);
+    sprintLongWithCommas(winEndC, winEnd);
+    printf("<p>Below is the part of this alignment within the browser window, %s:%s-%s.</p>\n",
+           chromHtml, winStartC, winEndC);
+    }
 if (isNotEmpty(aliasStr))
     {
     char *aliasStrHtml = htmlEncode(aliasStr);
@@ -10070,20 +10113,23 @@ if (!captured)
     /* open_memstream failed (out of memory): render straight to stdout, skipping the section
      * reorder, rather than passing a NULL FILE to the renderer and then calling fclose(NULL). */
     if (qType == gftRna || qType == gftDna)
-        showPartialDnaAlignment(psl, oSeq, stdout, cdsS, cdsE, FALSE);
+        showPartialDnaAlignment(psl, oSeq, stdout, cdsS, cdsE, gAlnInWindow);
     else
         showGfAlignment(psl, oSeq, stdout, qType, qStart, qEnd, qName);
     }
 else
     {
     if (qType == gftRna || qType == gftDna)
-        showPartialDnaAlignment(psl, oSeq, alnF, cdsS, cdsE, FALSE);
+        showPartialDnaAlignment(psl, oSeq, alnF, cdsS, cdsE, gAlnInWindow);
     else
         showGfAlignment(psl, oSeq, alnF, qType, qStart, qEnd, qName);
     fclose(alnF);
     }
 struct bafBlock *blocks = bafBlocksDrawn();
 bafLabelBlocks(FALSE, NULL, NULL);
+/* fuzzyShow.c marks where the window's part of the query begins, but not in every case */
+boolean hasWinStart = gAlnInWindow && captured && alnHtml != NULL
+                      && stringIn("<A NAME=cDNAStart>", alnHtml) != NULL;
 if (captured)
     {
     if (blocks != NULL)   /* the block table goes above the alignment, so not in the uncaptured case */
@@ -10107,8 +10153,10 @@ printf("</div>\n");   /* #blatAlnContent */
 printf("<div id='blatAlnNav'><div id='blatAlnNavInner'>\n");
 if (blocks != NULL && captured)
     printf("<a href='#alnBlockTable'>Aligned blocks</a>\n");
-printf("<a href='#cDNA'>Only query sequence</a>\n"
-       "<a href='#ali'>Side by side alignment</a>\n");
+printf("<a href='#cDNA'>Only query sequence</a>\n");
+if (hasWinStart)
+    printf("<a href='#cDNAStart'>Query in browser window</a>\n");
+printf("<a href='#ali'>Side by side alignment</a>\n");
 if (slCount(blocks) > 1)   /* per-block jump links, indented under the side by side alignment */
     {
     struct bafBlock *b;
