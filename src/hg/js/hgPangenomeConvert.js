@@ -26,6 +26,7 @@ var CFG = {};
 var MAX_SPAN = 10000000;        // middleware cap; also enforced server-side
 var MAX_TARGETS = 10;           // per request, not per conversion: see liftInBatches()
 var BUDGET_MB = 5;             // per request: span in Mb x targets
+var MAX_CHOSEN = 50;           // haplotypes one conversion may be sent to; 0 for no limit
 
 // Source assembly -> haplotype, i.e. the inverse of the generated HPRC table
 // (which maps "sample#phase" -> assembly).  Built once, lazily.
@@ -380,8 +381,15 @@ function matchesSearch(h, f) {
                              g.desc.toLowerCase().indexOf(f) >= 0));
 }
 
+// How many more haplotypes may be chosen.  Past MAX_CHOSEN the answer is a
+// question about every haplotype, which "View all haplotypes" is for.
+function chosenRoom(chosenCount) {
+    return MAX_CHOSEN > 0 ? Math.max(0, MAX_CHOSEN - chosenCount) : Infinity;
+}
+
 // Choose or let go of one haplotype, then draw the picker again.
 function setChosen(hap, on) {
+    if (on && chosenRoom(selectedTargets().length) < 1) on = false;
     targetOptions($("pgcTargets")).forEach(function (o) {
         if (o.value === hap) o.selected = !!on;
     });
@@ -394,8 +402,8 @@ function drawChosen(chosen) {
     if (!box) return;
     clear(box);
     box.appendChild(el("span", { class: "pgcChosenHead", text:
-        chosen.length ? "Chosen " + chosen.length
-                      : "Choose target assemblies below" }));
+        chosen.length ? "Chosen " + chosen.length + (MAX_CHOSEN > 0 ? " of " + MAX_CHOSEN : "")
+                      : (MAX_CHOSEN > 0 ? "Choose up to " + MAX_CHOSEN + " below" : "Choose below") }));
     chosen.forEach(function (h) {
         var p = samplePop(h);
         var chip = el("span", { class: "pgcChip", title: p ? p.desc : "" }, [
@@ -454,15 +462,21 @@ function drawHaps(shown, chosenSet) {
     var g = popFilter ? popGroups(shown.length ? shown : []).filter(function (x) {
         return x.key === popFilter; })[0] : null;
     var title = popFilter ? (g ? g.label : "This population") : "All populations";
-    // Every one listed here, or none of them, in one click: "convert to all
-    // of these" is a question people ask, and ticking 463 boxes is not an answer.
+    // Every one listed here, or none of them, in one click - or, when there
+    // is not room for them all, as many from the top of the list as there is
+    // room for.
     var allOn = shown.length > 0 && shown.every(function (h) { return chosenSet[h.toLowerCase()]; });
+    var room = chosenRoom(Object.keys(chosenSet).length);
+    var unchosen = shown.filter(function (h) { return !chosenSet[h.toLowerCase()]; }).length;
+    var allText = allOn ? "Clear these"
+                : unchosen <= room ? "Choose all " + shown.length
+                : room > 0 ? "Choose first " + room : null;
     box.appendChild(el("div", { class: "pgcPaneHead" }, [
         el("span", { text: title }),
         el("span", { class: "pgcPaneN", text: shown.length + (shown.length === 1 ? " haplotype" : " haplotypes") +
             (reachableScored ? ", best first" : "") }),
-        shown.length ? el("button", { type: "button", class: "pgcAllBtn", "data-all": allOn ? "off" : "on",
-                                      text: allOn ? "Clear these" : "Choose all " + shown.length }) : null
+        (shown.length && allText) ? el("button", { type: "button", class: "pgcAllBtn",
+                                                   "data-all": allOn ? "off" : "on", text: allText }) : null
     ]));
     var listBox = el("div", { class: "pgcHapsList" });
     if (!shown.length) {
@@ -474,6 +488,10 @@ function drawHaps(shown, chosenSet) {
         var id = "pgcHap_" + h.replace(/[^A-Za-z0-9]/g, "_");
         var box2 = el("input", { type: "checkbox", id: id, "data-hap": h });
         box2.checked = on;
+        if (!on && room < 1) {
+            box2.disabled = true;
+            box2.title = MAX_CHOSEN + " is the most. Remove one to choose another.";
+        }
         var p = popFilter ? null : samplePop(h);
         var cov = reachable ? reachable[h.toLowerCase()] : null;
         var lab = el("label", { class: "pgcHap" + (on ? " on" : "") + (box2.disabled ? " dis" : ""),
@@ -536,13 +554,10 @@ function fillTargets(filter) {
     drawPops(matches, chosenSet);
     drawHaps(shown, chosenSet);
 
-    // Kept to one short line, under the picker, so nothing above it moves.
-    $("pgcTargetCount").textContent = candidates.length + " of " + allHaplotypes.length +
-        " assembl" + (allHaplotypes.length === 1 ? "y" : "ies") +
-        (reachable ? (reachableScored ? " sharing this region, best first"
-                                      : " containing this region") : "") +
-        (srcHap ? "; the source haplotype is excluded" : "") +
-        (f ? "; " + matches.length + " match the search" : "");
+    // One short line under the picker, and only when the list was narrowed:
+    // the pane's own heading counts what it shows.
+    $("pgcTargetCount").textContent = reachable
+        ? candidates.length + " of " + allHaplotypes.length + " haplotypes have this region" : "";
 }
 
 // Ask the graph which haplotypes this region exists on, and narrow the picker to
@@ -1380,6 +1395,10 @@ function doConvert() {
 
     var targets = selectedTargets();
     if (targets.length === 0) { showError("Choose at least one target assembly."); return; }
+    if (MAX_CHOSEN > 0 && targets.length > MAX_CHOSEN) {
+        showError("Choose at most " + MAX_CHOSEN + " haplotypes, or use View all haplotypes.");
+        return;
+    }
 
     // Send the graph's spelling for targets too: an unknown target is not an
     // error upstream, it just yields no intervals - which would look like
@@ -1423,12 +1442,12 @@ function doConvert() {
 
 // ---- Many targets ------------------------------------------------------------
 //
-// There is no limit on how many assemblies a region is converted to.  The work
-// upstream is one graph traversal per target, so a long list goes as several
+// A region is converted to at most MAX_CHOSEN assemblies (pangenome.maxChosenTargets).
+// The work upstream is one graph traversal per target, so a long list goes as several
 // requests of at most MAX_TARGETS targets each - fewer for a long region, so
 // that span x targets stays inside the server's per-request budget - two at a
 // time.  The CGI queues requests to the graph server (pangenome.maxConcurrent),
-// so one reader's 463 targets and another reader's one are served in turn
+// so one reader's 50 targets and another reader's one are served in turn
 // rather than the first blocking the second.
 
 var convertSeq = 0;
@@ -1812,7 +1831,7 @@ function allCoveragePanel(haps) {
         grid.appendChild(n ? filterLink(cell, s[1], s[2]) : cell);
     });
     return el("div", { class: "pgcStatPanel" }, [
-        el("h3", { text: "How much of the region each haplotype has" }), list, grid]);
+        el("h3", { text: "Coverage" }), list, grid]);
 }
 
 // Bases inserted and deleted where the region carried over, each as its own
@@ -1829,7 +1848,7 @@ var ALL_SIZE_KINDS = [
 function allSizePanel(haps) {
     var found = haps.filter(function (h) { return h.change != null; });
     var unsure = haps.filter(function (h) { return h.unsure; });
-    var panel = el("div", { class: "pgcStatPanel" }, [el("h3", { text: "Bases inserted and deleted where it carried over" })]);
+    var panel = el("div", { class: "pgcStatPanel" }, [el("h3", { text: "Insertions and deletions" })]);
     if (unsure.length)
         panel.appendChild(filterLink(el("p", { class: "pgcStatText pgcUnsure",
             text: withCommas(unsure.length) + " haplotype" + (unsure.length === 1 ? " is" : "s are") +
@@ -2109,9 +2128,8 @@ function renderAll(resp, src) {
                    url: (browserLinkFor({ haplotype: src.src, start: src.start, end: src.end }) || {}).url });
     }
     var notes = el("div", { class: "pgrNotes" });
-    notes.appendChild(el("div", { class: "pgrNote", text: "Every haplotype but the source, a row " +
-        "for each piece the region lands in, largest first. Click a figure above to list " +
-        "those haplotypes." }));
+    notes.appendChild(el("div", { class: "pgrNote", text: "One row for each piece of the region " +
+        "on a haplotype. Click a number above to filter the table." }));
     (resp.warnings || []).forEach(function (w) {
         if (w && w.reason === "timeout")
             notes.appendChild(el("div", { class: "pgrNote pgErrBox", text: "The graph server " +
@@ -2316,6 +2334,7 @@ function init() {
     if (CFG.maxLiftSpan) MAX_SPAN = CFG.maxLiftSpan;
     if (typeof CFG.maxLiftTargets === "number" && CFG.maxLiftTargets > 0) MAX_TARGETS = CFG.maxLiftTargets;
     if (typeof CFG.maxLiftTargetMb === "number" && CFG.maxLiftTargetMb > 0) BUDGET_MB = CFG.maxLiftTargetMb;
+    if (typeof CFG.maxChosenTargets === "number" && CFG.maxChosenTargets >= 0) MAX_CHOSEN = CFG.maxChosenTargets;
 
     // Options carried over from hgConvert: the user set them there, so honour
     // them rather than resetting to this page's defaults.
@@ -2362,8 +2381,13 @@ function init() {
             var on = (b === "on");
             var boxes = ev.currentTarget.querySelectorAll ?
                 ev.currentTarget.querySelectorAll("input[data-hap]") : [];
+            // In the pane's order, so that "Choose first N" takes the top of it.
             var want = Object.create(null);
-            Array.prototype.forEach.call(boxes, function (x) { want[x.getAttribute("data-hap")] = true; });
+            var room = chosenRoom(selectedTargets().length);
+            Array.prototype.forEach.call(boxes, function (x) {
+                if (!on) { want[x.getAttribute("data-hap")] = true; }
+                else if (!x.checked && room > 0) { want[x.getAttribute("data-hap")] = true; room--; }
+            });
             targetOptions($("pgcTargets")).forEach(function (o) {
                 if (want[o.value]) o.selected = on;
             });

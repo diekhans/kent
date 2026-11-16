@@ -116,6 +116,10 @@
  *                            default 10.  Not a limit on the reader: PanLift
  *                            sends a longer list as several requests, which
  *                            the queue (maxConcurrent) takes in turn.
+ *   pangenome.maxChosenTargets  most haplotypes PanLift's picker lets a reader
+ *                            choose for one conversion; default 50, 0 for no
+ *                            limit.  Past it the question is about every
+ *                            haplotype, which page=liftAll answers in one request.
  *                            Each target is a separate traversal on the mapping
  *                            server, so this is enforced here as well as in the
  *                            page - a request naming all ~464 haplotypes can
@@ -3721,6 +3725,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           "  maxTargetNodes: %s,\n"
           "  maxLiftTargets: %d,\n"
           "  maxLiftTargetMb: %ld,\n"
+          "  maxChosenTargets: %d,\n"
           "  hgsid: \"%s\",\n"
           "  quickLiftEnabled: %s,\n"
           "  quickLift: %s,\n"
@@ -3749,6 +3754,7 @@ jsInlineF("window.pangenomeConfig = {\n"
           cfgOr("pangenome.maxTargetNodes", "300"),
           atoi(cfgOr("pangenome.maxLiftTargets", "10")),
           atol(cfgOr("pangenome.maxLiftTargetMb", "5")),
+          atoi(cfgOr("pangenome.maxChosenTargets", "50")),
           cartSessionId(cart),
           quickLiftEnabled(cart) ? "true" : "false",
           sameString(cfgOr("pangenome.quickLift", "on"), "on") ? "true" : "false",
@@ -3813,9 +3819,7 @@ char *position = cartUsualString(cart, "position", "");
 
 printf("<form id='pgcForm' onsubmit='return false;'>\n");
 printf("<h2>PanLift</h2>\n");
-printf("<p>Translate a region from one assembly's coordinates to another's "
-       "through the pangenome graph, and bring the source's annotations "
-       "along with it.</p>\n");
+printf("<p>Convert a region to other haplotypes through the pangenome graph.</p>\n");
 
 printf("<table class='hgPangenomeTable pgcTable' border=0>\n");
 
@@ -3835,8 +3839,8 @@ printf("<input type='hidden' id='pgcSrcHap'>\n");
 printf("<input type='hidden' id='pgcSrcDb' value='%s'>\n", db);
 printf("<input type='hidden' id='pgcPos' value='%s'>\n", position);
 printf("<div id='pgcSrcNote' class='pgMuted'></div>\n");
-printf("<div class='pgMuted'>To convert a different region, go to it in the "
-       "<a href='../cgi-bin/hgTracks'>Genome Browser</a> and come back.</div>"
+printf("<div class='pgMuted'>To change the region, go to it in the "
+       "<a href='../cgi-bin/hgTracks'>Genome Browser</a>.</div>"
        "</td></tr>\n");
 printf("</table>\n");
 
@@ -3849,8 +3853,6 @@ printf("</table>\n");
  * second is not read as one more button of the first. */
 printf("<div class='pgcPath'>\n");
 printf("<div class='pgcPathHead'>I know which haplotypes I want</div>\n");
-printf("<div class='pgcPathText'>Choose one or more haplotypes below and "
-       "convert the region to them.</div>\n");
 printf("<table class='hgPangenomeTable pgcTable' border=0>\n");
 
 /* ---- destination ---- */
@@ -3899,7 +3901,7 @@ if (quickLiftEnabled(cart))
     printf("<div id='pgcHideRow'><label for='pgcHideTracks' title='Hide all of "
            "the target assembly default tracks, showing only the QuickLifted "
            "tracks'><input type='checkbox' id='pgcHideTracks' checked> "
-           "Hide all default tracks on the target</label></div>\n");
+           "Hide default tracks</label></div>\n");
     /* Filled in by the page once it has asked what the source has showing.
      * Saying "nothing to carry over" here, before the Submit, is the whole
      * point: said afterwards it is a wasted conversion. */
@@ -3919,10 +3921,8 @@ printf("<div class='pgcOr'><span>or</span></div>\n");
 /* Every haplotype in one request, on a page of its own (page=liftAll). */
 printf("<div class='pgcPath'>\n");
 printf("<div class='pgcPathHead'>I want to compare haplotypes</div>\n");
-printf("<div class='pgcPathText'>Not sure which haplotype to look at?  See how "
-       "this region carries over to every haplotype in the pangenome: how much "
-       "of it is covered, what is inserted or deleted, and whether it stays in "
-       "one piece.  Open any of them in the Genome Browser from there.</div>\n");
+printf("<div class='pgcPathText'>See how this region carries over to every "
+       "haplotype, then open any of them.</div>\n");
 printf("<input type='button' id='pgcAllBtn' value='View all haplotypes' "
        "title='Translate this region to every haplotype in the pangenome and "
        "summarize how it carries over'>\n");
@@ -3932,9 +3932,7 @@ printf("</form>\n");
 printf("<div id='pgcStatus' class='pgStatus' style='display:none'></div>\n");
 printf("<div id='pgcResults' class='pgResults'></div>\n");
 
-printf("<p>Have a sequence instead of coordinates?  "
-       "<a href='hgPangenome'>PanView</a> maps reads to the graph and "
-       "reports the assemblies carrying them.</p>\n");
+printf("<p>Have a sequence instead?  Use <a href='hgPangenome'>PanView</a>.</p>\n");
 }
 
 void doMiddle(struct cart *theCart)

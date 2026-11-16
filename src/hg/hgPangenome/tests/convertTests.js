@@ -126,8 +126,7 @@ setTimeout(function () {
     });
     t.test('the right pane lists every candidate, the default chosen', function () {
         t.eq(boxes().join(','), 'CHM13#0,GRCh38#0:on,HG00097#2,HG01234#2', 'source excluded, GRCh38 ticked');
-        t.contains(el.pgcChosen.textContent, 'Chosen 1', 'and as a chip');
-        t.notOk(/ of 3/.test(el.pgcChosen.textContent), 'no limit stated');
+        t.contains(el.pgcChosen.textContent, 'Chosen 1 of 50', 'and as a chip, with the most there may be');
     });
     t.test('a box chooses, a chip lets go, and the hidden list follows', function () {
         api.setChosen('HG00097#2', true);
@@ -155,7 +154,7 @@ setTimeout(function () {
         t.eq(api.selectedTargets().join(','), 'HG00097#2', 'still chosen');
         api.fillTargets('');
     });
-    t.test('past the per-request size nothing is disabled: there is no limit', function () {
+    t.test('past the per-request size nothing is disabled: the limit is the picker\'s own', function () {
         api.setChosen('CHM13#0', true);
         api.setChosen('HG01234#2', true);
         var dis = picker.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT' && n.disabled; });
@@ -176,7 +175,7 @@ setTimeout(function () {
         el.pgcFilter.value = 'gbr';
         el.pgcClear.dispatch('click');
         t.eq(api.selectedTargets().length, 0, 'nothing chosen');
-        t.contains(el.pgcChosen.textContent, 'Choose target assemblies', 'no chips');
+        t.contains(el.pgcChosen.textContent, 'Choose up to 50 below', 'no chips');
         t.notOk(picker.findAll(el.pgcPops, function (n) {
             return n.className === 'pgcPopPicked'; }).length, 'no chosen counts by the populations');
         t.eq(el.pgcFilter.value, '', 'the search emptied');
@@ -192,6 +191,44 @@ setTimeout(function () {
 // its own chain) and still be able to draw the ordinary result cards.
 
 // ---- ancestry plot (pcLAI) -------------------------------------------------
+var capped = startPage({ config: { maxChosenTargets: 2 } });
+setTimeout(function () {
+    t.suite('the picker: at most so many haplotypes');
+    var api = capped.api, el = capped.el;
+    function inputs() { return capped.findAll(el.pgcHaps, function (n) { return n.tagName === 'INPUT'; }); }
+    function allBtn() {
+        return capped.findAll(el.pgcHaps, function (n) { return n.getAttribute && n.getAttribute('data-all'); })[0];
+    }
+    api.fillTargets('');
+    t.test('with room for fewer than are listed, the button offers the first of them', function () {
+        t.contains(el.pgcChosen.textContent, 'Chosen 1 of 2', 'the default, of two');
+        t.eq(allBtn().textContent, 'Choose first 1', 'three unchosen, room for one');
+    });
+    t.test('at the limit the other boxes are disabled and the button is gone', function () {
+        api.setChosen('CHM13#0', true);
+        t.eq(api.selectedTargets().sort().join(','), 'CHM13#0,GRCh38#0', 'two chosen');
+        var off = inputs().filter(function (n) { return n.disabled; })
+            .map(function (n) { return n.getAttribute('data-hap'); });
+        t.eq(off.join(','), 'HG00097#2,HG01234#2', 'the unchosen ones cannot be ticked');
+        t.ok(!allBtn(), 'no Choose button with no room');
+    });
+    t.test('one more is not taken, and letting one go makes room again', function () {
+        api.setChosen('HG00097#2', true);
+        t.eq(api.selectedTargets().length, 2, 'still two');
+        api.setChosen('CHM13#0', false);
+        api.setChosen('HG00097#2', true);
+        t.eq(api.selectedTargets().sort().join(','), 'GRCh38#0,HG00097#2', 'swapped');
+    });
+    t.test('more than the limit is refused before anything is sent', function () {
+        el.pgcPos.value = 'CM094066.1:1-100';
+        el.pgcTargets.children.forEach(function (o) { o.selected = true; });
+        var before = capped.calls.length;
+        el.pgcSubmit.dispatch('click');
+        t.eq(capped.calls.length, before, 'no request');
+        t.contains(el.pgcStatus.textContent, 'at most 2', 'and the page says why');
+    });
+}, 0);
+
 t.suite('ancestry plot');
 t.test('the plot is offered for the HPRC regions, with no ancestry read until it opens', function () {
     var c = startPage();
@@ -646,7 +683,7 @@ setTimeout(function () {
         t.ok(opts.length > 0, 'populated (' + opts.length + ')');
         t.notOk(opts.indexOf('HG00097 hap1') >= 0, 'source excluded');
         t.ok(opts.indexOf('CHM13') >= 0, 'others present');
-        t.contains(page.el.pgcTargetCount.textContent, 'source haplotype is excluded', 'explained');
+        t.eq(page.el.pgcTargetCount.textContent, '', 'no line under the picker when nothing narrowed it');
     });
 
     t.suite('the source, stated rather than chosen');
@@ -831,9 +868,8 @@ setTimeout(function () {
 
     t.suite('more targets than one request carries');
 
-    t.test('the chosen line states how many are chosen, and no limit', function () {
-        t.contains(page.el.pgcChosen.textContent, 'Chosen 1', 'running count');
-        t.notOk(/ of \d/.test(page.el.pgcChosen.textContent), 'no cap to state');
+    t.test('the chosen line states how many are chosen, of how many', function () {
+        t.contains(page.el.pgcChosen.textContent, 'Chosen 1 of 50', 'running count and the most');
     });
 
     t.test('a longer list goes as several requests, none over the per-request size', function () {
@@ -953,7 +989,7 @@ setTimeout(function () {
                         return o.textContent; });
                     t.deepEq(opts.sort(), ['CHM13', 'HG01234 hap2'],
                              'narrowed, and shown by their readable names');
-                    t.contains(reach.el.pgcTargetCount.textContent, 'containing this region',
+                    t.contains(reach.el.pgcTargetCount.textContent, 'have this region',
                                'count explains the filter');
                 });
 
@@ -967,8 +1003,7 @@ setTimeout(function () {
                     reach.el.pgcReachableOnly.checked = false;
                     reach.el.pgcReachableOnly.dispatch('change');
                     t.ok(reach.el.pgcTargets.children.length > 2, 'full list back');
-                    t.notOk(/contain this region/.test(reach.el.pgcTargetCount.textContent),
-                            'filter note cleared');
+                    t.eq(reach.el.pgcTargetCount.textContent, '', 'filter note cleared');
                 });
 
                 t.test('ticking it again does not ask the graph twice', function () {
@@ -1129,8 +1164,8 @@ setTimeout(function () {
                             t.contains(labels[0], 'CHM13', 'best first');
                             t.contains(labels[0], '99.1%', 'with its score');
                             t.contains(labels[1], 'HG01234 hap2', 'then the weaker match');
-                            t.contains(scored.el.pgcTargetCount.textContent, 'best first',
-                                       'count line says so');
+                            t.contains(scored.el.pgcHaps.textContent, 'best first',
+                                       'the pane says so');
                         });
 
                         t.test('the value submitted is the bare name, not the label', function () {

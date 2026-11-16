@@ -505,7 +505,8 @@
     .pgcStatPanel { border-right:0; border-bottom:1px solid var(--lineSoft); } }
 .pgcStatPanel { padding:12px 18px 14px; border-right:1px solid var(--lineSoft); min-width:0; }
 .pgcStatPanel:last-child { border-right:0; }
-.pgcStatPanel h3 { margin:0 0 10px; font-size:13px; font-weight:700; color:var(--muted); }
+.pgcStatPanel h3 { margin:0 0 12px; padding-bottom:6px; font-size:16px; font-weight:700;
+    color:var(--ink); border-bottom:2px solid var(--section); }
 .pgcStatText { font-size:13px; color:var(--ink); line-height:1.6; margin-top:6px;
     font-variant-numeric:tabular-nums; }
 .pgcPick2 { cursor:pointer; }
