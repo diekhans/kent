@@ -849,6 +849,18 @@ else
             "$CGI" 2>&1)
     }
 
+    # The sequence track is written into a session of this request's own, and
+    # both links name it.  Left to the user's cookie, a second click or a second
+    # tab changed the assembly before the browser page opened, and the browser
+    # then dropped the sequence.
+    AT_OK='{"db":"hg38","contig":"chr1","name":"q","sequence":"ACGTACGT","cigar":"8M","start":11000,"strand":"+"}'
+    out=$(cgi_box "$QCONF" "cmd=alignTrack&payload=$(enc "$AT_OK")")
+    check_contains "alignTrack: the track is written" "$out" '"status":"ok"'
+    ATSID=$(printf '%s' "$out" | grep -o '"hgsid":"[0-9]*_[A-Za-z0-9]*"' | cut -d'"' -f4)
+    check_contains "... into a session the answer names" "$out" '"hgsid":"'
+    check_contains "... and the browser link opens that session" "$out" "\"url\":\"hgTracks?hgsid=$ATSID&db=hg38&position=chr1"
+    check_contains "... as does the alignment link" "$out" "\"details\":\"hgc?hgsid=$ATSID&"
+
     # hubQuickLift-<db> names the hub hgConvert's quickLift attached for this
     # user.  We ask the same library for the source's stanzas, and used to empty
     # that file first.

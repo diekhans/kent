@@ -3732,20 +3732,30 @@ if (dropLifts)
 /* Name the track for this tool rather than leaving hgBlat's label on it. */
 cartSetString(cart, "ssShortLabel", "PanView Seq");
 cartSetString(cart, "ssLongLabel", "Your Sequence from PanView");
-dyStringPrintf(url, "hgTracks?db=%s&position=%s",
-               cgiEncode(viewDb), cgiEncode(pos));
+/* The link names this request's own session.  The page sends no hgsid, so
+ * this request began a new one, and db, position and ss above are in it and
+ * nowhere else that matters.  It used to be left to the user's cookie to carry
+ * them to the browser page, and the cookie's copy is whatever request of this
+ * user finished last: a second click, or a second tab, between this answer and
+ * the page opening, and the browser found another assembly there, took that
+ * for a change of database and threw the sequence away. */
+char *sid = cartSessionId(cart);
+dyStringPrintf(url, "hgTracks?hgsid=%s&db=%s&position=%s",
+               sid, cgiEncode(viewDb), cgiEncode(pos));
 /* The alignment details page, the same one hgBlat's "details" link opens:
  * hgc's htcUserAli takes the psl, the fasta and the query name in "i". */
 struct dyString *details = dyStringNew(700);
 dyStringPrintf(details,
-               "hgc?o=%d&g=htcUserAli&i=%s+%s+%s&c=%s&l=%d&r=%d&db=%s",
-               tStart, cgiEncode(pslTn.forCgi), cgiEncode(faTn.forCgi),
+               "hgc?hgsid=%s&o=%d&g=htcUserAli&i=%s+%s+%s&c=%s&l=%d&r=%d&db=%s",
+               sid, tStart, cgiEncode(pslTn.forCgi), cgiEncode(faTn.forCgi),
                cgiEncode(name), cgiEncode(viewChrom), tStart, tEnd,
                cgiEncode(viewDb));
 struct dyString *out = dyStringNew(700);
+/* "hgsid" is for the request that follows, cmd=refAnnot, which has to add its
+ * hub to this same session. */
 dyStringPrintf(out, "{\"status\":\"ok\",\"url\":\"%s\","
-                    "\"details\":\"%s\"}",
-               jsonStringEscape(url->string), jsonStringEscape(details->string));
+                    "\"details\":\"%s\",\"hgsid\":\"%s\"}",
+               jsonStringEscape(url->string), jsonStringEscape(details->string), sid);
 emitJson(out->string);
 dyStringFree(&out);
 dyStringFree(&details);

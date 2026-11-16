@@ -535,6 +535,30 @@ t.test('the opened URL keeps its genome and position and gains the hubs', functi
     t.eq(R.pgrQueryParam('hgTracks?db=x&position=CM1.1%3A1-9', 'position'), 'CM1.1:1-9', 'position read back');
     t.eq(R.pgrJoinUrl('a?db=x', 'b?db=y&position=z'), 'a?db=x', 'nothing to add');
 });
+t.test('each opening has a session of its own, named by the server and passed on', function () {
+    // The page's session is not sent: the server starts one for this opening.
+    // Shared, a second click changed the assembly under the first, and the
+    // browser then threw the sequence track away.
+    var sent = [];
+    var x = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+        sent.push(opts.body);
+        return Promise.resolve({ ok: true, json: function () {
+            return Promise.resolve({ status: 'ok', url: 'hgTracks?hgsid=77_new&db=d&position=p',
+                                     details: 'hgc?hgsid=77_new', hgsid: '77_new' }); } });
+    } });
+    x.pangenomeConfig = { hgsid: '11_page' };
+    x.pgrArm(row(), true);
+    t.contains(sent[0], 'cmd=alignTrack', 'the track is asked for');
+    t.notOk(/hgsid/.test(sent[0]), 'without the page\'s session');
+    x.pgrRefAnnot(row(), { hap: 'CHM13#0', label: 'CHM13' }, 'CM1.1:1-9', '77_new');
+    t.contains(sent[1], 'cmd=refAnnot', 'the annotations are asked for');
+    t.contains(sent[1], 'hgsid=77_new', 'in the session the track was written into');
+    t.notOk(/11_page/.test(sent[1]), 'not the page\'s');
+    var u = x.pgrJoinUrl('hgTracks?hgsid=77_new&db=hub_7_GCA_1.1&position=CM1.1%3A1-9',
+                         'hgTracks?hgsid=99_other&db=GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.5=1');
+    t.eq(u, 'hgTracks?hgsid=77_new&db=hub_7_GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.5=1',
+         'the opened link keeps that session');
+});
 t.test('the strip offers each reference and none, the current one selected', function () {
     var x = annotPage({}, 'CHM13#0');
     var h = x.R.pgrAnnotControl();

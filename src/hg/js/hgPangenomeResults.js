@@ -600,9 +600,11 @@ function pgrArm(row, opening) {
             return { contig: r.contig, start: r.start, strand: r.strand, cigar: r.cigar };
         }) : []
     };
+    // No hgsid: the server starts a session for this one opening and names it
+    // in the links it answers with.  Sharing this page's session, or leaving
+    // it to the cookie, let a second click or a second tab change the
+    // assembly under the first, and the browser then drops the sequence.
     var body = { cmd: "alignTrack", payload: JSON.stringify(payload) };
-    var hgsid = pgrCfg().hgsid;
-    if (hgsid) { body.hgsid = hgsid; }
     return fetch(pgrSelf, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded",
@@ -727,11 +729,13 @@ function pgrAnnotFor(row) {
     return pgrHapKey(row.hap) === pgrHapKey(ref.hap) ? null : ref;
 }
 
-function pgrRefAnnot(row, ref, position) {
+// "hgsid" is the session the sequence track was just written into (pgrArm's
+// answer names it): the annotations have to be attached to that same one.
+function pgrRefAnnot(row, ref, position, hgsid) {
     var payload = { db: row.db, path: row.hap + "#" + row.contig, start: row.start,
                     end: row.end, ref: ref.hap, position: position };
     var body = { cmd: "refAnnot", payload: JSON.stringify(payload) };
-    var hgsid = pgrCfg().hgsid;
+    hgsid = hgsid || pgrCfg().hgsid;
     if (hgsid) { body.hgsid = hgsid; }
     return fetch(pgrSelf, {
         method: "POST",
@@ -753,7 +757,7 @@ function pgrJoinUrl(armedUrl, annotUrl) {
     var q = String(annotUrl).split("?")[1] || "";
     var extra = q.split("&").filter(function (kv) {
         var k = kv.split("=")[0];
-        return kv && k !== "db" && k !== "position";
+        return kv && k !== "db" && k !== "position" && k !== "hgsid";
     });
     return extra.length ? armedUrl + "&" + extra.join("&") : armedUrl;
 }
@@ -800,7 +804,7 @@ function pgrAct(row, what, link) {
         if (what === "details") { return resp.details; }
         if (!ref) { return resp.url; }
         if (busy) { link.innerHTML = "adding " + pgrEsc(ref.label) + " annotations&#8230;"; }
-        return pgrRefAnnot(row, ref, pgrQueryParam(resp.url, "position"))
+        return pgrRefAnnot(row, ref, pgrQueryParam(resp.url, "position"), resp.hgsid)
             .then(function (annot) { return pgrJoinUrl(resp.url, annot.url); })
             .catch(function (err) {
                 // Opening anyway would hide why the tracks are missing, so stay
