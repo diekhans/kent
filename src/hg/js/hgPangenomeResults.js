@@ -944,8 +944,8 @@ var pgrBatchErrs = [];
 // goes out when a pending row comes onto the page being shown, however it got
 // there: at once when the reader turns to another page - Next, Previous, a
 // page number, or more rows a page (pgrFillPage) - and after a short pause
-// when a search, a sort or a filter brings one up (pgrFillSoon).  With
-// pangenome.resultsPlaceAllAtLoad on it
+// when a search, a sort or a filter brings one up (pgrFillSoon).  Where the
+// CGI is built with PG_RESULTS_PLACE_ALL_AT_LOAD it
 // goes out instead as soon as the first table is up (pgrPlaceRest), one hit at
 // a time.
 

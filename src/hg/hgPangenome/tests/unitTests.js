@@ -283,7 +283,7 @@ t.test('sequences that fit one by one may still be too long together', function 
 });
 
 t.test('with the default limits, ten sequences of full length fit', function () {
-    // pangenome.maxSequences 10 x maxSeqLen 100,000 inside maxRequestBytes 1,040,000
+    // pangenome.maxSequences 10 x maxSeqLen 100,000 inside PG_MAX_REQUEST_BYTES 1,040,000
     var c = loader.load();
     c.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 1040000 };
     var seq = new Array(25001).join('ACGT');

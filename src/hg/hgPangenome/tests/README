@@ -2,7 +2,7 @@ hgPangenome test suite
 ======================
 
 Tests for PanView, the pangenome mapping tool: the browser client (js/hgPangenome.js)
-and the CGI proxy (hgPangenome.c).  Layered so that everything except the
+and the CGI (hgPangenome.c and the files beside it).  Layered so that everything except the
 end-to-end layer runs with no middleware and no browser.
 
 Run it:
@@ -64,6 +64,7 @@ mockMiddleware.py
                 Stand-in middleware for Layer 2: configurable status/body/delay,
                 and records every request (method, path, headers, body) as JSON
                 lines so tests can assert what the CGI actually sent upstream.
+                --body-file serves a body too long for a command line.
 proxyTests.sh   LAYER 2: CGI proxy tests.
 runTests.sh     Runs the layers and prints one result line for each.
 makefile        Standard kent entry point: make test / testWithDb /
@@ -82,18 +83,26 @@ For a new HPRC release, add its index CSV beside the script and point
 DEFAULT_SRC (or the command line) at it.
 
 
-What Layer 2 covers (83 checks)
--------------------------------
+What Layer 2 covers
+-------------------
 Runs the compiled CGI as a real CGI (POST with a urlencoded body on stdin, GET
 with QUERY_STRING) against mockMiddleware.py.
 
-input caps       51 rejected / 50 accepted (boundary); over-long sequence
-                 rejected and one exactly at the limit accepted; non-ACGTN and
+Most limits are fixed values in ../hgPangenome.h and no hg.conf reaches them.
+The checks read them from that file - limit PG_MAX_LIFT_SPAN - and are made
+at the values that ship: one past each limit refused, exactly at it accepted.
+The two that are settings, pangenome.maxSequences and pangenome.maxSeqLen, are
+tested at their defaults, read from ../hgPangenome.c, and again set lower.
+
+input caps       one sequence too many rejected / as many as the limit
+                 accepted (boundary); over-long sequence rejected and one
+                 exactly at the limit accepted; the most sequences at the
+                 greatest length fit one request; non-ACGTN and
                  RNA "U" rejected; lower case accepted; over-size body
-                 rejected; malformed JSON rejected without aborting the CGI;
-                 missing 'sequences', empty array, entry without a sequence,
-                 empty sequence.  Each rejection also asserts the request was
-                 NOT forwarded upstream.
+                 rejected, as JSON; malformed JSON rejected without aborting
+                 the CGI; missing 'sequences', empty array, entry without a
+                 sequence, empty sequence.  Each rejection also asserts the
+                 request was NOT forwarded upstream.
 request shaping  forwarded once, as POST, to /api/v1/map, with
                  Content-Type: application/json, payload byte-for-byte
                  identical, Accept and User-Agent set; poll forwarded as GET to
@@ -112,8 +121,9 @@ error mapping    400/401/403/429/500/503 surfaced as an error envelope naming
 bot delay        with the bottleneck server pointed at a dead port, cmd=map
                  consults it (fails closed) while cmd=poll does not and still
                  works - i.e. submissions are rate-limited, polling is exempt.
-non-API paths    an unknown cmd neither forwards upstream nor emits an API
-                 error envelope.
+commands        every command the page scripts send is one the CGI knows;
+                 an unknown cmd is not forwarded and is answered with a JSON
+                 error that names it.
 
 Isolation: the test hg.conf files are standalone (they do NOT include the site
 hg.conf), so Layer 2 never touches the shared bottleneck server, MySQL, or the

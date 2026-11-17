@@ -97,13 +97,20 @@ mk_conf() {                          # mk_conf <file> [extra lines...]
 conf_default() {
     mk_conf "$TMP/hg.conf" \
         "pangenome.apiBase=http://127.0.0.1:$PORT" \
-        "pangenome.maxSequences=50" \
-        "pangenome.maxSeqLen=100" \
-        "pangenome.maxRequestBytes=5000" \
-        "pangenome.maxLiftSpan=10000000" \
-        "pangenome.maxChosenTargets=10" \
         "pangenome.timeoutSecs=10"
     echo "$TMP/hg.conf"
+}
+
+# A limit, read from the header the CGI is built from.  The limits are fixed
+# values and no hg.conf reaches them, so the checks below are made at the
+# values that ship, wherever those are set.
+limit() {                            # limit <PG_NAME>
+    awk -v n="$1" '$1 == "#define" && $2 == n { print $3; exit }' ../hgPangenome.h
+}
+
+# The default of a setting that is a number, read from where the CGI reads it.
+setting_default() {                  # setting_default <pangenome.name>
+    grep -oE 'cfgOptionDefault\("'"$1"'", "[0-9]+"\)' ../hgPangenome.c | head -1 | grep -oE '"[0-9]+"' | tr -d '"'
 }
 
 # Invoke the CGI as a real browser POST (urlencoded body on stdin).
@@ -149,6 +156,24 @@ print("cmd=" + os.environ["BODY_CMD"] + "&payload=" + urllib.parse.quote(os.envi
         REQUEST_METHOD=POST CONTENT_TYPE=application/x-www-form-urlencoded \
         CONTENT_LENGTH=${#body} \
         "$CGI" 2>&1
+}
+
+# POST a payload too long for a shell variable to carry.  The payload is the
+# value of a python expression, in which seqs(n, length) is a mapping request
+# of n sequences of that length.
+cgi_post_big() {                     # cgi_post_big <conf> <cmd> <python expression>
+    BODY_CMD="$2" BODY_EXPR="$3" BODY_OUT="$TMP/body.txt" python3 -c '
+import json, os, urllib.parse
+def seqs(n, length):
+    return json.dumps({"sequences": [{"name": "s%d" % i, "sequence": "A" * length} for i in range(n)],
+                       "options": {"max_multimaps": 1, "surject": True, "surject_target": None}})
+payload = eval(os.environ["BODY_EXPR"])
+with open(os.environ["BODY_OUT"], "w") as fh:
+    fh.write("cmd=" + os.environ["BODY_CMD"] + "&payload=" + urllib.parse.quote(payload))'
+    env -i HGDB_CONF="$1" REMOTE_ADDR=127.0.0.1 \
+        REQUEST_METHOD=POST CONTENT_TYPE=application/x-www-form-urlencoded \
+        CONTENT_LENGTH="$(wc -c < "$TMP/body.txt" | tr -d ' ')" \
+        "$CGI" < "$TMP/body.txt" 2>&1
 }
 
 # Invoke the CGI as a real browser GET (QUERY_STRING).
@@ -224,26 +249,60 @@ CONF=$(conf_default)
 # =================================================== A. server-side input caps
 section "server-side input caps (must be enforced here, not just in the browser)"
 
+MAXSEQ=$(setting_default pangenome.maxSequences)
+MAXLEN=$(setting_default pangenome.maxSeqLen)
+MAXBYTES=$(limit PG_MAX_REQUEST_BYTES)
+MAXSPAN=$(limit PG_MAX_LIFT_SPAN)
+MAXTGT=$(limit PG_MAX_CHOSEN_TARGETS)
+MAXANSWER=$(limit PG_MAX_LIFT_ALL_BYTES)
+MAXBLOCKS=$(limit PG_MAX_BLOCKS)
+case "$MAXSEQ$MAXLEN$MAXBYTES$MAXSPAN$MAXTGT$MAXANSWER$MAXBLOCKS" in
+    *[!0-9]*|"") check "the limits are read from hgPangenome.h" 1 ;;
+    *) [ -n "$MAXSEQ" ] && [ -n "$MAXLEN" ] && [ -n "$MAXBYTES" ] && [ -n "$MAXSPAN" ] && \
+       [ -n "$MAXTGT" ] && [ -n "$MAXANSWER" ] && [ -n "$MAXBLOCKS" ]
+       check "the limits are read from hgPangenome.h" $? ;;
+esac
+
+# How many sequences and how long are settings, so that a server can lower
+# them without a rebuild.
+mk_conf "$TMP/fewer.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
+                          "pangenome.maxSequences=3" "pangenome.maxSeqLen=50"
 : > "$REC"
-out=$(cgi_post "$CONF" "$(payload_n 51)")
-check_contains "51 sequences rejected with the limit" "$out" "too many sequences: 51 (limit is 50)"
-check_eq       "51 sequences never reached the middleware" "$(mock_count)" "0"
+out=$(cgi_post "$TMP/fewer.conf" "$(payload_n 4)")
+check_contains "maxSequences set lower: one too many refused" "$out" "too many sequences: 4 (limit is 3)"
+out=$(cgi_post "$TMP/fewer.conf" "$(payload_n 3)")
+check_contains "maxSequences set lower: as many as it says accepted" "$out" "job_id"
+out=$(cgi_post "$TMP/fewer.conf" "$(payload_n 1 "$(python3 -c 'print("A" * 51)')")")
+check_contains "maxSeqLen set lower: one base too many refused" "$out" "(limit 50)"
+out=$(cgi_post "$TMP/fewer.conf" "$(payload_n 1 "$(python3 -c 'print("A" * 50)')")")
+check_contains "maxSeqLen set lower: exactly as long accepted" "$out" "job_id"
+check_eq       "... and only the two accepted requests were forwarded" "$(mock_count)" "2"
 
 : > "$REC"
-out=$(cgi_post "$CONF" "$(payload_n 50)")
-check_contains "50 sequences accepted (boundary)" "$out" "job_id"
-check_eq       "50 sequences forwarded once" "$(mock_count)" "1"
+out=$(cgi_post "$CONF" "$(payload_n $((MAXSEQ + 1)))")
+check_contains "one sequence too many rejected with the limit" "$out" \
+    "too many sequences: $((MAXSEQ + 1)) (limit is $MAXSEQ)"
+check_eq       "... and never reached the middleware" "$(mock_count)" "0"
 
 : > "$REC"
-long=$(python3 -c 'print("A"*101)')
-out=$(cgi_post "$CONF" "$(payload_n 1 "$long")")
-check_contains "over-long sequence rejected" "$out" "(limit 100)"
+out=$(cgi_post "$CONF" "$(payload_n "$MAXSEQ")")
+check_contains "as many sequences as the limit accepted (boundary)" "$out" "job_id"
+check_eq       "... and forwarded once" "$(mock_count)" "1"
+
+: > "$REC"
+out=$(cgi_post_big "$CONF" map "seqs(1, $((MAXLEN + 1)))")
+check_contains "over-long sequence rejected" "$out" "(limit $MAXLEN)"
 check_eq       "over-long sequence not forwarded" "$(mock_count)" "0"
 
 : > "$REC"
-exact=$(python3 -c 'print("A"*100)')
-out=$(cgi_post "$CONF" "$(payload_n 1 "$exact")")
+out=$(cgi_post_big "$CONF" map "seqs(1, $MAXLEN)")
 check_contains "sequence exactly at the length limit accepted" "$out" "job_id"
+
+# The three limits have to agree: the most sequences, each as long as one may
+# be, is a request the form lets through, so the size limit must hold it.
+: > "$REC"
+out=$(cgi_post_big "$CONF" map "seqs($MAXSEQ, $MAXLEN)")
+check_contains "the most sequences at the greatest length fit one request" "$out" "job_id"
 
 : > "$REC"
 out=$(cgi_post "$CONF" '{"sequences":[{"name":"r","sequence":"ACGTX"}],"options":{}}')
@@ -258,10 +317,12 @@ check_contains "lower-case acgtn accepted" "$out" "job_id"
 out=$(cgi_post "$CONF" '{"sequences":[{"name":"r","sequence":"ACGU"}],"options":{}}')
 check_contains "RNA (U) rejected" "$out" "only A,C,G,T,N allowed"
 
+# Ours must fire below cheapcgi's own 1 MB cap, which aborts with an HTML page
+# a JSON client can only report as "Unexpected token '<'".
 : > "$REC"
-big=$(payload_n 50 "$(python3 -c 'print("A"*100)')")
-out=$(cgi_post "$CONF" "$big")
+out=$(cgi_post_big "$CONF" map "seqs(1, $((MAXBYTES + 1000)))")
 check_contains "over-size request body rejected" "$out" "request too large"
+check_not_contains "... as JSON, not as an HTML page" "$out" "DOCTYPE"
 check_eq       "over-size body not forwarded" "$(mock_count)" "0"
 
 : > "$REC"
@@ -500,13 +561,22 @@ out=$(cgi_get "$TMP/bot.conf" "cmd=poll&job_id=job1")
 check_not_contains "cmd=poll does not consult the bottleneck server" "$out" "bottleneck"
 check_contains     "cmd=poll still works while bot check is unreachable" "$out" '"status": "done"'
 
-# =============================================== F. non-API paths untouched
-section "non-API requests do not enter the proxy"
+# =============================================== F. a command there is not
+section "a command that does not exist"
 
 : > "$REC"
 out=$(cgi_get "$CONF" "cmd=bogus&job_id=job1")
-check_eq           "unknown cmd is not forwarded upstream" "$(mock_count)" "0"
-check_not_contains "unknown cmd does not emit an API error envelope" "$out" '"status":"error"'
+check_eq       "unknown cmd is not forwarded upstream" "$(mock_count)" "0"
+check_contains "unknown cmd is answered in JSON, as every command is" "$out" "Content-Type: application/json"
+check_contains "... with an error that names it" "$out" "\"error\":\"unknown command 'bogus'\""
+
+# The commands are one table in hgPangenome.c.  The page scripts send exactly
+# those: none the CGI does not know, and none in the table that nothing sends.
+sent=$(grep -ohE '(pg\.post|postCmd)\("[A-Za-z]+"|cmd=[A-Za-z]+|cmd: "[A-Za-z]+"' ../../js/hgPangenome*.js \
+       | grep -oE '[A-Za-z]+"?$' | tr -d '"' | sort -u | tr '\n' ' ')
+known=$(grep -oE '^    \{"[A-Za-z]+"' ../hgPangenome.c | tr -d ' {"' | sort -u | tr '\n' ' ')
+check_eq "the scripts send exactly the commands in the table" "$sent" "$known"
+check_contains "... and the table was read: it has cmd=map" " $known" " map "
 
 
 # ======================================= G. coordinate translation (liftover)
@@ -552,12 +622,6 @@ check_eq       "with targets it asks for those, summarized, and never for blocks
 out=$(cgi_post_cmd "$CONF" liftoverAll '{"src":"HG00097#1","start":10,"end":20}')
 check_contains "liftoverAll checks the source path" "$out" "full contig path"
 check_eq       "liftoverAll bad source - not forwarded" "$(mock_count)" "0"
-# An answer past pangenome.maxLiftAllBytes is refused rather than passed on.
-mk_conf "$TMP/small.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
-                          "pangenome.maxLiftAllBytes=50"
-out=$(cgi_post_cmd "$TMP/small.conf" liftoverAll '{"src":"HG00097#1#CM094066.1","start":10,"end":20}')
-check_contains "an oversized answer is refused" "$out" "too large to show"
-check_contains "and comes back as our error" "$out" '"status":"error"'
 
 section "translation input validation (server-side, before forwarding)"
 
@@ -581,31 +645,29 @@ lift_reject "end must exceed start" \
     '{"src":"a#1#c","start":50,"end":50,"tgt":["chm13#0"]}' "greater than"
 lift_reject "negative start rejected" \
     '{"src":"a#1#c","start":-5,"end":10,"tgt":["chm13#0"]}' "negative"
-lift_reject "over-span rejected at the 10Mb cap" \
-    '{"src":"a#1#c","start":0,"end":10000001,"tgt":["chm13#0"]}' "limit 10000000"
+lift_reject "a region one base over the span limit rejected" \
+    "{\"src\":\"a#1#c\",\"start\":0,\"end\":$((MAXSPAN + 1)),\"tgt\":[\"chm13#0\"]}" "limit $MAXSPAN"
 lift_reject "empty tgt array rejected" \
     '{"src":"a#1#c","start":1,"end":2,"tgt":[]}' "'tgt' must be a list of haplotypes"
 # a reader may choose so many haplotypes and no more; past that the question is
 # about every haplotype, which is asked without a list
-many=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(11)]))')
-lift_reject "more than 10 targets rejected" \
-    "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$many}" \
-    "too many target haplotypes: 11 (limit is 10 per conversion)"
+names() { python3 -c 'import json, sys; print(json.dumps(["h%d#1" % i for i in range(int(sys.argv[1]))]))' "$1"; }
+lift_reject "one target too many rejected" \
+    "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$(names $((MAXTGT + 1)))}" \
+    "too many target haplotypes: $((MAXTGT + 1)) (limit is $MAXTGT per conversion)"
 
 : > "$REC"
-ten=$(python3 -c 'import json;print(json.dumps(["h%d#1" % i for i in range(10)]))')
-out=$(cgi_post_cmd "$CONF" liftoverAll "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$ten}")
-check_eq "exactly 10 targets accepted (boundary)" "$(mock_count)" "1"
+out=$(cgi_post_cmd "$CONF" liftoverAll "{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"tgt\":$(names "$MAXTGT")}")
+check_eq "as many targets as the limit accepted (boundary)" "$(mock_count)" "1"
 
-# Ours must fire below cheapcgi's own 1 MB cap, which aborts with an HTML page
-# a JSON client can only report as "Unexpected token '<'".
-mk_conf "$TMP/big.conf" "pangenome.apiBase=http://127.0.0.1:$PORT" \
-    "pangenome.maxRequestBytes=2000"
-big=$(python3 -c 'print("{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"pad\":\"" + "x"*4000 + "\"}")')
-out=$(cgi_post_cmd "$TMP/big.conf" liftoverAll "$big")
+# The size limit is one for every command, not only for a mapping.
+: > "$REC"
+out=$(cgi_post_big "$CONF" liftoverAll \
+    "'{\"src\":\"a#1#c\",\"start\":1,\"end\":2,\"pad\":\"' + 'x' * ($MAXBYTES + 1000) + '\"}'")
 check_contains "oversized payload rejected as JSON, not HTML" "$out" \
     "request too large"
 check_not_contains "oversized payload does not emit an HTML page" "$out" "DOCTYPE"
+check_eq       "oversized payload not forwarded" "$(mock_count)" "0"
 
 lift_reject "malformed JSON rejected without aborting" \
     '{"src":' "invalid JSON payload"
@@ -631,8 +693,8 @@ cgi_post_cmd "$CONF" surject '{"tgt":"CHM13#0","job_id":"job1","name":"r1"}' > /
 check_eq "surject: a haplotype name accepted" "$(mock_count)" "1"
 
 : > "$REC"
-out=$(cgi_post_cmd "$CONF" liftoverAll '{"src":"a#1#c","start":0,"end":10000000,"tgt":["chm13#0"]}')
-check_eq "exactly at the span cap is accepted" "$(mock_count)" "1"
+out=$(cgi_post_cmd "$CONF" liftoverAll "{\"src\":\"a#1#c\",\"start\":0,\"end\":$MAXSPAN,\"tgt\":[\"chm13#0\"]}")
+check_eq "a region exactly at the span limit is accepted" "$(mock_count)" "1"
 
 section "reachable-targets query (cmd=liftoverTargets)"
 
@@ -651,8 +713,8 @@ check_contains "src must still be a full contig path" "$out" "full contig path"
 check_eq       "not forwarded" "$(mock_count)" "0"
 
 : > "$REC"
-out=$(cgi_post_cmd "$CONF" liftoverTargets '{"src":"a#1#c","start":0,"end":10000001}')
-check_contains "span cap still enforced" "$out" "limit 10000000"
+out=$(cgi_post_cmd "$CONF" liftoverTargets "{\"src\":\"a#1#c\",\"start\":0,\"end\":$((MAXSPAN + 1))}")
+check_contains "span limit still enforced" "$out" "limit $MAXSPAN"
 check_eq       "not forwarded" "$(mock_count)" "0"
 
 : > "$REC"
@@ -694,6 +756,23 @@ check_eq "and not forwarded" "$(mock_count)" "0"
 out=$(cgi_post_cmd "$CONF" map \
   '{"sequences":[{"name":"a","sequence":"ACGT"}],"options":{"max_multimaps":3}}')
 check_eq "exactly the ceiling accepted (boundary)" "$(mock_count)" "1"
+
+section "an answer too long to show"
+
+# One region on every haplotype is about 1 kB a haplotype.  An answer past
+# PG_MAX_LIFT_ALL_BYTES is not read to its end and is not passed on.
+python3 -c 'import sys
+row = "{\"haplotype\":\"H#1\",\"pieces\":[],\"mapped_bp\":0}"
+sys.stdout.write("{\"summary\":[" + ",".join([row] * (int(sys.argv[1]) // len(row) + 1)) + "]}")' \
+    "$MAXANSWER" > "$TMP/longAnswer.json"
+start_mock --body-file "$TMP/longAnswer.json"
+mk_conf "$TMP/long.conf" "pangenome.apiBase=http://127.0.0.1:$PORT"
+out=$(cgi_post_cmd "$TMP/long.conf" liftoverAll '{"src":"HG00097#1#CM094066.1","start":10,"end":20}')
+check_contains "an answer past the limit is refused" "$out" "too large to show"
+check_contains "... and comes back as our error" "$out" '"status":"error"'
+check_eq       "... of a few hundred bytes" "$([ ${#out} -lt 600 ] && echo short)" "short"
+start_mock
+CONF=$(conf_default)
 
 # ------------------------------------------- commands that run in the cart
 #
@@ -1018,9 +1097,6 @@ else
         "$(chains_of "$(blk -5 100 20000 20105)")" "empty or out-of-range"
     check_contains "chain: no blocks at all is said plainly" \
         "$(chains_of "")" "returned no blocks"
-    { echo "include $QCONF"; echo "pangenome.maxBlocks=2"; } > "$TMP/fewBlocks.conf"
-    out=$(cgi_box "$TMP/fewBlocks.conf" "cmd=quickLift&payload=$(enc "$(ql_payload "$(blk 1 2 10 11),$(blk 3 4 12 13),$(blk 5 6 14 15)")")")
-    check_contains "chain: more blocks than the limit are refused" "$out" "too many blocks"
 
     # A hub file is kept from one conversion to the next, and trash is filed by
     # day: a hub from another day gets today's chain, which is not in its own
@@ -1063,6 +1139,19 @@ else
         check_contains "... and the session is still on its own assembly" "$dump" "db mm39"
     fi
     fi
+
+    # More blocks than PG_MAX_BLOCKS.  A request is too short to carry that
+    # many, so this is the graph server's own answer, fetched for the chain.
+    python3 -c 'import sys
+row = "{\"haplotype\":\"GRCh38#0#chr1\",\"source_start\":%d,\"source_end\":%d,\"target_start\":%d,\"target_end\":%d,\"strand\":\"+\"}"
+n = int(sys.argv[1]) + 1
+sys.stdout.write("{\"blocks\":[" + ",".join(row % (i, i + 1, i, i + 1) for i in range(0, 2 * n, 2)) + "]}")' \
+        "$MAXBLOCKS" > "$TMP/manyBlocks.json"
+    start_mock --body-file "$TMP/manyBlocks.json"
+    { echo "include $QCONF"
+      echo "pangenome.apiBase=http://127.0.0.1:$PORT"; } > "$TMP/manyBlocks.conf"
+    out=$(cgi_box "$TMP/manyBlocks.conf" "cmd=quickLift&payload=$(enc '{"srcDb":"hg38","tgtDb":"hg38","src":"GRCh38#0#chr1","srcHap":"GRCh38","srcStart":1000,"srcEnd":2000,"tgt":"GRCh38#0","position":"chr1:1-2","hideTracks":"off"}')")
+    check_contains "chain: more blocks than the limit are refused" "$out" "too many blocks"
 
     # a long error from the mapping server, met while fetching the blocks
     start_mock --status 500 --body "$LONG_ERR"

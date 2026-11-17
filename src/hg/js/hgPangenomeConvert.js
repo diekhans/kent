@@ -1198,7 +1198,7 @@ function initAll() {
 // PART 3 - FORM: the source, the haplotypes to convert to, Convert and Clear
 // =============================================================================
 
-var MAX_SPAN = 1000000;         // the server's cap (pangenome.maxLiftSpan), which it enforces too
+var MAX_SPAN = 1000000;         // the server's limit (PG_MAX_LIFT_SPAN), which it enforces too
 var MAX_CHOSEN = 50;           // haplotypes one conversion may be sent to; 0 for no limit
 
 // ---- Destination list -------------------------------------------------------

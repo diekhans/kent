@@ -15,6 +15,8 @@ Only the python3 standard library is used; nothing is installed.
   mockMiddleware.py --port 8795 --record /tmp/rec.jsonl
                     [--status 200] [--body '{"x":1}'] [--delay 0]
                     [--content-type application/json]
+                    [--body-file FILE]   the body, read from a file: for one
+                                         too long for a command line
                     [--redirect]         answer with a redirect to this same
                                          server's /redirected
 """
@@ -120,10 +122,14 @@ def main():
     p.add_argument('--record')
     p.add_argument('--status', type=int, default=200)
     p.add_argument('--body', default=None)
+    p.add_argument('--body-file', dest='body_file', default=None)
     p.add_argument('--delay', type=float, default=0)
     p.add_argument('--content-type', dest='content_type', default='application/json')
     p.add_argument('--redirect', action='store_true')
     ARGS = p.parse_args()
+    if ARGS.body_file:
+        with open(ARGS.body_file) as fh:
+            ARGS.body = fh.read()
     srv = HTTPServer(('127.0.0.1', ARGS.port), Handler)
     # tell the caller we are ready
     sys.stderr.write('mock middleware listening on %d\n' % ARGS.port)
