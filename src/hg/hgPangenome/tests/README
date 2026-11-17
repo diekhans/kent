@@ -19,9 +19,10 @@ A layer that cannot run - no node, no CGI built - is reported as NOT RUN and
 the suite result is INCOMPLETE, not PASS.  A JS test file that stops before
 printing its count is a failure.  "make help" lists the targets.
 
-Run just the unit layer:
+Run one file, or one class of the CGI tests:
 
-    node unitTests.js          # exit 0 = all passed
+    node unitTests.js                  # exit 0 = all passed
+    python3 cgiTests.py InputLimits    # needs the CGI: "make compile" in ..
 
 
 Why node and not the js/test JsTestDriver setup
@@ -65,7 +66,7 @@ mockMiddleware.py
                 and records every request (method, path, headers, body) as JSON
                 lines so tests can assert what the CGI actually sent upstream.
                 --body-file serves a body too long for a command line.
-proxyTests.sh   LAYER 2: CGI proxy tests.
+cgiTests.py     LAYER 2: the CGI, run as a real CGI against the mock.
 runTests.sh     Runs the layers and prints one result line for each.
 makefile        Standard kent entry point: make test / testWithDb /
                 updateAssemblies / help.
@@ -89,7 +90,7 @@ Runs the compiled CGI as a real CGI (POST with a urlencoded body on stdin, GET
 with QUERY_STRING) against mockMiddleware.py.
 
 Most limits are fixed values in ../hgPangenome.h and no hg.conf reaches them.
-The checks read them from that file - limit PG_MAX_LIFT_SPAN - and are made
+The checks read them from that file - limit("PG_MAX_LIFT_SPAN") - and are made
 at the values that ship: one past each limit refused, exactly at it accepted.
 The two that are settings, pangenome.maxSequences and pangenome.maxSeqLen, are
 tested at their defaults, read from ../hgPangenome.c, and again set lower.
@@ -124,6 +125,9 @@ bot delay        with the bottleneck server pointed at a dead port, cmd=map
 commands        every command the page scripts send is one the CGI knows;
                  an unknown cmd is not forwarded and is answered with a JSON
                  error that names it.
+
+Every request runs in a temporary directory laid out as cgi-bin is, so the
+CGI's ../trash is there too and nothing is left in the source tree.
 
 Isolation: the test hg.conf files are standalone (they do NOT include the site
 hg.conf), so Layer 2 never touches the shared bottleneck server, MySQL, or the

@@ -19,7 +19,7 @@
 set -u
 cd "$(dirname "$0")"
 
-NOT_RUN=77          # proxyTests.sh's "could not run"
+NOT_RUN=77          # cgiTests.py's "could not run"
 summary=""          # one line a layer, printed at the end
 failed=0
 notRun=0
@@ -67,23 +67,36 @@ runJs() {           # runJs <file> <layer name>
     rm -f "$out"
 }
 
+# One number out of a runner's closing lines: node prints "pass 37" after a
+# mark of its own, python "Ran 36 tests".
+figure() {          # figure <file> <word before or after the number>
+    sed -n "s/^.* $2 \([0-9][0-9]*\)$/\1/p; s/^Ran \([0-9][0-9]*\) $2.*$/\1/p; s/^\([0-9][0-9]*\) $2.*$/\1/p" "$1" | tail -1
+}
+
 runCgi() {
-    banner "CGI against a mock middleware (proxyTests.sh)"
-    local out status count
+    banner "CGI against a mock graph server (cgiTests.py)"
+    if ! python3 --version >/dev/null 2>&1; then
+        echo "NOT RUN: python3 not found"
+        note "CGI" "NOT RUN (python3 not found)"
+        notRun=1
+        return
+    fi
+    local out status tests checks
     out=$(mktemp "${TMPDIR:-/tmp}/pgTests.XXXXXX")
-    ./proxyTests.sh 2>&1 | tee "$out"
+    python3 cgiTests.py 2>&1 | tee "$out"
     status=${PIPESTATUS[0]}
-    count=$(sed -n 's/^ALL PASSED: \([0-9]*\)\/[0-9]*$/\1/p' "$out" | tail -1)
+    tests=$(figure "$out" test)
+    checks=$(figure "$out" checks)
     if [ "$status" -eq "$NOT_RUN" ]; then
         note "CGI" "NOT RUN ($(grep 'NOT RUN: ' "$out" | tail -1 | sed 's/.*NOT RUN: //'))"
         notRun=1
-    elif [ "$status" -ne 0 ] || [ -z "$count" ]; then
-        note "CGI" "FAIL ($(grep -c '^  FAIL ' "$out") failed)"
+    elif [ "$status" -ne 0 ] || [ -z "$tests" ]; then
+        note "CGI" "FAIL ($(grep -c '^FAIL: \|^ERROR: ' "$out") failed)"
         failed=1
     elif [ "${PG_DB_TESTS:-0}" = "1" ]; then
-        note "CGI" "pass  $count, the cart commands included"
+        note "CGI" "pass  $tests ($checks checks), the cart commands included"
     else
-        note "CGI" "pass  $count, the cart commands left out (make testWithDb)"
+        note "CGI" "pass  $tests ($checks checks), the cart commands left out (make testWithDb)"
     fi
     rm -f "$out"
 }

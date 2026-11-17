@@ -34,13 +34,13 @@ updateAssemblies - regenerate js/hgPangenomeAssemblies.js from the HPRC index, t
 Individual layers:\n\
   node unitTests.js     pure-function unit tests (Layer 1)\n\
   node commonTests.js   what the scripts share, and the scripts as shipped\n\
-  ./proxyTests.sh       CGI proxy tests against a mock middleware (Layer 2)\n\
+  python3 cgiTests.py   the CGI against a mock graph server (Layer 2)\n\
   node formTests.js     the PanView search form (Layer 3)\n\
   node resultsTests.js  results page: cells, row order, download\n\
   node convertTests.js  PanLift\n\
   node plotTests.js     the ancestry plot both tools share\n\
 \n\
-To test a CGI you built yourself:  PG_CGI=/path/to/hgPangenome ./proxyTests.sh\n"
+To test a CGI you built yourself:  PG_CGI=/path/to/hgPangenome python3 cgiTests.py\n"
 
 clean::
 	rm -rf output

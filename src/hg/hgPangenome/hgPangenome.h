@@ -15,7 +15,7 @@ extern struct cart *cart;
  *
  * Limits and defaults that are the same on every server.  To change one,
  * change it here and rebuild: nothing in hg.conf reaches them.  The tests read
- * the limits from this file (tests/proxyTests.sh), so they test the values
+ * the limits from this file (tests/cgiTests.py), so they test the values
  * that ship.  What a server does decide is in hg.conf, read by the functions
  * under "Settings" below. */
 
