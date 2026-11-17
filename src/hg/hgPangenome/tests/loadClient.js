@@ -62,6 +62,14 @@ function makeNode(tag) {
         set innerHTML(v) { this._text = String(v).replace(/<[^>]*>/g, ''); },
         get innerHTML() { return this.textContent; }
     };
+    var classes = function () { return node.className.split(/\s+/).filter(Boolean); };
+    node.classList = {
+        contains: function (c) { return classes().indexOf(c) >= 0; },
+        add: function (c) { if (!this.contains(c)) node.className = classes().concat([c]).join(' '); },
+        remove: function (c) {
+            node.className = classes().filter(function (x) { return x !== c; }).join(' ');
+        }
+    };
     return node;
 }
 
@@ -101,6 +109,7 @@ function body(name) {
  *   readyState: 'complete' (default) or 'loading'
  *   fetch:      a fetch stub function
  *   script:     which client to load (default 'hgPangenome.js')
+ *   text:       that script's text, for a test that runs an edited copy of it
  */
 function load(options) {
     options = options || {};
@@ -115,6 +124,7 @@ function load(options) {
             return Object.prototype.hasOwnProperty.call(byId, id) ? byId[id] : null;
         },
         createElement: makeNode,
+        createElementNS: function (ns, tag) { return makeNode(tag); },      // the page's SVG
         createTextNode: function (t) { var n = makeNode(); n._text = String(t); return n; },
         body: makeNode('body'),
         addEventListener: function (ev, fn) { (docListeners[ev] = docListeners[ev] || []).push(fn); }
@@ -191,7 +201,7 @@ function load(options) {
     vm.runInContext(source('hgPangenomeCommon.js'), sandbox, { filename: 'hgPangenomeCommon.js' });
 
     var clientScript = options.script || 'hgPangenome.js';
-    vm.runInContext(source(clientScript), sandbox, { filename: clientScript });
+    vm.runInContext(options.text || source(clientScript), sandbox, { filename: clientScript });
 
     // The CGI emits window.pangenomeConfig in an inline script AFTER the
     // <script src> tags, so set it here, then fire DOMContentLoaded.

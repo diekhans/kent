@@ -573,6 +573,143 @@ t.test('an assembly outside the pangenome has no haplotype', function () {
     t.isNull(pg.hapForDb(''), 'empty');
 });
 
+// ============================================================ the file's parts
+//
+// hgPangenomeConvert.js is in four parts - the basics, the result view, the
+// form, the start - and each may use only the parts above it.  That is what
+// lets the all-haplotypes page, which has no form, run the same result view.
+// These hold the file to it: a name the form declares must not turn up in the
+// result view, and the form may call only two of the result view's functions.
+
+var CONVERT_SRC = loader.source('hgPangenomeConvert.js');
+
+// [text before the first part, {title, text} for each part].
+function fileParts(src) {
+    var bits = src.split(/\/\/ =+\n\/\/ PART \d - ([^\n]*)\n\/\/ =+\n/);
+    var parts = [];
+    for (var i = 1; i < bits.length; i += 2) { parts.push({ title: bits[i], text: bits[i + 1] }); }
+    return { head: bits[0], parts: parts };
+}
+
+// The text with its comments, strings and regular expressions taken out, so
+// that a name is found only where the code uses it.
+function codeOnly(src) {
+    var out = '', i = 0, n = src.length, last = '';
+    while (i < n) {
+        var c = src[i], d = src[i + 1];
+        if (c === '/' && d === '/') { while (i < n && src[i] !== '\n') { i++; } continue; }
+        if (c === '/' && d === '*') { i = src.indexOf('*/', i + 2) + 2; continue; }
+        if (c === '"' || c === "'") {
+            i++;
+            while (i < n && src[i] !== c) { i += (src[i] === '\\') ? 2 : 1; }
+            i++; out += '""'; last = '"';
+            continue;
+        }
+        if (c === '/' && (last === '' || '(,=:[!&|?{};'.indexOf(last) >= 0 || /\breturn\s*$/.test(out))) {
+            var inClass = false;
+            i++;
+            while (i < n && (src[i] !== '/' || inClass)) {
+                if (src[i] === '\\') { i += 2; continue; }
+                if (src[i] === '[') { inClass = true; } else if (src[i] === ']') { inClass = false; }
+                i++;
+            }
+            i++; out += '0'; last = '0';
+            continue;
+        }
+        out += c;
+        if (!/\s/.test(c)) { last = c; }
+        i++;
+    }
+    return out;
+}
+
+// The functions and variables a part declares at its top level.
+function declaredIn(text) {
+    var names = [], m, re = /^(?:function|var) ([\w$]+)/gm;
+    while ((m = re.exec(text)) !== null) { names.push(m[1]); }
+    return names;
+}
+
+// Is the name used in this code?  "x.name" is something else's property and
+// "{ name: 1 }" is a key; neither is a use.
+function usesName(code, name) {
+    var re = new RegExp('(^|[^.\\w$])' + name.replace(/\$/g, '\\$') + '(?![\\w$])', 'g'), m;
+    while ((m = re.exec(code)) !== null) {
+        var before = code.slice(0, m.index + m[1].length).replace(/\s+$/, '').slice(-1);
+        var after = code.slice(re.lastIndex).replace(/^\s+/, '').charAt(0);
+        if (!(after === ':' && (before === '{' || before === ','))) { return true; }
+    }
+    return false;
+}
+
+// The names declared in one part that another part's code uses.
+function borrowed(from, by) {
+    var code = codeOnly(by.text);
+    return declaredIn(from.text).filter(function (name) { return usesName(code, name); }).sort();
+}
+
+var FILE = fileParts(CONVERT_SRC);
+var BASICS = FILE.parts[0], VIEW = FILE.parts[1], FORM = FILE.parts[2], START = FILE.parts[3];
+
+t.suite("the file's four parts");
+
+t.test('the reading of the file is sound', function () {
+    t.eq(codeOnly('a = "x // y"; // b\nc = /[/"]q/.test(d) ? e / f : g; /* h */ i'),
+         'a = ""; \nc = 0.test(d) ? e / f : g;  i', 'comments, strings and patterns are taken out');
+    t.ok(usesName('f(name)', 'name'), 'a use');
+    t.notOk(usesName('x.name = 1; y = { name: 2, other: name2 };', 'name'), 'a property and a key are not');
+    t.ok(usesName('a ? name : b', 'name'), 'a choice is');
+});
+
+t.test('the four parts are there, in order', function () {
+    t.eq(FILE.parts.length, 4, 'four');
+    t.deepEq(FILE.parts.map(function (p) { return p.title.split(':')[0]; }),
+             ['BASICS', 'RESULT VIEW', 'FORM', 'START'], 'basics, result view, form, start');
+    t.ok(declaredIn(VIEW.text).indexOf('renderAll') >= 0, 'the result view draws the results');
+    t.ok(declaredIn(FORM.text).indexOf('convertNow') >= 0, 'the form converts');
+    t.eq(declaredIn(FILE.head).join(' '), 'pg el', 'nothing is declared above them but the helpers');
+});
+
+t.test('the basics use nothing below them', function () {
+    t.deepEq(borrowed(VIEW, BASICS), [], 'nothing of the result view');
+    t.deepEq(borrowed(FORM, BASICS), [], 'nothing of the form');
+    t.deepEq(borrowed(START, BASICS), [], 'nothing of the start');
+});
+
+t.test('the result view uses nothing of the form', function () {
+    t.deepEq(borrowed(FORM, VIEW), [], 'not a function, not a variable');
+    t.deepEq(borrowed(START, VIEW), [], 'nor the start');
+});
+
+t.test('the form reaches the result view through two functions', function () {
+    t.deepEq(borrowed(VIEW, FORM), ['liftAllUrl', 'renderAll'], 'the link to every haplotype, and the results');
+    t.deepEq(borrowed(START, FORM), [], 'and nothing of the start');
+});
+
+// The all-haplotypes page, run on a copy of the file with the form cut out of
+// it (and the list of names for the tests, which names the form's).
+var noFormPage = (function () {
+    var calls = [];
+    var c = loader.load({
+        text: FILE.head + BASICS.text + VIEW.text + START.text.replace(/\/\/ Test hook[\s\S]*?\n    \};\n/, ''),
+        script: 'hgPangenomeConvert.js',
+        ids: ['pgcAll', 'pgcStatus', 'pgcResults', 'sectTtl'],
+        readyState: 'loading',
+        fetch: function (url, o) {
+            calls.push({ url: String(url), opts: o });
+            var body = summ([['CHM13#0', [piece('chr9', 500, 600, '+', 0, 100)], 100],
+                             ['HG01234#2', [], 0]]);
+            return Promise.resolve({ ok: true, status: 200,
+                                     json: function () { return Promise.resolve(body); } });
+        }
+    });
+    c.window.pangenomeConfig = {};
+    c.window.pangenomeLiftAll = { src: 'HG00097#1#CM094066.1', start: 100, end: 200 };
+    c.fireReady();
+    c.calls = calls;
+    return c;
+}());
+
 // ================================================================ page wiring
 //
 // The destination list is fetched from the graph, so everything below runs
@@ -806,6 +943,9 @@ setTimeout(function () {
                 t.eq(p.srcStart, 100, 'source start sent');
                 t.eq(p.srcEnd, 200, 'source end sent');
                 t.eq(p.tgt, 'CHM13#0', 'and the single target the chain is for');
+                t.eq(p.srcDb, 'GCA_044165215.1', 'from the assembly the page was opened on');
+                t.eq(p.srcHap, 'HG00097 hap1', 'named as the page names it');
+                t.eq(p.tgtDb, 'hs1', 'to the target\'s own assembly');
                 // Posting the blocks put an unbounded array in the body and blew
                 // past cheapcgi's 1 MB cap on a big conversion, which aborts as
                 // HTML.  The server fetches its own.
@@ -1282,6 +1422,28 @@ setTimeout(function () {
                                 t.test('a wide region is not flagged as incomplete', function () {
                                     t.notOk(/incomplete|drop some positions/.test(text(wide)),
                                             'no caveat');
+                                });
+
+                                t.suite('the all-haplotypes page, with the form cut out of the file');
+
+                                t.test('it starts, and asks once for every haplotype', function () {
+                                    t.eq(noFormPage.calls.length, 1, 'one request');
+                                    var body = String(noFormPage.calls[0].opts.body);
+                                    t.contains(body, 'cmd=liftoverAll', 'the conversion');
+                                    t.deepEq(JSON.parse(decodeURIComponent(body.split('payload=')[1].split('&')[0])),
+                                             { src: 'HG00097#1#CM094066.1', start: 100, end: 200 },
+                                             'the region the page names, and no list of targets');
+                                });
+
+                                t.test('it draws where the region lands', function () {
+                                    t.eq(noFormPage.el.pgcStatus.textContent, '', 'with nothing gone wrong');
+                                    t.contains(text(noFormPage), 'CHM13', 'the haplotype that has it');
+                                    t.contains(text(noFormPage), 'HG01234', 'and the one that does not');
+                                    var a = links(noFormPage).filter(function (n) {
+                                        return (n.getAttribute('href') || '').indexOf('db=hs1') >= 0; });
+                                    t.eq(a.length, 1, 'one link to the place on CHM13');
+                                    t.contains(a.length ? a[0].getAttribute('href') : '',
+                                               'position=' + encodeURIComponent('chr9:501-600'), 'at its position');
                                 });
 
                                 process.exit(t.report());

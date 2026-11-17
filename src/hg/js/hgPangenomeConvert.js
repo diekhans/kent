@@ -1,22 +1,27 @@
-/* hgPangenomeConvert.js - client for PanLift, the coordinate-conversion page.
+/* hgPangenomeConvert.js - PanLift, the coordinate-conversion pages.
  *
- * Translates a region from one haplotype's coordinates to another's through the
- * pangenome graph, in the spirit of hgConvert's "In Other Genomes" - but between
- * any two haplotypes in the graph, not just where liftOver chains happen to
- * exist.
+ * Translates a region from one haplotype's coordinates to the others' through
+ * the pangenome graph, in the spirit of hgConvert's "In Other Genomes" - but
+ * between any haplotypes in the graph, not just where liftOver chains exist.
  *
- * Flow:
- *   - the source assembly and position are pre-filled from the cart by the CGI
- *     (so arriving from a track view carries the region over), and both stay
- *     editable here;
- *   - the destination list comes from the live graph  (cmd=haplotypes);
- *   - the translation is done by the middleware        (cmd=liftover);
- *   - every returned interval is rendered as a link into the Genome Browser on
- *     the target haplotype's own assembly.
+ * Two pages run this file: the form (page=convert), which converts to the
+ * haplotypes the reader chooses, and the all-haplotypes page (page=liftAll).
+ * Both show the answer in the same table, so the file is in four parts, each
+ * using only the parts above it:
  *
- * As with the mapping page, the browser only ever talks to this CGI; the
- * middleware URL and token stay server-side.  The helpers named pg.* are
- * hgPangenomeCommon.js; the ancestry plot is hgPangenomePclai.js.
+ *   1. Basics       naming a haplotype, positions, requests, the status line
+ *   2. Result view  the table, its summary panels, filters, links, download
+ *                   and plot; all it knows of a conversion is what renderAll()
+ *                   is given
+ *   3. Form         the source, the haplotype picker, Convert and Clear
+ *   4. Start        which of the two pages this is
+ *
+ * The form reaches the result view only through renderAll() and liftAllUrl();
+ * tests/convertTests.js holds the file to that.
+ *
+ * The browser only ever talks to this CGI; the graph server's address and
+ * token stay server-side.  The helpers named pg.* are hgPangenomeCommon.js;
+ * the ancestry plot is hgPangenomePclai.js.
  */
 /* global window, document, pangenomePclai */
 
@@ -26,9 +31,11 @@
 var pg = window.pangenomeCommon;
 var el = pg.el, clear = pg.clear, $ = pg.byId;
 
-var CFG = {};
-var MAX_SPAN = 1000000;         // the server's cap (pangenome.maxLiftSpan), which it enforces too
-var MAX_CHOSEN = 50;           // haplotypes one conversion may be sent to; 0 for no limit
+// =============================================================================
+// PART 1 - BASICS: used by the result view and by the form
+// =============================================================================
+
+var CFG = {};                  // window.pangenomeConfig, read when the page starts
 
 // Source assembly -> haplotype, i.e. the inverse of the generated HPRC table
 // (which maps "sample#phase" -> assembly).  Built once, lazily.
@@ -81,27 +88,15 @@ function prettyHap(name) {
 
 function hapLabel(name) { return prettyHap(name).label; }
 
-// ---- Position parsing -------------------------------------------------------
-
-// "chr10:19,114-19,137" (1-based inclusive, commas allowed) or "chr10" for a
-// whole contig.  Returns {contig, start, end} with start 0-based half-open, or
-// {error} explaining what is wrong.
-function parsePosition(text) {
-    var s = String(text == null ? "" : text).trim().replace(/,/g, "");
-    if (s === "") return { error: "enter a position, e.g. chr10:19114-19137" };
-    var m = s.match(/^([^\s:]+):(\d+)\s*-\s*(\d+)$/);
-    if (!m) {
-        if (/^[^\s:]+$/.test(s))
-            return { error: "add a range to " + s + ", e.g. " + s + ":1-1000" };
-        return { error: "could not read '" + text + "' as contig:start-end" };
-    }
-    var start1 = parseInt(m[2], 10), end1 = parseInt(m[3], 10);
-    if (start1 < 1) return { error: "start must be 1 or greater" };
-    if (end1 < start1) return { error: "end must not be before start" };
-    var span = end1 - start1 + 1;
-    if (span > MAX_SPAN)
-        return { error: "region is " + span + " bp; the limit is " + MAX_SPAN + " bp" };
-    return { contig: m[1], start: start1 - 1, end: end1 };   // 0-based half-open
+// The group a haplotype is listed under: the references first, then each
+// population by name, then the samples with no population given.
+function popGroupOf(hap) {
+    var lower = String(hap).toLowerCase();
+    if (lower === "grch38#0" || lower === "chm13#0")
+        return { key: "~ref", label: "Reference assemblies", rank: 0 };
+    var p = pg.population(hap);
+    if (!p) return { key: "~none", label: "No population given", rank: 2 };
+    return { key: p.code, label: p.desc + " (" + p.code + ")", rank: 1, desc: p.desc };
 }
 
 // Display a 0-based half-open interval the way the browser does.
@@ -118,42 +113,6 @@ function selfUrl() { return window.location.pathname; }
 // connects it, and none of them is ever reused or taken away.
 function postCmd(cmd, payload) {
     return pg.post(cmd, payload, CFG.hgsid).then(pg.jsonOrBody);
-}
-
-// Ask for a wider chain on the way out of the page.
-//
-// The chain the first request builds reaches a little either side of the
-// converted interval - enough to pan a few window-widths, not enough to roam.
-// Widening it costs the mapping server about a second per megabase, which is
-// not worth charging to every conversion, so it is asked for here instead:
-// once, at the moment the user actually follows the link.
-//
-// It has to be sendBeacon rather than fetch.  This runs immediately before
-// navigating away, and the browser cancels in-flight fetches when the page
-// goes; a beacon is guaranteed to be delivered.  That is also why the payload
-// leaves out the blocks - the server fetches its own, and beacons are size
-// limited.  Nothing waits for the reply, and the browser picks the new chain
-// up on the next pan without a reload.
-function requestWiderChain(base) {
-    /* typeof, not a plain test: where navigator is absent altogether naming it
-     * throws rather than reading as false, and this runs on the way out of the
-     * page, where an exception would take the navigation with it. */
-    if (typeof navigator === "undefined" || !navigator.sendBeacon ||
-        typeof Blob === "undefined")
-        return;
-    var lean = {};
-    Object.keys(base).forEach(function (k) {
-        if (k !== "blocks") lean[k] = base[k];
-    });
-    var fields = { cmd: "extendChain", payload: JSON.stringify(lean) };
-    if (CFG.hgsid)
-        fields.hgsid = CFG.hgsid;
-    try {
-        navigator.sendBeacon(selfUrl(), new Blob([pg.formEncode(fields)],
-            { type: "application/x-www-form-urlencoded" }));
-    } catch (e) {
-        /* Best effort: the narrower chain is already in place and works. */
-    }
 }
 
 function getCmd(qs) {
@@ -188,694 +147,17 @@ function showBusy(text) {
     ]));
 }
 
-// ---- Destination list -------------------------------------------------------
+// =============================================================================
+// PART 2 - RESULT VIEW: where a region lands, on both pages
+// =============================================================================
 
-var allHaplotypes = [];
-var hapExactByLower = null;
-var reachable = null;          // lower name -> coverage (or null), else not filtered
-var reachableScored = false;   // true when the server ranked them
-// What the graph last said for this source region.  Kept so that turning the
-// filter off and on again does not ask a second time; cleared whenever the
-// region changes, because then it is an answer to a different question.
-var reachableCache = null;
-var reachableCacheScored = false;
-var autoRan = false;           // the hand-off from hgConvert converts once
-var sourceIsExample = false;   // the position on screen is ours, not the user's
+// What the results on the page were converted from.  renderAll() sets both.
+var lastSource = null;         // {src, contig, start, end}
+var allSrcHap = null;          // its haplotype, "HG00097#1"
 
-// The graph's path names are case-sensitive ("CHM13#0", not "chm13#0"), but our
-// generated assembly table is keyed lower-case.  Map back to the graph's own
-// spelling before building a source path, or the middleware finds no paths.
-function canonicalHap(hap) {
-    if (!hap) return hap;
-    if (!hapExactByLower) {
-        hapExactByLower = Object.create(null);
-        allHaplotypes.forEach(function (h) {
-            hapExactByLower[String(h).toLowerCase()] = h;
-        });
-    }
-    return hapExactByLower[String(hap).toLowerCase()] || hap;
-}
-
-// Is this haplotype present in the loaded graph at all?  Only meaningful once
-// the list has arrived.
-function hapInGraph(hap) {
-    if (allHaplotypes.length === 0) return true;      // unknown yet; let the server judge
-    canonicalHap(hap);                                 // builds the index
-    return !!hapExactByLower[String(hap).toLowerCase()];
-}
-
-function loadHaplotypes() {
-    showBusy("Loading assemblies from the graph…");
-    return getCmd("cmd=haplotypes").then(function (resp) {
-        if (resp && resp.status === "error") throw new Error(resp.error || "server error");
-        allHaplotypes = (resp && resp.haplotypes) || [];
-        allHaplotypes.sort();
-        hapExactByLower = null;                        // rebuilt on next use
-        fillSources();
-        loadContigs();
-        fillTargets("");
-        preselectDefaultTarget();
-        fillTargets($("pgcFilter").value);      // so the picker shows the default
-        hideStatus();
-        // Arriving from hgConvert the user has already chosen a source, a
-        // position and a destination and pressed Submit once; make them press
-        // it again and the hand-off would just look broken.  Run it for them,
-        // but only once, and only when everything really did come through -
-        // never on a position this page supplied, because converting an example
-        // region under the heading the user asked for is worse than asking.
-        if (CFG.presetTarget && !autoRan && !sourceIsExample &&
-            selectedTargets().length > 0 && ($("pgcPos").value || "").trim() !== "") {
-            autoRan = true;
-            doConvert();
-        }
-    }).catch(function (err) {
-        showError("Could not load the assembly list: " + err.message, loadHaplotypes);
-    });
-}
-
-// ---- Populations -------------------------------------------------------------
-//
-// Each sample's population as the HPRC describes it - 1000 Genomes code and
-// descriptor, from hgPangenomeSamples.js - organises the target picker.
-// Super-populations are not used: the HPRC follows the NHGRI's guidelines for
-// referring to populations, which do not, and leaves them out of its metadata.
-//
-// The picker is two panes: the populations, with their counts, and the
-// haplotypes of the one picked, as checkboxes.  Above them, what has been
-// chosen, as chips.  The hidden #pgcTargets list underneath holds every
-// candidate and is what the rest of the page reads the choice from; the panes
-// only ever change which of its options are selected.
-
-var popFilter = null;          // the population the right pane shows, or null for all
-
-// The group a haplotype is listed under: the references first, then each
-// population by name, then the samples with no population given.
-function popGroupOf(hap) {
-    var lower = String(hap).toLowerCase();
-    if (lower === "grch38#0" || lower === "chm13#0")
-        return { key: "~ref", label: "Reference assemblies", rank: 0 };
-    var p = pg.population(hap);
-    if (!p) return { key: "~none", label: "No population given", rank: 2 };
-    return { key: p.code, label: p.desc + " (" + p.code + ")", rank: 1, desc: p.desc };
-}
-
-// Every option in the list, whether it sits under a group or not.
-function targetOptions(sel) {
-    var out = [];
-    if (!sel) return out;
-    Array.prototype.forEach.call(sel.children, function (c) {
-        if (c.tagName === "OPTGROUP")
-            Array.prototype.forEach.call(c.children, function (o) { out.push(o); });
-        else
-            out.push(c);
-    });
-    return out;
-}
-
-// The groups among some haplotypes, in display order, each with its members.
-function popGroups(list) {
-    var byKey = Object.create(null), groups = [];
-    list.forEach(function (h) {
-        var g = popGroupOf(h);
-        if (!byKey[g.key]) {
-            byKey[g.key] = { key: g.key, label: g.label, rank: g.rank, desc: g.desc || "", haps: [] };
-            groups.push(byKey[g.key]);
-        }
-        byKey[g.key].haps.push(h);
-    });
-    groups.sort(function (a, b) {
-        return (a.rank - b.rank) || a.desc.localeCompare(b.desc);
-    });
-    return groups;
-}
-
-// Does the search text match this haplotype, by its name or its population?
-function matchesSearch(h, f) {
-    if (!f) return true;
-    var g = popGroupOf(h);
-    return h.toLowerCase().indexOf(f) >= 0 || hapLabel(h).toLowerCase().indexOf(f) >= 0 ||
-           (g.rank === 1 && (g.key.toLowerCase().indexOf(f) >= 0 ||
-                             g.desc.toLowerCase().indexOf(f) >= 0));
-}
-
-// How many more haplotypes may be chosen.  Past MAX_CHOSEN the answer is a
-// question about every haplotype, which "View all haplotypes" is for.
-function chosenRoom(chosenCount) {
-    return MAX_CHOSEN > 0 ? Math.max(0, MAX_CHOSEN - chosenCount) : Infinity;
-}
-
-// Choose or let go of one haplotype, then draw the picker again.
-function setChosen(hap, on) {
-    if (on && chosenRoom(selectedTargets().length) < 1) on = false;
-    targetOptions($("pgcTargets")).forEach(function (o) {
-        if (o.value === hap) o.selected = !!on;
-    });
-    fillTargets($("pgcFilter") ? $("pgcFilter").value : "");
-}
-
-// The chips: what has been chosen, each with a way to take it back.
-function drawChosen(chosen) {
-    var box = $("pgcChosen");
-    if (!box) return;
-    clear(box);
-    box.appendChild(el("span", { class: "pgcChosenHead", text:
-        chosen.length ? "Chosen " + chosen.length + (MAX_CHOSEN > 0 ? " of " + MAX_CHOSEN : "")
-                      : (MAX_CHOSEN > 0 ? "Choose up to " + MAX_CHOSEN + " below" : "Choose below") }));
-    chosen.forEach(function (h) {
-        var p = pg.population(h);
-        var chip = el("span", { class: "pgcChip", title: p ? p.desc : "" }, [
-            el("span", { text: hapLabel(h) }),
-            p ? el("span", { class: "pgcChipPop", text: p.code }) : null,
-            el("button", { type: "button", class: "pgcChipX", "data-unchoose": h,
-                           "aria-label": "Remove " + hapLabel(h), text: "×" })
-        ]);
-        box.appendChild(chip);
-    });
-}
-
-// Left: the populations among the candidates the search allows, with how
-// many there are in each and how many of those are chosen.  "All" first.
-function drawPops(matches, chosenSet) {
-    var box = $("pgcPops");
-    if (!box) return;
-    var keep = box.querySelector ? box.querySelector(".pgcPopsList") : null;
-    var scroll = keep ? keep.scrollTop : 0;
-    clear(box);
-    var groups = popGroups(matches);
-    var npops = groups.filter(function (g) { return g.rank === 1; }).length;
-    box.appendChild(el("div", { class: "pgcPaneHead", text:
-        npops + (npops === 1 ? " population" : " populations") }));
-    var listBox = el("div", { class: "pgcPopsList" });
-    function row(key, label, code, n, picked) {
-        var on = (popFilter || "") === key;
-        var b = el("button", { type: "button", class: "pgcPop" + (on ? " on" : ""),
-                               "data-pop": key, "aria-pressed": on ? "true" : "false",
-                               title: label });
-        b.appendChild(el("span", { class: "pgcPopName", text: label }));
-        if (code) b.appendChild(el("span", { class: "pgcPopCode", text: code }));
-        if (picked) b.appendChild(el("span", { class: "pgcPopPicked", text: String(picked),
-                                               title: picked + " chosen" }));
-        b.appendChild(el("span", { class: "pgcPopN", text: String(n) }));
-        listBox.appendChild(b);
-    }
-    var allPicked = matches.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
-    row("", "All populations", "", matches.length, allPicked);
-    groups.forEach(function (g) {
-        var picked = g.haps.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
-        row(g.key, g.rank === 1 ? g.desc : g.label, g.rank === 1 ? g.key : "", g.haps.length, picked);
-    });
-    box.appendChild(listBox);
-    listBox.scrollTop = scroll;
-}
-
-// Right: the haplotypes of the population picked, as checkboxes, in the order
-// the list has them (alphabetical, or best first once ranked).
-function drawHaps(shown, chosenSet) {
-    var box = $("pgcHaps");
-    if (!box) return;
-    var keep = box.querySelector ? box.querySelector(".pgcHapsList") : null;
-    var scroll = keep ? keep.scrollTop : 0;
-    clear(box);
-    var g = popFilter ? popGroups(shown.length ? shown : []).filter(function (x) {
-        return x.key === popFilter; })[0] : null;
-    var title = popFilter ? (g ? g.label : "This population") : "All populations";
-    // Every one listed here, or none of them, in one click - or, when there
-    // is not room for them all, as many from the top of the list as there is
-    // room for.
-    var allOn = shown.length > 0 && shown.every(function (h) { return chosenSet[h.toLowerCase()]; });
-    var room = chosenRoom(Object.keys(chosenSet).length);
-    var unchosen = shown.filter(function (h) { return !chosenSet[h.toLowerCase()]; }).length;
-    var allText = allOn ? "Clear these"
-                : unchosen <= room ? "Choose all " + shown.length
-                : room > 0 ? "Choose first " + room : null;
-    box.appendChild(el("div", { class: "pgcPaneHead" }, [
-        el("span", { text: title }),
-        el("span", { class: "pgcPaneN", text: shown.length + (shown.length === 1 ? " haplotype" : " haplotypes") +
-            (reachableScored ? ", best first" : "") }),
-        (shown.length && allText) ? el("button", { type: "button", class: "pgcAllBtn",
-                                                   "data-all": allOn ? "off" : "on", text: allText }) : null
-    ]));
-    var listBox = el("div", { class: "pgcHapsList" });
-    if (!shown.length) {
-        listBox.appendChild(el("div", { class: "pgMuted pgcEmpty",
-            text: "No haplotype matches. Clear the search or pick another population." }));
-    }
-    shown.forEach(function (h) {
-        var on = !!chosenSet[h.toLowerCase()];
-        var id = "pgcHap_" + h.replace(/[^A-Za-z0-9]/g, "_");
-        var box2 = el("input", { type: "checkbox", id: id, "data-hap": h });
-        box2.checked = on;
-        if (!on && room < 1) {
-            box2.disabled = true;
-            box2.title = MAX_CHOSEN + " is the most. Remove one to choose another.";
-        }
-        var p = popFilter ? null : pg.population(h);
-        var cov = reachable ? reachable[h.toLowerCase()] : null;
-        var lab = el("label", { class: "pgcHap" + (on ? " on" : "") + (box2.disabled ? " dis" : ""),
-                                for: id }, [
-            box2,
-            el("span", { text: hapLabel(h) }),
-            p ? el("span", { class: "pgcHapPop", text: p.code, title: p.desc }) : null,
-            cov == null ? null : el("span", { class: "pgcHapCov", text: (Math.round(cov * 10) / 10) + "%" })
-        ]);
-        listBox.appendChild(lab);
-    });
-    box.appendChild(listBox);
-    listBox.scrollTop = scroll;
-}
-
-function fillTargets(filter) {
-    var sel = $("pgcTargets");
-    var chosen = selectedTargets();
-    var f = String(filter || "").trim().toLowerCase();
-    var srcHap = currentSourceHap();
-    clear(sel);
-    // The candidates: everything but the source, and with "only with this
-    // region" on, only those.  The hidden list holds all of them, so that a
-    // choice survives searching and moving between populations.
-    var candidates = allHaplotypes.filter(function (h) {
-        var lower = h.toLowerCase();
-        if (srcHap && lower === String(srcHap).toLowerCase()) return false; // no self-conversion
-        if (reachable && !(lower in reachable)) return false;
-        return true;
-    });
-    // With scores, the most relevant destinations come first; otherwise keep the
-    // alphabetical order the list arrived in.
-    if (reachableScored)
-        candidates.sort(function (a, b) {
-            var ca = reachable[a.toLowerCase()], cb = reachable[b.toLowerCase()];
-            ca = (ca == null ? -1 : ca); cb = (cb == null ? -1 : cb);
-            if (cb !== ca) return cb - ca;
-            return a.localeCompare(b);
-        });
-    candidates.forEach(function (h) {
-        var cov = reachable ? reachable[h.toLowerCase()] : null;
-        var o = el("option", { text: (cov == null) ? hapLabel(h)
-                                     : hapLabel(h) + "  (" + (Math.round(cov * 10) / 10) + "%)" });
-        sel.appendChild(o);
-        o.value = h;                       // the bare name is what gets submitted
-        o.selected = chosen.indexOf(h) >= 0;
-    });
-    var chosenNow = selectedTargets();
-    var chosenSet = Object.create(null);
-    chosenNow.forEach(function (h) { chosenSet[h.toLowerCase()] = true; });
-
-    // What the panes show: the candidates the search allows, and on the right
-    // only the population picked.  A population the search leaves empty is let go.
-    var matches = candidates.filter(function (h) { return matchesSearch(h, f); });
-    if (popFilter && !matches.some(function (h) { return popGroupOf(h).key === popFilter; }))
-        popFilter = null;
-    var shown = popFilter ? matches.filter(function (h) { return popGroupOf(h).key === popFilter; })
-                          : matches;
-    drawChosen(chosenNow);
-    drawPops(matches, chosenSet);
-    drawHaps(shown, chosenSet);
-
-    // One short line under the picker, and only when the list was narrowed:
-    // the pane's own heading counts what it shows.
-    $("pgcTargetCount").textContent = reachable ?
-        candidates.length + " of " + allHaplotypes.length + " haplotypes have this region" : "";
-}
-
-// Ask the graph which haplotypes this region exists on, and narrow the picker to
-// those.  Saves guessing among hundreds of haplotypes that may have no
-// equivalent region at all.
-// The reachability filter is one checkbox, so turning it on and off is one
-// function.  The answer is kept once fetched: it only depends on the source
-// region, so flipping the box back on does not ask again.
-function setToggleBusy(busy) {
-    var lab = $("pgcReachableOnly") && $("pgcReachableOnly").parentNode;
-    if (lab && lab.classList) {
-        if (busy) { lab.classList.add("pgcBusy"); }
-        else { lab.classList.remove("pgcBusy"); }
-    }
-    if ($("pgcReachableOnly")) { $("pgcReachableOnly").disabled = !!busy; }
-}
-
-function onReachableToggle() {
-    var box = $("pgcReachableOnly");
-    if (!box || !box.checked) { showAllHaplotypes(); return; }
-    if (reachableCache) {        // already asked for this region
-        reachable = reachableCache;
-        reachableScored = reachableCacheScored;
-        fillTargets($("pgcFilter").value);
-        hideStatus();
-        return;
-    }
-    showReachable();
-}
-
-function showReachable() {
-    whenContigs(askReachable);
-}
-
-function askReachable() {
-    var src = buildSource();
-    if (src.error) { showError(src.error); untick(); return; }
-    setToggleBusy(true);
-    showBusy("Asking which assemblies contain " +
-             fmtPos(src.contig, src.start, src.end) + "…");
-    var req = { src: src.src, start: src.start, end: src.end, scored: true };
-    // Very low scores are usually incidental repeat matches, so ask the server
-    // to drop them rather than filtering a long list here.
-    if (typeof CFG.minTargetCoverage === "number")
-        req.min_coverage = CFG.minTargetCoverage;
-    // Bound the reachability scan.  Without a cap it walks far more of the
-    // graph than the answer needs, which is both slow and where the false
-    // positives came from.
-    if (typeof CFG.maxTargetNodes === "number")
-        req.max_nodes = CFG.maxTargetNodes;
-    postCmd("liftoverTargets", req)
-        .then(function (resp) {
-            if (resp && resp.status === "error") throw new Error(resp.error || "server error");
-            // An answer with no list at all is not the same as an empty list:
-            // saying "no assembly contains this region" when the server never
-            // told us would be a confident wrong answer.
-            if (!resp || !Array.isArray(resp.haplotypes))
-                throw new Error("the mapping server returned no list of assemblies");
-            // Entries are plain names, or {haplotype, coverage, covered_bp} when
-            // the server ranked them.  Accept both.  Compare case-insensitively:
-            // this list and the haplotype list are produced separately, so do
-            // not assume they agree on spelling.
-            reachable = Object.create(null);
-            reachableScored = false;
-            ((resp && resp.haplotypes) || []).forEach(function (h) {
-                if (h && typeof h === "object") {
-                    reachable[String(h.haplotype).toLowerCase()] =
-                        typeof h.coverage === "number" ? h.coverage : null;
-                    if (typeof h.coverage === "number") reachableScored = true;
-                } else {
-                    reachable[String(h).toLowerCase()] = null;
-                }
-            });
-            reachableCache = reachable;
-            reachableCacheScored = reachableScored;
-            setToggleBusy(false);
-            fillTargets($("pgcFilter").value);
-            if (Object.keys(reachable).length === 0)
-                showError("No assembly in the graph contains this region.");
-            else
-                hideStatus();
-        })
-        .catch(function (err) {
-            setToggleBusy(false);
-            untick();
-            // Retry asks again; going through the toggle would not, the box
-            // having just been unticked.
-            showError("Could not check which assemblies contain this region: " +
-                      err.message, function () {
-                          if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = true; }
-                          showReachable();
-                      });
-        });
-}
-
-// The filter did not take, so the box must not claim it did.
-function untick() {
-    if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
-    reachable = null;
-    reachableScored = false;
-}
-
-function showAllHaplotypes() {
-    reachable = null;
-    reachableScored = false;
-    fillTargets($("pgcFilter").value);
-    hideStatus();
-}
-
-// Pre-select a sensible target so the page is one click from an answer.  Skips
-// any that is the source haplotype.
-function preselectDefaultTarget() {
-    // A destination chosen in hgConvert wins over the configured default: the
-    // user already said where they wanted to go.
-    // The SV page sends several, comma separated.
-    var src = String(currentSourceHap() || "").toLowerCase();
-    var want = String(CFG.presetTarget || CFG.defaultTarget || "").toLowerCase()
-        .split(",").map(function (w) { return w.trim(); })
-        .filter(function (w) { return w && w !== src; });
-    if (!want.length) return;
-    targetOptions($("pgcTargets")).forEach(function (o) {
-        if (want.indexOf(String(o.value || o.textContent).toLowerCase()) >= 0)
-            o.selected = true;
-    });
-}
-
-function selectedTargets() {
-    var out = [];
-    targetOptions($("pgcTargets")).forEach(function (o) {
-        // o.value is the bare haplotype name; the label may carry a percentage
-        if (o.selected) out.push(o.value || o.textContent);
-    });
-    return out;
-}
-
-// ---- Source -----------------------------------------------------------------
-
-// The source haplotype the user has chosen.  Before the graph's list arrives
-// the picker is empty, so fall back to whatever the inherited assembly implies.
-function currentSourceHap() {
-    if (allSrcHap) return allSrcHap;
-    var sel = $("pgcSrcHap");
-    if (sel && sel.value) return sel.value;
-    return hapForDb(($("pgcSrcDb") || {}).value || "");
-}
-
-// Fill the source picker from the graph and select the best starting point:
-// the haplotype for the assembly we arrived from, else the configured default.
-// Settle what the source is and say so.  There is nothing to choose: the
-// assembly is the one the user came from, and the position is the region they
-// were looking at.  Both are carried in hidden inputs; this writes the line
-// that tells the user what they are.
-function fillSources() {
-    var box = $("pgcSrcHap");
-    if (!box) { return; }
-    var want = String(hapForDb(($("pgcSrcDb") || {}).value || "") || "");
-    var chosen = null;
-    var lower = want.toLowerCase();
-    allHaplotypes.forEach(function (h) {
-        if (chosen === null && h.toLowerCase() === lower) { chosen = h; }
-    });
-    // The graph's list may not have arrived, or may not know this assembly;
-    // the name we worked out from the db is still the right answer.
-    box.value = chosen || want || "";
-    showSourceLabel();
-}
-
-// "HG01258 maternal — CM088139.1:7,100,001-7,140,000", or as much of it as is
-// known yet.
-function showSourceLabel() {
-    var el2 = $("pgcSrcLabel");
-    if (!el2) { return; }
-    var hap = currentSourceHap();
-    var pos = (($("pgcPos") || {}).value || "").trim();
-    // An assembly the pangenome does not have is still named: the position
-    // beside it is on that assembly.
-    var text = hap ? hapLabel(hap) : pg.bareDb(($("pgcSrcDb") || {}).value || "");
-    if (pos) { text += (text ? " \u2014 " : "") + pos; }
-    el2.textContent = text;
-}
-
-// What to say of an assembly that is not in the graph, and where to go.
-function notInPangenome(db) {
-    var from = ["GRCh38#0", "CHM13#0"].map(pg.assemblyFor).filter(function (a) {
-        return a && !/^https?:/.test(a);
-    });
-    return pg.bareDb(db) + " is not in the pangenome. Open PanLift from " +
-           from.concat(["an HPRC assembly"]).join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
-}
-
-// Make sure the page opens in a state that can actually be converted: if the
-// inherited assembly is not a pangenome haplotype, or there is no position to
-// go with it, fall back to a configured example instead of an unusable form.
-// The source db and position move together - a position only means something on
-// its own assembly.
-// Fill in what is missing, and only what is missing.
-//
-// These are two independent questions and were being answered as one: an
-// assembly the page did not recognise replaced the position too, so a request
-// for chr10 came back converted from the example region on chr9.  A position
-// the user gave us is never overwritten - if we cannot use it we say so, and
-// the caller declines to convert rather than quietly answering about somewhere
-// else.
-//
-// A position on an assembly the pangenome does not have is left as it is, with
-// its assembly: read on the default assembly it would name another place, and
-// the page would convert that.  There is nothing to convert then, and the
-// page says so (describeSource, buildSource).
-//
-// Returns {why, tookPosition} or null when nothing needed filling in.
-function applySourceFallback() {
-    var db = ($("pgcSrcDb") || {}).value || "";
-    var pos = ($("pgcPos") || {}).value || "";
-    var haveDb = !!hapForDb(db);
-    var havePos = pos.trim() !== "";
-    if (haveDb && havePos) return null;
-
-    var why = "no position was carried over";
-    if (!haveDb) {
-        why = db ? "assembly " + pg.bareDb(db) + " is not part of the pangenome"
-                 : "no assembly was carried over";
-    }
-    if (db && !haveDb && havePos)
-        return { why: why, tookPosition: false };
-    if (!haveDb) {
-        $("pgcSrcDb").value = CFG.defaultSrcDb || "hs1";
-        // A position with no assembly to read it on is not kept either.
-        $("pgcPos").value = "";
-        havePos = false;
-    }
-    var tookPosition = false;
-    if (!havePos) {
-        $("pgcPos").value = CFG.defaultPosition || "";
-        showSourceLabel();
-        tookPosition = true;
-    }
-    return { why: why, tookPosition: tookPosition };
-}
-
-function describeSource(fallback) {
-    var fallbackWhy = fallback && fallback.why;
-    var db = ($("pgcSrcDb") || {}).value || "";
-    var hap = currentSourceHap();
-    var note = $("pgcSrcNote");
-    if (!hap) {
-        note.textContent = db ? notInPangenome(db) : "";
-        return;
-    }
-    var assembly = pg.assemblyFor(hap);
-    var parts = [];
-    if (assembly && !/^https?:/.test(assembly)) parts.push("assembly " + assembly);
-    // The caveat about the contig belonging to this haplotype has gone with the
-    // text box it was advice for.  The position is inherited now, and when it
-    // does not fit the source, contigProblem() says so in those terms at the
-    // moment it matters.
-    if (fallbackWhy && fallback.tookPosition)
-        parts.push("shown as a starting example because " + fallbackWhy);
-    else if (fallbackWhy)
-        parts.push(fallbackWhy);
-    note.textContent = parts.join(" \u2014 ");
-}
-
-// ---- Sequences of the source haplotype --------------------------------------
-//
-// Contig names are not shared between haplotypes - chr9 on CHM13 but
-// CM094066.1 (or a JBH... WGS contig) on a sample - so a name that works for one
-// source is simply absent from another.  Offer the real list rather than
-// letting the request fail upstream with "No paths found".
-
-var contigCache = Object.create(null);   // assembly -> {names, sizes, display, nativeOf}
-var contigsForSource = null;             // the list for the current source, or null
-var contigsPending = null;               // the read of that list, while it is out
-// Lower-cased spelling -> the accession the graph knows.  Holds both spellings
-// of every sequence, because a position can arrive either way: typed from the
-// graph's own naming, or copied out of the browser's address box.
-var nativeForSource = null;
-
-function loadContigs() {
-    var hap = currentSourceHap();
-    var assembly = hap ? pg.assemblyFor(hap) : null;
-    contigsForSource = null;
-    // Hub-URL assemblies are not ours to query, and an unknown haplotype has no
-    // assembly at all; in both cases just stay quiet and let the server judge.
-    if (!assembly || /^https?:/.test(assembly)) return;
-
-    if (contigCache[assembly]) { applyContigs(contigCache[assembly]); return; }
-
-    // Our own endpoint rather than hubApi/list/chromosomes: that reports only
-    // the accessions, and half the point here is to know the name the browser
-    // shows for each one.
-    var read = getCmd("cmd=contigs&db=" + encodeURIComponent(assembly))
-        .then(function (d) {
-            var list = (d && d.contigs) || null;
-            if (!list || !list.length) return;
-            var sizes = Object.create(null), display = Object.create(null),
-                nativeOf = Object.create(null);
-            list.forEach(function (c) {
-                if (!c || !c.name) return;
-                sizes[c.name] = c.size;
-                display[c.name] = c.display || c.name;
-                nativeOf[String(c.name).toLowerCase()] = c.name;
-                if (c.display)
-                    nativeOf[String(c.display).toLowerCase()] = c.name;
-            });
-            var names = Object.keys(sizes).sort(function (a, b) {
-                return sizes[b] - sizes[a];         // biggest first: chromosomes
-            });
-            contigCache[assembly] = { names: names, sizes: sizes,
-                                      display: display, nativeOf: nativeOf };
-            applyContigs(contigCache[assembly]);
-        })
-        .catch(function () { /* advisory only */ });
-    contigsPending = read;
-    read.then(function () { if (contigsPending === read) { contigsPending = null; } });
-}
-
-// Run fn once the source's sequence names are in, or could not be read.  A
-// position spelled the browser's way (chr7) is sent under the graph's name for
-// it (nativeContig), which is only known then; sent as it came, the graph
-// answers that there is no such sequence.
-function whenContigs(fn) {
-    if (!contigsPending) { fn(); return; }
-    showBusy("Reading the sequence names…");
-    contigsPending.then(fn);
-}
-
-function nameShown(info, n) {
-    // What the browser calls this sequence, which is what the user will have in
-    // front of them.  Falls back to the accession where there is no alias.
-    return (info.display && info.display[n]) || n;
-}
-
-function nameBoth(info, n) {
-    // For a message about a name the user got wrong, give them both spellings:
-    // answering "CM094066" with "did you mean chr7" is correct but leaves them
-    // to guess that the two are the same sequence.
-    var shown = nameShown(info, n);
-    return (shown === n) ? n : (shown + " (" + n + ")");
-}
-
-// The source's sequence names, kept for one purpose now that the position is
-// not typed: checking that the position we inherited actually names a sequence
-// of this assembly.  An inherited position can be stale - the browser's own
-// spelling of a contig, or one left from another assembly - and contigProblem()
-// says so in terms the user can act on.
-function applyContigs(info) {
-    contigsForSource = info.names;
-    nativeForSource = info.nativeOf || null;
-}
-
-// The accession the graph knows this sequence by, whatever the user called it.
-//
-// These assembly hubs set "chromAuthority ucsc", so the browser labels a
-// sequence chrUn_JBIREP010000009v1 while the graph only answers to
-// JBIREP010000009.1.  A position pasted out of the browser has to be
-// translated, or the graph reports the region as simply absent.  Unknown names
-// pass through untouched: the server is a better judge than a guess here.
-function nativeContig(contig) {
-    if (!nativeForSource) return contig;
-    var hit = nativeForSource[String(contig).toLowerCase()];
-    return hit || contig;
-}
-
-// Advisory check: is this contig one of the source's sequences?  Either
-// spelling counts - rejecting the browser's own name for it was the bug this
-// guards against.
-function contigProblem(contig) {
-    if (!contigsForSource) return null;                 // unknown; let the server judge
-    if (contigsForSource.indexOf(nativeContig(contig)) >= 0) return null;
-    var lower = String(contig).toLowerCase();
-    var info = contigCache[pg.assemblyFor(currentSourceHap())] || {};
-    var near = contigsForSource.filter(function (n) {
-        return n.toLowerCase().indexOf(lower) >= 0 ||
-               nameShown(info, n).toLowerCase().indexOf(lower) >= 0;
-    }).map(function (n) { return nameBoth(info, n); }).slice(0, 3);
-    return "\"" + contig + "\" is not a sequence of " + hapLabel(currentSourceHap()) +
-           (near.length ? ".  Did you mean " + near.join(", ") + "?"
-                        : ".  Its largest sequences are " +
-                          contigsForSource.slice(0, 3).map(function (n) {
-                              return nameBoth(info, n);
-                          }).join(", ") + ".");
+function quickLiftWanted() {
+    var box = $("pgcQuickLift");
+    return !!(box && box.checked);
 }
 
 // ---- Ancestry plot (pcLAI) -------------------------------------------------
@@ -978,7 +260,7 @@ function pgcPageTable(table, order) {
 function annotationsPossible(iv) {
     var parts = String(iv.haplotype || "").split("#");
     if (parts.length < 2 || !lastSource) return false;
-    var srcDb = pg.assemblyFor(currentSourceHap());
+    var srcDb = pg.assemblyFor(allSrcHap);
     var tgtDb = pg.assemblyFor(parts[0] + "#" + parts[1]);
     return !!(srcDb && tgtDb && !/^https?:/.test(srcDb) && !/^https?:/.test(tgtDb));
 }
@@ -1011,13 +293,13 @@ function armAnnotationLink(a, iv, link) {
         // aborts with an HTML page and surfaced here as
         // "Unexpected token '<' ... is not valid JSON".
         var payload = {
-            srcDb: pg.assemblyFor(currentSourceHap()),
+            srcDb: pg.assemblyFor(allSrcHap),
             tgtDb: pg.assemblyFor(hap),
             src: lastSource.src,
-            srcHap: hapLabel(currentSourceHap()),
+            srcHap: hapLabel(allSrcHap),
             srcStart: lastSource.start,
             srcEnd: lastSource.end,
-            tgt: canonicalHap(hap),
+            tgt: hap,
             position: link.pos,
             hideTracks: hideTargetTracks() ? "on" : "off"
         };
@@ -1047,100 +329,40 @@ function hideTargetTracks() {
     return !!(box && box.checked);
 }
 
-// ---- Convert ----------------------------------------------------------------
-
-var lastSource = null;         // the source of the results on the page
-
-function quickLiftWanted() {
-    var box = $("pgcQuickLift");
-    return !!(box && box.checked);
-}
-
-// The source path plus coordinates, or {error}.  Shared by the conversion and
-// the "which haplotypes contain this?" query.
-function buildSource() {
-    var hap = currentSourceHap();
-    if (!hap) {
-        var db = ($("pgcSrcDb") || {}).value || "";
-        return { error: db ? notInPangenome(db) : "No pangenome assembly for that source." };
-    }
-    if (!hapInGraph(hap))
-        return { error: "Haplotype " + hap + " is not in the loaded graph, so its " +
-                        "coordinates cannot be translated." };
-    hap = canonicalHap(hap);          // the graph's own spelling
-    var pos = parsePosition($("pgcPos").value);
-    if (pos.error) return { error: pos.error };
-    var bad = contigProblem(pos.contig);
-    if (bad) return { error: bad };
-    // Send the graph the only name it knows, whichever one was typed.
-    var contig = nativeContig(pos.contig);
-    return { src: hap + "#" + contig, contig: contig,
-             start: pos.start, end: pos.end };
-}
-
-// One request, whatever the number of targets: the service's summary mode
-// walks the source region once and answers for every haplotype asked for, so
-// fifty cost about what one does.  The answer is the all-haplotypes page's,
-// for the chosen few, and is drawn by the same code (renderAll).
-var convertSeq = 0;            // the conversion the page is waiting for
-
-// A later click, or Clear, owns the page from then on: an earlier click still
-// waiting, for the sequence names or for its answer, is dropped.
-function doConvert() {
-    var seq = ++convertSeq;
-    whenContigs(function () { if (seq === convertSeq) { convertNow(seq); } });
-}
-
-function convertNow(seq) {
-    var src = buildSource();
-    if (src.error) { showError(src.error); return; }
-
-    var targets = selectedTargets();
-    if (targets.length === 0) { showError("Choose at least one target assembly."); return; }
-    if (MAX_CHOSEN > 0 && targets.length > MAX_CHOSEN) {
-        showError("Choose at most " + MAX_CHOSEN + " haplotypes, or use View all haplotypes.");
+// Ask for a wider chain on the way out of the page.
+//
+// The chain the first request builds reaches a little either side of the
+// converted interval - enough to pan a few window-widths, not enough to roam.
+// Widening it costs the mapping server about a second per megabase, which is
+// not worth charging to every conversion, so it is asked for here instead:
+// once, at the moment the user actually follows the link.
+//
+// It has to be sendBeacon rather than fetch.  This runs immediately before
+// navigating away, and the browser cancels in-flight fetches when the page
+// goes; a beacon is guaranteed to be delivered.  That is also why the payload
+// leaves out the blocks - the server fetches its own, and beacons are size
+// limited.  Nothing waits for the reply, and the browser picks the new chain
+// up on the next pan without a reload.
+function requestWiderChain(base) {
+    /* typeof, not a plain test: where navigator is absent altogether naming it
+     * throws rather than reading as false, and this runs on the way out of the
+     * page, where an exception would take the navigation with it. */
+    if (typeof navigator === "undefined" || !navigator.sendBeacon ||
+        typeof Blob === "undefined")
         return;
+    var lean = {};
+    Object.keys(base).forEach(function (k) {
+        if (k !== "blocks") lean[k] = base[k];
+    });
+    var fields = { cmd: "extendChain", payload: JSON.stringify(lean) };
+    if (CFG.hgsid)
+        fields.hgsid = CFG.hgsid;
+    try {
+        navigator.sendBeacon(selfUrl(), new Blob([pg.formEncode(fields)],
+            { type: "application/x-www-form-urlencoded" }));
+    } catch (e) {
+        /* Best effort: the narrower chain is already in place and works. */
     }
-    // Send the graph's spelling for targets too: an unknown target is not an
-    // error upstream, it just yields nothing - which would look like "region
-    // absent" rather than a mistake.
-    targets = targets.map(canonicalHap);
-
-    clear($("pgcResults"));
-    var what = fmtPos(src.contig, src.start, src.end);
-    showBusy("Translating " + what + " to " + targets.length + " assembl" +
-             (targets.length === 1 ? "y" : "ies") + "…");
-    postCmd("liftoverAll", { src: src.src, start: src.start, end: src.end, tgt: targets })
-        .then(function (resp) {
-            if (seq !== convertSeq) return;
-            if (!resp || resp.status === "error") throw new Error((resp && resp.error) || "no answer");
-            if (!resp.summary) throw new Error("the graph server sent no summary");
-            lastSource = src;          // what the links carry annotations over from
-            allSrcHap = String(src.src).split("#").slice(0, 2).join("#");
-            hideStatus();
-            renderAll(resp, src, targets);
-        }).catch(function (err) {
-            if (seq !== convertSeq) return;
-            showError("Conversion failed: " + err.message, doConvert);
-        });
-}
-
-// Start the choice over: no targets, no search, every population, and no
-// results.  The source stays - it came from the browser and is not a control
-// on this page, so emptying it left every later conversion with nothing to
-// convert.  The reachability answer is kept too, since it depends only on the
-// source.
-function onClear() {
-    $("pgcFilter").value = "";
-    popFilter = null;
-    reachable = null;
-    reachableScored = false;
-    if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
-    targetOptions($("pgcTargets")).forEach(function (o) { o.selected = false; });
-    fillTargets("");
-    convertSeq++;               // a conversion still out is not to draw into the cleared page
-    clear($("pgcResults"));
-    hideStatus();
 }
 
 // ---- Every haplotype (page=liftAll) -----------------------------------------
@@ -1156,7 +378,6 @@ function onClear() {
 // hundred regions.  So the ancestry column is read for the rows on screen as
 // they are shown, and for every row only when the plot is opened.
 
-var allSrcHap = null;          // the source haplotype, on that page
 var allHaps = null;            // one per haplotype, as allHapsFrom() made them
 var allRows = null;            // one per table row: {h, piece, n}
 var allDt = null;              // the table's DataTable, when there is one
@@ -1175,14 +396,6 @@ function liftAllUrl(src) {
     if ($("pgcHideTracks")) url += "&pgHide=" + (hideTargetTracks() ? "on" : "off");
     if (CFG.hgsid) url += "&hgsid=" + encodeURIComponent(CFG.hgsid);
     return url;
-}
-
-function onShowAll() {
-    whenContigs(function () {
-        var src = buildSource();
-        if (src.error) { showError(src.error); return; }
-        window.location = liftAllUrl(src);
-    });
 }
 
 // One entry per haplotype, its pieces largest first, as the mapping page
@@ -1711,6 +924,8 @@ function allAnnotControl() {
 // found or not, and the page's statistics and filters, which describe the
 // whole pangenome, are left out.  Without, it is the all-haplotypes page.
 function renderAll(resp, src, chosen) {
+    lastSource = src;
+    allSrcHap = String(src.src).split("#").slice(0, 2).join("#");
     var box = $("pgcResults");
     clear(box);
     var len = src.end - src.start;
@@ -1955,7 +1170,6 @@ function allHeadActions(page) {
 
 function initAll() {
     var page = window.pangenomeLiftAll;
-    CFG = window.pangenomeConfig || {};
     allHeadActions(page);
     var parts = String(page.src || "").split("#");
     var named = parts.length >= 3 && page.start >= 0 && page.end > page.start;
@@ -1964,9 +1178,7 @@ function initAll() {
                   "Genome Browser and open PanLift from there.");
         return;
     }
-    allSrcHap = parts[0] + "#" + parts[1];
     var src = { src: page.src, contig: parts.slice(2).join("#"), start: page.start, end: page.end };
-    lastSource = src;              // what armAnnotationLink carries over from
     var what = hapLabel(src.src) + ":" + (src.start + 1) + "-" + src.end;
     var go = function () {
         showBusy("Translating " + what + " to every haplotype in the pangenome…");
@@ -1982,12 +1194,813 @@ function initAll() {
     go();
 }
 
+// =============================================================================
+// PART 3 - FORM: the source, the haplotypes to convert to, Convert and Clear
+// =============================================================================
+
+var MAX_SPAN = 1000000;         // the server's cap (pangenome.maxLiftSpan), which it enforces too
+var MAX_CHOSEN = 50;           // haplotypes one conversion may be sent to; 0 for no limit
+
+// ---- Destination list -------------------------------------------------------
+
+var allHaplotypes = [];
+var hapExactByLower = null;
+var reachable = null;          // lower name -> coverage (or null), else not filtered
+var reachableScored = false;   // true when the server ranked them
+// What the graph last said for this source region.  Kept so that turning the
+// filter off and on again does not ask a second time; cleared whenever the
+// region changes, because then it is an answer to a different question.
+var reachableCache = null;
+var reachableCacheScored = false;
+var autoRan = false;           // the hand-off from hgConvert converts once
+var sourceIsExample = false;   // the position on screen is ours, not the user's
+
+// The graph's path names are case-sensitive ("CHM13#0", not "chm13#0"), but our
+// generated assembly table is keyed lower-case.  Map back to the graph's own
+// spelling before building a source path, or the middleware finds no paths.
+function canonicalHap(hap) {
+    if (!hap) return hap;
+    if (!hapExactByLower) {
+        hapExactByLower = Object.create(null);
+        allHaplotypes.forEach(function (h) {
+            hapExactByLower[String(h).toLowerCase()] = h;
+        });
+    }
+    return hapExactByLower[String(hap).toLowerCase()] || hap;
+}
+
+// Is this haplotype present in the loaded graph at all?  Only meaningful once
+// the list has arrived.
+function hapInGraph(hap) {
+    if (allHaplotypes.length === 0) return true;      // unknown yet; let the server judge
+    canonicalHap(hap);                                 // builds the index
+    return !!hapExactByLower[String(hap).toLowerCase()];
+}
+
+function loadHaplotypes() {
+    showBusy("Loading assemblies from the graph…");
+    return getCmd("cmd=haplotypes").then(function (resp) {
+        if (resp && resp.status === "error") throw new Error(resp.error || "server error");
+        allHaplotypes = (resp && resp.haplotypes) || [];
+        allHaplotypes.sort();
+        hapExactByLower = null;                        // rebuilt on next use
+        fillSources();
+        loadContigs();
+        fillTargets("");
+        preselectDefaultTarget();
+        fillTargets($("pgcFilter").value);      // so the picker shows the default
+        hideStatus();
+        // Arriving from hgConvert the user has already chosen a source, a
+        // position and a destination and pressed Submit once; make them press
+        // it again and the hand-off would just look broken.  Run it for them,
+        // but only once, and only when everything really did come through -
+        // never on a position this page supplied, because converting an example
+        // region under the heading the user asked for is worse than asking.
+        if (CFG.presetTarget && !autoRan && !sourceIsExample &&
+            selectedTargets().length > 0 && ($("pgcPos").value || "").trim() !== "") {
+            autoRan = true;
+            doConvert();
+        }
+    }).catch(function (err) {
+        showError("Could not load the assembly list: " + err.message, loadHaplotypes);
+    });
+}
+
+// ---- Populations -------------------------------------------------------------
+//
+// Each sample's population as the HPRC describes it - 1000 Genomes code and
+// descriptor, from hgPangenomeSamples.js - organises the target picker.
+// Super-populations are not used: the HPRC follows the NHGRI's guidelines for
+// referring to populations, which do not, and leaves them out of its metadata.
+//
+// The picker is two panes: the populations, with their counts, and the
+// haplotypes of the one picked, as checkboxes.  Above them, what has been
+// chosen, as chips.  The hidden #pgcTargets list underneath holds every
+// candidate and is what the rest of the page reads the choice from; the panes
+// only ever change which of its options are selected.
+
+var popFilter = null;          // the population the right pane shows, or null for all
+
+// Every option in the list, whether it sits under a group or not.
+function targetOptions(sel) {
+    var out = [];
+    if (!sel) return out;
+    Array.prototype.forEach.call(sel.children, function (c) {
+        if (c.tagName === "OPTGROUP")
+            Array.prototype.forEach.call(c.children, function (o) { out.push(o); });
+        else
+            out.push(c);
+    });
+    return out;
+}
+
+// The groups among some haplotypes, in display order, each with its members.
+function popGroups(list) {
+    var byKey = Object.create(null), groups = [];
+    list.forEach(function (h) {
+        var g = popGroupOf(h);
+        if (!byKey[g.key]) {
+            byKey[g.key] = { key: g.key, label: g.label, rank: g.rank, desc: g.desc || "", haps: [] };
+            groups.push(byKey[g.key]);
+        }
+        byKey[g.key].haps.push(h);
+    });
+    groups.sort(function (a, b) {
+        return (a.rank - b.rank) || a.desc.localeCompare(b.desc);
+    });
+    return groups;
+}
+
+// Does the search text match this haplotype, by its name or its population?
+function matchesSearch(h, f) {
+    if (!f) return true;
+    var g = popGroupOf(h);
+    return h.toLowerCase().indexOf(f) >= 0 || hapLabel(h).toLowerCase().indexOf(f) >= 0 ||
+           (g.rank === 1 && (g.key.toLowerCase().indexOf(f) >= 0 ||
+                             g.desc.toLowerCase().indexOf(f) >= 0));
+}
+
+// How many more haplotypes may be chosen.  Past MAX_CHOSEN the answer is a
+// question about every haplotype, which "View all haplotypes" is for.
+function chosenRoom(chosenCount) {
+    return MAX_CHOSEN > 0 ? Math.max(0, MAX_CHOSEN - chosenCount) : Infinity;
+}
+
+// Choose or let go of one haplotype, then draw the picker again.
+function setChosen(hap, on) {
+    if (on && chosenRoom(selectedTargets().length) < 1) on = false;
+    targetOptions($("pgcTargets")).forEach(function (o) {
+        if (o.value === hap) o.selected = !!on;
+    });
+    fillTargets($("pgcFilter") ? $("pgcFilter").value : "");
+}
+
+// The chips: what has been chosen, each with a way to take it back.
+function drawChosen(chosen) {
+    var box = $("pgcChosen");
+    if (!box) return;
+    clear(box);
+    box.appendChild(el("span", { class: "pgcChosenHead", text:
+        chosen.length ? "Chosen " + chosen.length + (MAX_CHOSEN > 0 ? " of " + MAX_CHOSEN : "")
+                      : (MAX_CHOSEN > 0 ? "Choose up to " + MAX_CHOSEN + " below" : "Choose below") }));
+    chosen.forEach(function (h) {
+        var p = pg.population(h);
+        var chip = el("span", { class: "pgcChip", title: p ? p.desc : "" }, [
+            el("span", { text: hapLabel(h) }),
+            p ? el("span", { class: "pgcChipPop", text: p.code }) : null,
+            el("button", { type: "button", class: "pgcChipX", "data-unchoose": h,
+                           "aria-label": "Remove " + hapLabel(h), text: "×" })
+        ]);
+        box.appendChild(chip);
+    });
+}
+
+// Left: the populations among the candidates the search allows, with how
+// many there are in each and how many of those are chosen.  "All" first.
+function drawPops(matches, chosenSet) {
+    var box = $("pgcPops");
+    if (!box) return;
+    var keep = box.querySelector ? box.querySelector(".pgcPopsList") : null;
+    var scroll = keep ? keep.scrollTop : 0;
+    clear(box);
+    var groups = popGroups(matches);
+    var npops = groups.filter(function (g) { return g.rank === 1; }).length;
+    box.appendChild(el("div", { class: "pgcPaneHead", text:
+        npops + (npops === 1 ? " population" : " populations") }));
+    var listBox = el("div", { class: "pgcPopsList" });
+    function row(key, label, code, n, picked) {
+        var on = (popFilter || "") === key;
+        var b = el("button", { type: "button", class: "pgcPop" + (on ? " on" : ""),
+                               "data-pop": key, "aria-pressed": on ? "true" : "false",
+                               title: label });
+        b.appendChild(el("span", { class: "pgcPopName", text: label }));
+        if (code) b.appendChild(el("span", { class: "pgcPopCode", text: code }));
+        if (picked) b.appendChild(el("span", { class: "pgcPopPicked", text: String(picked),
+                                               title: picked + " chosen" }));
+        b.appendChild(el("span", { class: "pgcPopN", text: String(n) }));
+        listBox.appendChild(b);
+    }
+    var allPicked = matches.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
+    row("", "All populations", "", matches.length, allPicked);
+    groups.forEach(function (g) {
+        var picked = g.haps.filter(function (h) { return chosenSet[h.toLowerCase()]; }).length;
+        row(g.key, g.rank === 1 ? g.desc : g.label, g.rank === 1 ? g.key : "", g.haps.length, picked);
+    });
+    box.appendChild(listBox);
+    listBox.scrollTop = scroll;
+}
+
+// Right: the haplotypes of the population picked, as checkboxes, in the order
+// the list has them (alphabetical, or best first once ranked).
+function drawHaps(shown, chosenSet) {
+    var box = $("pgcHaps");
+    if (!box) return;
+    var keep = box.querySelector ? box.querySelector(".pgcHapsList") : null;
+    var scroll = keep ? keep.scrollTop : 0;
+    clear(box);
+    var g = popFilter ? popGroups(shown.length ? shown : []).filter(function (x) {
+        return x.key === popFilter; })[0] : null;
+    var title = popFilter ? (g ? g.label : "This population") : "All populations";
+    // Every one listed here, or none of them, in one click - or, when there
+    // is not room for them all, as many from the top of the list as there is
+    // room for.
+    var allOn = shown.length > 0 && shown.every(function (h) { return chosenSet[h.toLowerCase()]; });
+    var room = chosenRoom(Object.keys(chosenSet).length);
+    var unchosen = shown.filter(function (h) { return !chosenSet[h.toLowerCase()]; }).length;
+    var allText = allOn ? "Clear these"
+                : unchosen <= room ? "Choose all " + shown.length
+                : room > 0 ? "Choose first " + room : null;
+    box.appendChild(el("div", { class: "pgcPaneHead" }, [
+        el("span", { text: title }),
+        el("span", { class: "pgcPaneN", text: shown.length + (shown.length === 1 ? " haplotype" : " haplotypes") +
+            (reachableScored ? ", best first" : "") }),
+        (shown.length && allText) ? el("button", { type: "button", class: "pgcAllBtn",
+                                                   "data-all": allOn ? "off" : "on", text: allText }) : null
+    ]));
+    var listBox = el("div", { class: "pgcHapsList" });
+    if (!shown.length) {
+        listBox.appendChild(el("div", { class: "pgMuted pgcEmpty",
+            text: "No haplotype matches. Clear the search or pick another population." }));
+    }
+    shown.forEach(function (h) {
+        var on = !!chosenSet[h.toLowerCase()];
+        var id = "pgcHap_" + h.replace(/[^A-Za-z0-9]/g, "_");
+        var box2 = el("input", { type: "checkbox", id: id, "data-hap": h });
+        box2.checked = on;
+        if (!on && room < 1) {
+            box2.disabled = true;
+            box2.title = MAX_CHOSEN + " is the most. Remove one to choose another.";
+        }
+        var p = popFilter ? null : pg.population(h);
+        var cov = reachable ? reachable[h.toLowerCase()] : null;
+        var lab = el("label", { class: "pgcHap" + (on ? " on" : "") + (box2.disabled ? " dis" : ""),
+                                for: id }, [
+            box2,
+            el("span", { text: hapLabel(h) }),
+            p ? el("span", { class: "pgcHapPop", text: p.code, title: p.desc }) : null,
+            cov == null ? null : el("span", { class: "pgcHapCov", text: (Math.round(cov * 10) / 10) + "%" })
+        ]);
+        listBox.appendChild(lab);
+    });
+    box.appendChild(listBox);
+    listBox.scrollTop = scroll;
+}
+
+function fillTargets(filter) {
+    var sel = $("pgcTargets");
+    var chosen = selectedTargets();
+    var f = String(filter || "").trim().toLowerCase();
+    var srcHap = currentSourceHap();
+    clear(sel);
+    // The candidates: everything but the source, and with "only with this
+    // region" on, only those.  The hidden list holds all of them, so that a
+    // choice survives searching and moving between populations.
+    var candidates = allHaplotypes.filter(function (h) {
+        var lower = h.toLowerCase();
+        if (srcHap && lower === String(srcHap).toLowerCase()) return false; // no self-conversion
+        if (reachable && !(lower in reachable)) return false;
+        return true;
+    });
+    // With scores, the most relevant destinations come first; otherwise keep the
+    // alphabetical order the list arrived in.
+    if (reachableScored)
+        candidates.sort(function (a, b) {
+            var ca = reachable[a.toLowerCase()], cb = reachable[b.toLowerCase()];
+            ca = (ca == null ? -1 : ca); cb = (cb == null ? -1 : cb);
+            if (cb !== ca) return cb - ca;
+            return a.localeCompare(b);
+        });
+    candidates.forEach(function (h) {
+        var cov = reachable ? reachable[h.toLowerCase()] : null;
+        var o = el("option", { text: (cov == null) ? hapLabel(h)
+                                     : hapLabel(h) + "  (" + (Math.round(cov * 10) / 10) + "%)" });
+        sel.appendChild(o);
+        o.value = h;                       // the bare name is what gets submitted
+        o.selected = chosen.indexOf(h) >= 0;
+    });
+    var chosenNow = selectedTargets();
+    var chosenSet = Object.create(null);
+    chosenNow.forEach(function (h) { chosenSet[h.toLowerCase()] = true; });
+
+    // What the panes show: the candidates the search allows, and on the right
+    // only the population picked.  A population the search leaves empty is let go.
+    var matches = candidates.filter(function (h) { return matchesSearch(h, f); });
+    if (popFilter && !matches.some(function (h) { return popGroupOf(h).key === popFilter; }))
+        popFilter = null;
+    var shown = popFilter ? matches.filter(function (h) { return popGroupOf(h).key === popFilter; })
+                          : matches;
+    drawChosen(chosenNow);
+    drawPops(matches, chosenSet);
+    drawHaps(shown, chosenSet);
+
+    // One short line under the picker, and only when the list was narrowed:
+    // the pane's own heading counts what it shows.
+    $("pgcTargetCount").textContent = reachable ?
+        candidates.length + " of " + allHaplotypes.length + " haplotypes have this region" : "";
+}
+
+// Ask the graph which haplotypes this region exists on, and narrow the picker to
+// those.  Saves guessing among hundreds of haplotypes that may have no
+// equivalent region at all.
+// The reachability filter is one checkbox, so turning it on and off is one
+// function.  The answer is kept once fetched: it only depends on the source
+// region, so flipping the box back on does not ask again.
+function setToggleBusy(busy) {
+    var lab = $("pgcReachableOnly") && $("pgcReachableOnly").parentNode;
+    if (lab && lab.classList) {
+        if (busy) { lab.classList.add("pgcBusy"); }
+        else { lab.classList.remove("pgcBusy"); }
+    }
+    if ($("pgcReachableOnly")) { $("pgcReachableOnly").disabled = !!busy; }
+}
+
+function onReachableToggle() {
+    var box = $("pgcReachableOnly");
+    if (!box || !box.checked) { showAllHaplotypes(); return; }
+    if (reachableCache) {        // already asked for this region
+        reachable = reachableCache;
+        reachableScored = reachableCacheScored;
+        fillTargets($("pgcFilter").value);
+        hideStatus();
+        return;
+    }
+    showReachable();
+}
+
+function showReachable() {
+    whenContigs(askReachable);
+}
+
+function askReachable() {
+    var src = buildSource();
+    if (src.error) { showError(src.error); untick(); return; }
+    setToggleBusy(true);
+    showBusy("Asking which assemblies contain " +
+             fmtPos(src.contig, src.start, src.end) + "…");
+    var req = { src: src.src, start: src.start, end: src.end, scored: true };
+    // Very low scores are usually incidental repeat matches, so ask the server
+    // to drop them rather than filtering a long list here.
+    if (typeof CFG.minTargetCoverage === "number")
+        req.min_coverage = CFG.minTargetCoverage;
+    // Bound the reachability scan.  Without a cap it walks far more of the
+    // graph than the answer needs, which is both slow and where the false
+    // positives came from.
+    if (typeof CFG.maxTargetNodes === "number")
+        req.max_nodes = CFG.maxTargetNodes;
+    postCmd("liftoverTargets", req)
+        .then(function (resp) {
+            if (resp && resp.status === "error") throw new Error(resp.error || "server error");
+            // An answer with no list at all is not the same as an empty list:
+            // saying "no assembly contains this region" when the server never
+            // told us would be a confident wrong answer.
+            if (!resp || !Array.isArray(resp.haplotypes))
+                throw new Error("the mapping server returned no list of assemblies");
+            // Entries are plain names, or {haplotype, coverage, covered_bp} when
+            // the server ranked them.  Accept both.  Compare case-insensitively:
+            // this list and the haplotype list are produced separately, so do
+            // not assume they agree on spelling.
+            reachable = Object.create(null);
+            reachableScored = false;
+            ((resp && resp.haplotypes) || []).forEach(function (h) {
+                if (h && typeof h === "object") {
+                    reachable[String(h.haplotype).toLowerCase()] =
+                        typeof h.coverage === "number" ? h.coverage : null;
+                    if (typeof h.coverage === "number") reachableScored = true;
+                } else {
+                    reachable[String(h).toLowerCase()] = null;
+                }
+            });
+            reachableCache = reachable;
+            reachableCacheScored = reachableScored;
+            setToggleBusy(false);
+            fillTargets($("pgcFilter").value);
+            if (Object.keys(reachable).length === 0)
+                showError("No assembly in the graph contains this region.");
+            else
+                hideStatus();
+        })
+        .catch(function (err) {
+            setToggleBusy(false);
+            untick();
+            // Retry asks again; going through the toggle would not, the box
+            // having just been unticked.
+            showError("Could not check which assemblies contain this region: " +
+                      err.message, function () {
+                          if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = true; }
+                          showReachable();
+                      });
+        });
+}
+
+// The filter did not take, so the box must not claim it did.
+function untick() {
+    if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
+    reachable = null;
+    reachableScored = false;
+}
+
+function showAllHaplotypes() {
+    reachable = null;
+    reachableScored = false;
+    fillTargets($("pgcFilter").value);
+    hideStatus();
+}
+
+// Pre-select a sensible target so the page is one click from an answer.  Skips
+// any that is the source haplotype.
+function preselectDefaultTarget() {
+    // A destination chosen in hgConvert wins over the configured default: the
+    // user already said where they wanted to go.
+    // The SV page sends several, comma separated.
+    var src = String(currentSourceHap() || "").toLowerCase();
+    var want = String(CFG.presetTarget || CFG.defaultTarget || "").toLowerCase()
+        .split(",").map(function (w) { return w.trim(); })
+        .filter(function (w) { return w && w !== src; });
+    if (!want.length) return;
+    targetOptions($("pgcTargets")).forEach(function (o) {
+        if (want.indexOf(String(o.value || o.textContent).toLowerCase()) >= 0)
+            o.selected = true;
+    });
+}
+
+function selectedTargets() {
+    var out = [];
+    targetOptions($("pgcTargets")).forEach(function (o) {
+        // o.value is the bare haplotype name; the label may carry a percentage
+        if (o.selected) out.push(o.value || o.textContent);
+    });
+    return out;
+}
+
+// ---- Source -----------------------------------------------------------------
+
+// The source haplotype: the one the page was opened on.  Before the graph's
+// list arrives its field is empty, so fall back to whatever the inherited
+// assembly implies.
+function currentSourceHap() {
+    var sel = $("pgcSrcHap");
+    if (sel && sel.value) return sel.value;
+    return hapForDb(($("pgcSrcDb") || {}).value || "");
+}
+
+// Fill the source picker from the graph and select the best starting point:
+// the haplotype for the assembly we arrived from, else the configured default.
+// Settle what the source is and say so.  There is nothing to choose: the
+// assembly is the one the user came from, and the position is the region they
+// were looking at.  Both are carried in hidden inputs; this writes the line
+// that tells the user what they are.
+function fillSources() {
+    var box = $("pgcSrcHap");
+    if (!box) { return; }
+    var want = String(hapForDb(($("pgcSrcDb") || {}).value || "") || "");
+    var chosen = null;
+    var lower = want.toLowerCase();
+    allHaplotypes.forEach(function (h) {
+        if (chosen === null && h.toLowerCase() === lower) { chosen = h; }
+    });
+    // The graph's list may not have arrived, or may not know this assembly;
+    // the name we worked out from the db is still the right answer.
+    box.value = chosen || want || "";
+    showSourceLabel();
+}
+
+// "HG01258 maternal — CM088139.1:7,100,001-7,140,000", or as much of it as is
+// known yet.
+function showSourceLabel() {
+    var el2 = $("pgcSrcLabel");
+    if (!el2) { return; }
+    var hap = currentSourceHap();
+    var pos = (($("pgcPos") || {}).value || "").trim();
+    // An assembly the pangenome does not have is still named: the position
+    // beside it is on that assembly.
+    var text = hap ? hapLabel(hap) : pg.bareDb(($("pgcSrcDb") || {}).value || "");
+    if (pos) { text += (text ? " \u2014 " : "") + pos; }
+    el2.textContent = text;
+}
+
+// What to say of an assembly that is not in the graph, and where to go.
+function notInPangenome(db) {
+    var from = ["GRCh38#0", "CHM13#0"].map(pg.assemblyFor).filter(function (a) {
+        return a && !/^https?:/.test(a);
+    });
+    return pg.bareDb(db) + " is not in the pangenome. Open PanLift from " +
+           from.concat(["an HPRC assembly"]).join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
+}
+
+// Make sure the page opens in a state that can actually be converted: if the
+// inherited assembly is not a pangenome haplotype, or there is no position to
+// go with it, fall back to a configured example instead of an unusable form.
+// The source db and position move together - a position only means something on
+// its own assembly.
+// Fill in what is missing, and only what is missing.
+//
+// These are two independent questions and were being answered as one: an
+// assembly the page did not recognise replaced the position too, so a request
+// for chr10 came back converted from the example region on chr9.  A position
+// the user gave us is never overwritten - if we cannot use it we say so, and
+// the caller declines to convert rather than quietly answering about somewhere
+// else.
+//
+// A position on an assembly the pangenome does not have is left as it is, with
+// its assembly: read on the default assembly it would name another place, and
+// the page would convert that.  There is nothing to convert then, and the
+// page says so (describeSource, buildSource).
+//
+// Returns {why, tookPosition} or null when nothing needed filling in.
+function applySourceFallback() {
+    var db = ($("pgcSrcDb") || {}).value || "";
+    var pos = ($("pgcPos") || {}).value || "";
+    var haveDb = !!hapForDb(db);
+    var havePos = pos.trim() !== "";
+    if (haveDb && havePos) return null;
+
+    var why = "no position was carried over";
+    if (!haveDb) {
+        why = db ? "assembly " + pg.bareDb(db) + " is not part of the pangenome"
+                 : "no assembly was carried over";
+    }
+    if (db && !haveDb && havePos)
+        return { why: why, tookPosition: false };
+    if (!haveDb) {
+        $("pgcSrcDb").value = CFG.defaultSrcDb || "hs1";
+        // A position with no assembly to read it on is not kept either.
+        $("pgcPos").value = "";
+        havePos = false;
+    }
+    var tookPosition = false;
+    if (!havePos) {
+        $("pgcPos").value = CFG.defaultPosition || "";
+        showSourceLabel();
+        tookPosition = true;
+    }
+    return { why: why, tookPosition: tookPosition };
+}
+
+function describeSource(fallback) {
+    var fallbackWhy = fallback && fallback.why;
+    var db = ($("pgcSrcDb") || {}).value || "";
+    var hap = currentSourceHap();
+    var note = $("pgcSrcNote");
+    if (!hap) {
+        note.textContent = db ? notInPangenome(db) : "";
+        return;
+    }
+    var assembly = pg.assemblyFor(hap);
+    var parts = [];
+    if (assembly && !/^https?:/.test(assembly)) parts.push("assembly " + assembly);
+    // The caveat about the contig belonging to this haplotype has gone with the
+    // text box it was advice for.  The position is inherited now, and when it
+    // does not fit the source, contigProblem() says so in those terms at the
+    // moment it matters.
+    if (fallbackWhy && fallback.tookPosition)
+        parts.push("shown as a starting example because " + fallbackWhy);
+    else if (fallbackWhy)
+        parts.push(fallbackWhy);
+    note.textContent = parts.join(" \u2014 ");
+}
+
+// ---- Sequences of the source haplotype --------------------------------------
+//
+// Contig names are not shared between haplotypes - chr9 on CHM13 but
+// CM094066.1 (or a JBH... WGS contig) on a sample - so a name that works for one
+// source is simply absent from another.  Offer the real list rather than
+// letting the request fail upstream with "No paths found".
+
+var contigCache = Object.create(null);   // assembly -> {names, sizes, display, nativeOf}
+var contigsForSource = null;             // the list for the current source, or null
+var contigsPending = null;               // the read of that list, while it is out
+// Lower-cased spelling -> the accession the graph knows.  Holds both spellings
+// of every sequence, because a position can arrive either way: typed from the
+// graph's own naming, or copied out of the browser's address box.
+var nativeForSource = null;
+
+function loadContigs() {
+    var hap = currentSourceHap();
+    var assembly = hap ? pg.assemblyFor(hap) : null;
+    contigsForSource = null;
+    // Hub-URL assemblies are not ours to query, and an unknown haplotype has no
+    // assembly at all; in both cases just stay quiet and let the server judge.
+    if (!assembly || /^https?:/.test(assembly)) return;
+
+    if (contigCache[assembly]) { applyContigs(contigCache[assembly]); return; }
+
+    // Our own endpoint rather than hubApi/list/chromosomes: that reports only
+    // the accessions, and half the point here is to know the name the browser
+    // shows for each one.
+    var read = getCmd("cmd=contigs&db=" + encodeURIComponent(assembly))
+        .then(function (d) {
+            var list = (d && d.contigs) || null;
+            if (!list || !list.length) return;
+            var sizes = Object.create(null), display = Object.create(null),
+                nativeOf = Object.create(null);
+            list.forEach(function (c) {
+                if (!c || !c.name) return;
+                sizes[c.name] = c.size;
+                display[c.name] = c.display || c.name;
+                nativeOf[String(c.name).toLowerCase()] = c.name;
+                if (c.display)
+                    nativeOf[String(c.display).toLowerCase()] = c.name;
+            });
+            var names = Object.keys(sizes).sort(function (a, b) {
+                return sizes[b] - sizes[a];         // biggest first: chromosomes
+            });
+            contigCache[assembly] = { names: names, sizes: sizes,
+                                      display: display, nativeOf: nativeOf };
+            applyContigs(contigCache[assembly]);
+        })
+        .catch(function () { /* advisory only */ });
+    contigsPending = read;
+    read.then(function () { if (contigsPending === read) { contigsPending = null; } });
+}
+
+// Run fn once the source's sequence names are in, or could not be read.  A
+// position spelled the browser's way (chr7) is sent under the graph's name for
+// it (nativeContig), which is only known then; sent as it came, the graph
+// answers that there is no such sequence.
+function whenContigs(fn) {
+    if (!contigsPending) { fn(); return; }
+    showBusy("Reading the sequence names…");
+    contigsPending.then(fn);
+}
+
+function nameShown(info, n) {
+    // What the browser calls this sequence, which is what the user will have in
+    // front of them.  Falls back to the accession where there is no alias.
+    return (info.display && info.display[n]) || n;
+}
+
+function nameBoth(info, n) {
+    // For a message about a name the user got wrong, give them both spellings:
+    // answering "CM094066" with "did you mean chr7" is correct but leaves them
+    // to guess that the two are the same sequence.
+    var shown = nameShown(info, n);
+    return (shown === n) ? n : (shown + " (" + n + ")");
+}
+
+// The source's sequence names, kept for one purpose now that the position is
+// not typed: checking that the position we inherited actually names a sequence
+// of this assembly.  An inherited position can be stale - the browser's own
+// spelling of a contig, or one left from another assembly - and contigProblem()
+// says so in terms the user can act on.
+function applyContigs(info) {
+    contigsForSource = info.names;
+    nativeForSource = info.nativeOf || null;
+}
+
+// The accession the graph knows this sequence by, whatever the user called it.
+//
+// These assembly hubs set "chromAuthority ucsc", so the browser labels a
+// sequence chrUn_JBIREP010000009v1 while the graph only answers to
+// JBIREP010000009.1.  A position pasted out of the browser has to be
+// translated, or the graph reports the region as simply absent.  Unknown names
+// pass through untouched: the server is a better judge than a guess here.
+function nativeContig(contig) {
+    if (!nativeForSource) return contig;
+    var hit = nativeForSource[String(contig).toLowerCase()];
+    return hit || contig;
+}
+
+// Advisory check: is this contig one of the source's sequences?  Either
+// spelling counts - rejecting the browser's own name for it was the bug this
+// guards against.
+function contigProblem(contig) {
+    if (!contigsForSource) return null;                 // unknown; let the server judge
+    if (contigsForSource.indexOf(nativeContig(contig)) >= 0) return null;
+    var lower = String(contig).toLowerCase();
+    var info = contigCache[pg.assemblyFor(currentSourceHap())] || {};
+    var near = contigsForSource.filter(function (n) {
+        return n.toLowerCase().indexOf(lower) >= 0 ||
+               nameShown(info, n).toLowerCase().indexOf(lower) >= 0;
+    }).map(function (n) { return nameBoth(info, n); }).slice(0, 3);
+    return "\"" + contig + "\" is not a sequence of " + hapLabel(currentSourceHap()) +
+           (near.length ? ".  Did you mean " + near.join(", ") + "?"
+                        : ".  Its largest sequences are " +
+                          contigsForSource.slice(0, 3).map(function (n) {
+                              return nameBoth(info, n);
+                          }).join(", ") + ".");
+}
+
+// ---- Position parsing -------------------------------------------------------
+
+// "chr10:19,114-19,137" (1-based inclusive, commas allowed) or "chr10" for a
+// whole contig.  Returns {contig, start, end} with start 0-based half-open, or
+// {error} explaining what is wrong.
+function parsePosition(text) {
+    var s = String(text == null ? "" : text).trim().replace(/,/g, "");
+    if (s === "") return { error: "enter a position, e.g. chr10:19114-19137" };
+    var m = s.match(/^([^\s:]+):(\d+)\s*-\s*(\d+)$/);
+    if (!m) {
+        if (/^[^\s:]+$/.test(s))
+            return { error: "add a range to " + s + ", e.g. " + s + ":1-1000" };
+        return { error: "could not read '" + text + "' as contig:start-end" };
+    }
+    var start1 = parseInt(m[2], 10), end1 = parseInt(m[3], 10);
+    if (start1 < 1) return { error: "start must be 1 or greater" };
+    if (end1 < start1) return { error: "end must not be before start" };
+    var span = end1 - start1 + 1;
+    if (span > MAX_SPAN)
+        return { error: "region is " + span + " bp; the limit is " + MAX_SPAN + " bp" };
+    return { contig: m[1], start: start1 - 1, end: end1 };   // 0-based half-open
+}
+
+// ---- Convert ----------------------------------------------------------------
+
+// The source path plus coordinates, or {error}.  Shared by the conversion and
+// the "which haplotypes contain this?" query.
+function buildSource() {
+    var hap = currentSourceHap();
+    if (!hap) {
+        var db = ($("pgcSrcDb") || {}).value || "";
+        return { error: db ? notInPangenome(db) : "No pangenome assembly for that source." };
+    }
+    if (!hapInGraph(hap))
+        return { error: "Haplotype " + hap + " is not in the loaded graph, so its " +
+                        "coordinates cannot be translated." };
+    hap = canonicalHap(hap);          // the graph's own spelling
+    var pos = parsePosition($("pgcPos").value);
+    if (pos.error) return { error: pos.error };
+    var bad = contigProblem(pos.contig);
+    if (bad) return { error: bad };
+    // Send the graph the only name it knows, whichever one was typed.
+    var contig = nativeContig(pos.contig);
+    return { src: hap + "#" + contig, contig: contig,
+             start: pos.start, end: pos.end };
+}
+
+// One request, whatever the number of targets: the service's summary mode
+// walks the source region once and answers for every haplotype asked for, so
+// fifty cost about what one does.  The answer is the all-haplotypes page's,
+// for the chosen few, and is drawn by the same code (renderAll).
+var convertSeq = 0;            // the conversion the page is waiting for
+
+// A later click, or Clear, owns the page from then on: an earlier click still
+// waiting, for the sequence names or for its answer, is dropped.
+function doConvert() {
+    var seq = ++convertSeq;
+    whenContigs(function () { if (seq === convertSeq) { convertNow(seq); } });
+}
+
+function convertNow(seq) {
+    var src = buildSource();
+    if (src.error) { showError(src.error); return; }
+
+    var targets = selectedTargets();
+    if (targets.length === 0) { showError("Choose at least one target assembly."); return; }
+    if (MAX_CHOSEN > 0 && targets.length > MAX_CHOSEN) {
+        showError("Choose at most " + MAX_CHOSEN + " haplotypes, or use View all haplotypes.");
+        return;
+    }
+    // Send the graph's spelling for targets too: an unknown target is not an
+    // error upstream, it just yields nothing - which would look like "region
+    // absent" rather than a mistake.
+    targets = targets.map(canonicalHap);
+
+    clear($("pgcResults"));
+    var what = fmtPos(src.contig, src.start, src.end);
+    showBusy("Translating " + what + " to " + targets.length + " assembl" +
+             (targets.length === 1 ? "y" : "ies") + "…");
+    postCmd("liftoverAll", { src: src.src, start: src.start, end: src.end, tgt: targets })
+        .then(function (resp) {
+            if (seq !== convertSeq) return;
+            if (!resp || resp.status === "error") throw new Error((resp && resp.error) || "no answer");
+            if (!resp.summary) throw new Error("the graph server sent no summary");
+            hideStatus();
+            renderAll(resp, src, targets);
+        }).catch(function (err) {
+            if (seq !== convertSeq) return;
+            showError("Conversion failed: " + err.message, doConvert);
+        });
+}
+
+// Start the choice over: no targets, no search, every population, and no
+// results.  The source stays - it came from the browser and is not a control
+// on this page, so emptying it left every later conversion with nothing to
+// convert.  The reachability answer is kept too, since it depends only on the
+// source.
+function onClear() {
+    $("pgcFilter").value = "";
+    popFilter = null;
+    reachable = null;
+    reachableScored = false;
+    if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
+    targetOptions($("pgcTargets")).forEach(function (o) { o.selected = false; });
+    fillTargets("");
+    convertSeq++;               // a conversion still out is not to draw into the cleared page
+    clear($("pgcResults"));
+    hideStatus();
+}
+
+function onShowAll() {
+    whenContigs(function () {
+        var src = buildSource();
+        if (src.error) { showError(src.error); return; }
+        window.location = liftAllUrl(src);
+    });
+}
+
 // ---- Init -------------------------------------------------------------------
 
-function init() {
-    if (window.pangenomeLiftAll && $("pgcAll")) { initAll(); return; }
-    if (!$("pgcResults")) return;              // not this page
-    CFG = window.pangenomeConfig || {};
+function initForm() {
     if (CFG.maxLiftSpan) MAX_SPAN = CFG.maxLiftSpan;
     if (typeof CFG.maxChosenTargets === "number" && CFG.maxChosenTargets >= 0) MAX_CHOSEN = CFG.maxChosenTargets;
 
@@ -2057,10 +2070,22 @@ function init() {
     loadHaplotypes();
 }
 
+// =============================================================================
+// PART 4 - START
+// =============================================================================
+
+// The config is written into the page after this script, so it is read here,
+// when the page is ready, and not as the file loads.
+function startPage() {
+    CFG = window.pangenomeConfig || {};
+    if (window.pangenomeLiftAll && $("pgcAll")) { initAll(); return; }
+    if ($("pgcResults")) { initForm(); }
+}
+
 if (document.readyState === "loading")
-    document.addEventListener("DOMContentLoaded", init);
+    document.addEventListener("DOMContentLoaded", startPage);
 else
-    init();
+    startPage();
 
 // Test hook; a no-op in the browser (see hgPangenome/tests/).
 if (typeof module !== "undefined" && module.exports)
@@ -2100,8 +2125,7 @@ if (typeof module !== "undefined" && module.exports)
         selectedTargets: selectedTargets,
         fillTargets: fillTargets,
         setPopFilter: function (k) { popFilter = k; },
-        setChosen: setChosen,
-        init: init
+        setChosen: setChosen
     };
 
 }());

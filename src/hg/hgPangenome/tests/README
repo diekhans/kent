@@ -55,6 +55,8 @@ resultsTests.js Results page (js/hgPangenomeResults.js): the table's cell
                 parsing, tested as functions - no DataTable, no network.
 convertTests.js PanLift (js/hgPangenomeConvert.js): the source, the picker,
                 the request, the table of where a region lands, its links.
+                Also holds that file to its four parts: the result view names
+                nothing the form declares, and runs with the form cut out.
 plotTests.js    The ancestry plot both tools share (js/hgPangenomePclai.js):
                 what it keeps between one set of regions and the next, how it
                 reads its points in batches, what it says when it cannot draw.
