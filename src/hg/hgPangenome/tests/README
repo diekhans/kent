@@ -48,6 +48,11 @@ formTests.js    LAYER 3: the PanView search form, driven through a stubbed
 resultsTests.js Results page (js/hgPangenomeResults.js): the table's cell
                 renderers, row order, tab-separated download and record
                 parsing, tested as functions - no DataTable, no network.
+convertTests.js PanLift (js/hgPangenomeConvert.js): the source, the picker,
+                the request, the table of where a region lands, its links.
+plotTests.js    The ancestry plot both tools share (js/hgPangenomePclai.js):
+                what it keeps between one set of regions and the next, how it
+                reads its points in batches, what it says when it cannot draw.
 mockMiddleware.py
                 Stand-in middleware for Layer 2: configurable status/body/delay,
                 and records every request (method, path, headers, body) as JSON

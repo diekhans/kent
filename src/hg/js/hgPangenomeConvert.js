@@ -17,7 +17,7 @@
  * As with the mapping page, the browser only ever talks to this CGI; the
  * middleware URL and token stay server-side.
  */
-/* global window, document, fetch, Promise, pgpInit, pgpOpen */
+/* global window, document, fetch, Promise, pgpInit */
 
 (function () {
 'use strict';
@@ -587,6 +587,10 @@ function onReachableToggle() {
 }
 
 function showReachable() {
+    whenContigs(askReachable);
+}
+
+function askReachable() {
     var src = buildSource();
     if (src.error) { showError(src.error); untick(); return; }
     setToggleBusy(true);
@@ -726,9 +730,20 @@ function showSourceLabel() {
     if (!el2) { return; }
     var hap = currentSourceHap();
     var pos = (($("pgcPos") || {}).value || "").trim();
-    var text = hap ? hapLabel(hap) : "";
+    // An assembly the pangenome does not have is still named: the position
+    // beside it is on that assembly.
+    var text = hap ? hapLabel(hap) : bareDb(($("pgcSrcDb") || {}).value || "");
     if (pos) { text += (text ? " \u2014 " : "") + pos; }
     el2.textContent = text;
+}
+
+// What to say of an assembly that is not in the graph, and where to go.
+function notInPangenome(db) {
+    var from = ["GRCh38#0", "CHM13#0"].map(assemblyForHap).filter(function (a) {
+        return a && !/^https?:/.test(a);
+    });
+    return bareDb(db) + " is not in the pangenome. Open PanLift from " +
+           from.concat(["an HPRC assembly"]).join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
 }
 
 // Make sure the page opens in a state that can actually be converted: if the
@@ -745,6 +760,11 @@ function showSourceLabel() {
 // the caller declines to convert rather than quietly answering about somewhere
 // else.
 //
+// A position on an assembly the pangenome does not have is left as it is, with
+// its assembly: read on the default assembly it would name another place, and
+// the page would convert that.  There is nothing to convert then, and the
+// page says so (describeSource, buildSource).
+//
 // Returns {why, tookPosition} or null when nothing needed filling in.
 function applySourceFallback() {
     var db = ($("pgcSrcDb") || {}).value || "";
@@ -757,8 +777,14 @@ function applySourceFallback() {
         ? (!db ? "no assembly was carried over"
                : "assembly " + bareDb(db) + " is not part of the pangenome")
         : "no position was carried over";
-    if (!haveDb)
+    if (db && !haveDb && havePos)
+        return { why: why, tookPosition: false };
+    if (!haveDb) {
         $("pgcSrcDb").value = CFG.defaultSrcDb || "hs1";
+        // A position with no assembly to read it on is not kept either.
+        $("pgcPos").value = "";
+        havePos = false;
+    }
     var tookPosition = false;
     if (!havePos) {
         $("pgcPos").value = CFG.defaultPosition || "";
@@ -774,9 +800,7 @@ function describeSource(fallback) {
     var hap = currentSourceHap();
     var note = $("pgcSrcNote");
     if (!hap) {
-        note.textContent = db
-            ? "Assembly " + db + " is not one of the pangenome haplotypes."
-            : "Pick the haplotype your coordinates are on.";
+        note.textContent = db ? notInPangenome(db) : "";
         return;
     }
     var assembly = assemblyForHap(hap);
@@ -802,6 +826,7 @@ function describeSource(fallback) {
 
 var contigCache = Object.create(null);   // assembly -> {names, sizes, display, nativeOf}
 var contigsForSource = null;             // the list for the current source, or null
+var contigsPending = null;               // the read of that list, while it is out
 // Lower-cased spelling -> the accession the graph knows.  Holds both spellings
 // of every sequence, because a position can arrive either way: typed from the
 // graph's own naming, or copied out of the browser's address box.
@@ -820,7 +845,7 @@ function loadContigs() {
     // Our own endpoint rather than hubApi/list/chromosomes: that reports only
     // the accessions, and half the point here is to know the name the browser
     // shows for each one.
-    getCmd("cmd=contigs&db=" + encodeURIComponent(assembly))
+    var read = getCmd("cmd=contigs&db=" + encodeURIComponent(assembly))
         .then(function (d) {
             var list = (d && d.contigs) || null;
             if (!list || !list.length) return;
@@ -842,6 +867,18 @@ function loadContigs() {
             applyContigs(contigCache[assembly]);
         })
         .catch(function () { /* advisory only */ });
+    contigsPending = read;
+    read.then(function () { if (contigsPending === read) { contigsPending = null; } });
+}
+
+// Run fn once the source's sequence names are in, or could not be read.  A
+// position spelled the browser's way (chr7) is sent under the graph's name for
+// it (nativeContig), which is only known then; sent as it came, the graph
+// answers that there is no such sequence.
+function whenContigs(fn) {
+    if (!contigsPending) { fn(); return; }
+    showBusy("Reading the sequence names…");
+    contigsPending.then(fn);
 }
 
 function nameShown(info, n) {
@@ -929,12 +966,14 @@ function ancPlot(acts, asks) {
                         ["Role", a.role === "source" ? "the source of this conversion"
                                                      : "a target of this conversion"]] };
     });
-    plotted.forEach(function (a) {
-        if (a.role === "source") pgpPicked[a.hap] = true;
-    });
     acts.appendChild(el("button", { type: "button", class: "gbPill", id: "pgrPclaiBtn",
         title: "Where these regions sit in the pcLAI reference space", text: "Show ancestry plot" }));
-    pgpInit(spots, { legend: { hit: "a region", pick: "the source", many: "regions" } });
+    // Each conversion is a plot of its own: nothing opened or read for the
+    // last one belongs on this one.
+    pgpInit(spots, { legend: { hit: "a region", pick: "the source", many: "regions" },
+                     fresh: true,
+                     picked: plotted.filter(function (a) { return a.role === "source"; })
+                                    .map(function (a) { return a.hap; }) });
     return spots;
 }
 
@@ -1014,11 +1053,19 @@ function annotationsPossible(iv) {
 // parameters on the position link itself rather than offering a second one, so
 // the annotations arrive with the click the user was going to make anyway.
 function armAnnotationLink(a, iv, link) {
-    var prepared = null;
-    a.addEventListener("click", function (e) {
+    var prepared = null, busy = false;
+    var go = function (e) {
+        if (e.type === "auxclick" && e.button !== 1) return;   // only the middle button
         if (prepared) return;                 // already have the real target
         if (!quickLiftWanted()) return;       // unticked since: the plain position
         e.preventDefault();
+        if (busy) return;                     // the first click's answer is on its way
+        busy = true;
+        // A click that asks for a new tab gets one, with the tracks.  It has
+        // to be opened in the click itself or the popup blocker takes it, so
+        // it is opened now and pointed at the answer when that arrives.
+        var aside = e.type === "auxclick" || e.ctrlKey || e.metaKey || e.shiftKey;
+        var tab = aside ? window.open("", "_blank") : null;
         var parts = String(iv.haplotype).split("#");
         var hap = parts[0] + "#" + parts[1];
         var was = a.textContent;
@@ -1042,18 +1089,23 @@ function armAnnotationLink(a, iv, link) {
         };
         postCmd("quickLift", payload).then(function (resp) {
             a.textContent = was;
+            busy = false;
             if (resp && resp.status === "error") throw new Error(resp.error);
             prepared = resp.url;
             a.setAttribute("href", resp.url);
             requestWiderChain(payload);
-            window.location = resp.url;
+            if (tab) { tab.location = resp.url; } else { window.location = resp.url; }
         }).catch(function (err) {
             // Fall back to the plain position rather than going nowhere.
             a.textContent = was;
+            busy = false;
+            if (tab) { tab.close(); }
             prepared = link.url;
             showError("Could not carry the annotations over: " + err.message);
         });
-    });
+    };
+    a.addEventListener("click", go);
+    a.addEventListener("auxclick", go);
 }
 
 function hideTargetTracks() {
@@ -1074,7 +1126,10 @@ function quickLiftWanted() {
 // the "which haplotypes contain this?" query.
 function buildSource() {
     var hap = currentSourceHap();
-    if (!hap) return { error: "No pangenome assembly for that source." };
+    if (!hap) {
+        var db = ($("pgcSrcDb") || {}).value || "";
+        return { error: db ? notInPangenome(db) : "No pangenome assembly for that source." };
+    }
     if (!hapInGraph(hap))
         return { error: "Haplotype " + hap + " is not in the loaded graph, so its " +
                         "coordinates cannot be translated." };
@@ -1095,7 +1150,14 @@ function buildSource() {
 // for the chosen few, and is drawn by the same code (renderAll).
 var convertSeq = 0;            // the conversion the page is waiting for
 
+// A later click, or Clear, owns the page from then on: an earlier click still
+// waiting, for the sequence names or for its answer, is dropped.
 function doConvert() {
+    var seq = ++convertSeq;
+    whenContigs(function () { if (seq === convertSeq) { convertNow(seq); } });
+}
+
+function convertNow(seq) {
     var src = buildSource();
     if (src.error) { showError(src.error); return; }
 
@@ -1114,9 +1176,6 @@ function doConvert() {
     var what = fmtPos(src.contig, src.start, src.end);
     showBusy("Translating " + what + " to " + targets.length + " assembl" +
              (targets.length === 1 ? "y" : "ies") + "…");
-    // A later click, or Clear, owns the page from then on: an answer to an
-    // earlier one is dropped when it arrives.
-    var seq = ++convertSeq;
     postCmd("liftoverAll", { src: src.src, start: src.start, end: src.end, tgt: targets })
         .then(function (resp) {
             if (seq !== convertSeq) return;
@@ -1184,9 +1243,11 @@ function liftAllUrl(src) {
 }
 
 function onShowAll() {
-    var src = buildSource();
-    if (src.error) { showError(src.error); return; }
-    window.location = liftAllUrl(src);
+    whenContigs(function () {
+        var src = buildSource();
+        if (src.error) { showError(src.error); return; }
+        window.location = liftAllUrl(src);
+    });
 }
 
 // One entry per haplotype, its pieces largest first, as the mapping page
@@ -1197,8 +1258,9 @@ function onShowAll() {
 //              piece's length here less the length of source it covers
 //   inserted - bases here, inside those parts, that no source base is placed on
 //   deleted  - source bases inside those parts with no place here
-// inserted - deleted is the net change, so a gain and a loss of about the same
-// size, which cancel in the net, still show in the two.
+// A gain and a loss of about the same size cancel in the change and still show
+// in the other two.  The three are not one sum: where the region is duplicated,
+// or placed twice, inserted less deleted is not the change.
 function allHapsFrom(summary, len) {
     var src = String(allSrcHap).toLowerCase();
     var haps = [];
@@ -1680,7 +1742,8 @@ function allTsv(rows, len) {
                 h.bases.toFixed(1),
                 p && len ? (100 * (p.source_end - p.source_start) / len).toFixed(1) : "",
                 h.inserted, h.deleted,
-                p ? (p.end - p.start) - (p.source_end - p.source_start) : "",
+                // Blank where the page says "unclear".
+                p && !(p.merged > ALL_MERGED_MAX) ? (p.end - p.start) - (p.source_end - p.source_start) : "",
                 h.mapped, p ? p.source_start + 1 : "", p ? p.source_end : ""].map(clean).join("\t");
     }).join("\n") + "\n";
 }
@@ -1834,8 +1897,7 @@ function renderAll(resp, src, chosen) {
                  Deleted: "Bases of the region, inside the parts that carried over, with no " +
                           "place on this haplotype; all pieces together",
                  Span: "Share of the region this piece covers, from its first base to its last",
-                 "Size change": "This piece's length here less the length of the source it covers: " +
-                                "inserted less deleted, net",
+                 "Size change": "This piece's length here less the length of the source it covers",
                  Haplotype: "Which of the sample's two haplotypes; 0 for a reference",
                  Population: "The sample's population, as the HPRC describes it" };
     var table = el("table", { id: "pgcTable", class: "display" });
@@ -2097,6 +2159,7 @@ if (typeof module !== "undefined" && module.exports)
         samplePop: samplePop,
         allHapsFrom: allHapsFrom,
         mergePieces: mergePieces,
+        allTsv: allTsv,
         unionLength: unionLength,
         metricKeeps: metricKeeps,
         setMetricFilters: function (f) { allMetricFilters = f; },

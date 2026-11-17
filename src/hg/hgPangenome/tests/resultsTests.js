@@ -756,6 +756,41 @@ t.test('they are in the notes above the table', function () {
     t.eq(x.pgrNotes([row()], true, false)[0], '1 of your 4 sequences did not map: none1.', 'first note');
 });
 
+t.suite('what the strip and the notes count');
+// Two sequences' worth of rows: q1 at two places, the second of which only
+// fragments reach, and one haplotype hit at both.
+function countRows() {
+    return [row({ hap: 'HG00097#1', placement: 0, hits: 2, coverage: 98 }),
+            row({ hap: 'HG00097#2', placement: 0, hits: 2, coverage: 97 }),
+            row({ hap: 'HG00097#2', placement: 1, hits: 2, coverage: 12 }),
+            row({ hap: 'HG01234#1', placement: 1, hits: 2, coverage: 8 })];
+}
+function countPage(floor) {
+    var x = loadResults({ pangenomePclai: false, pangenomeMinCoverage: 0, pangenomeShowCoverage: floor });
+    x.pgrQueryBest.q1 = 98;
+    x.pgrQueryCount = 1;
+    return x;
+}
+t.test('Haplotypes counts haplotypes shown, not rows', function () {
+    var x = countPage(0);
+    t.eq(x.pgrHapsShown(countRows()), 3, 'four rows, three haplotypes');
+    t.contains(x.pgrSummaryStrip(1, countRows(), true), '<span id="pgrHapCount">3</span>', 'in the strip');
+    var y = countPage(50);
+    t.eq(y.pgrHapsShown(countRows()), 2, 'and only those the coverage floor leaves');
+    t.contains(y.pgrSummaryStrip(1, countRows(), true), '<span id="pgrHapCount">2</span>', 'in the strip');
+});
+t.test('a place the coverage floor hides is said to be hidden', function () {
+    var y = countPage(50);
+    var notes = y.pgrNotes(countRows(), false, true).join(' ');
+    t.contains(notes, 'Your sequence aligned to 2 places', 'both places counted');
+    t.notOk(/Every one is listed/.test(notes), 'not said to be listed');
+    t.contains(notes, '1 place is under Min. coverage and not shown.', 'the hidden one is owned up to');
+    var x = countPage(0);
+    t.notOk(/not shown/.test(x.pgrNotes(countRows(), false, true).join(' ')), 'nothing hidden, nothing said');
+    t.eq(y.pgrHitsHidden(countRows()), 1, 'one hit with no row shown');
+    t.eq(x.pgrHitsHidden(countRows()), 0, 'none with the floor at nothing');
+});
+
 t.suite('why a row has no position');
 t.test('the mapping server\'s reason is kept and shown on hover', function () {
     var r = { queryLength: 100 };
@@ -778,6 +813,53 @@ F.pgrFail = function (m) { failMsgs.push(m); };
 F.pgrRedrawKeep = function () {};
 F.pgrRows = [row({ contig: null, pending: true, rank: 0 })];
 F.pgrPlaceAll({ query: 'q1', index: 0 });
+
+// The download: a table with rows of two hits still waiting, and placed rows
+// whose locus was never asked for, more of them than one request reads.
+var dlAsked = [], dlLoci = [], dlActive = 0, dlMost = 0;
+var D = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+    var items = JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1])).items;
+    dlLoci.push(items.length);
+    return Promise.resolve({ ok: true, json: function () {
+        return Promise.resolve({ loci: items.map(function (it) { return 'exon G' + it.start; }) }); } });
+} });
+var dlRows = [row({ rank: 0, locus: 'exon LCT' }),
+              row({ rank: 1, hap: 'HG01234#1', contig: null, pending: true, placement: 0 }),
+              row({ rank: 2, hap: 'HG01234#2', contig: null, pending: true, placement: 1 }),
+              row({ rank: 3, hap: 'HG02000#1', contig: null, pending: true, placement: 1 })];
+for (var dl = 0; dl < 250; dl++) { dlRows.push(row({ rank: 4 + dl, hap: 'S' + dl + '#1', start: dl, end: dl + 10 })); }
+D.pgrRows = dlRows;
+D.pgrDt = { rows: function () { return { data: function () { return { toArray: function () { return D.pgrRows; } }; } }; } };
+D.pgrPlaceAll = function (p) {
+    dlAsked.push(p.query + '/' + p.index);
+    dlMost = Math.max(dlMost, ++dlActive);
+    return new Promise(function (resolve) { setTimeout(function () {
+        D.pgrRows.forEach(function (r) {
+            if (r.pending && r.placement === p.index) { r.pending = false; r.contig = 'CM9.1'; r.start = 10; r.end = 20; }
+        });
+        dlActive--;
+        resolve();
+    }, 2); });
+};
+var dlDone = false;
+D.pgrCompleteForExport().then(function () { dlDone = true; });
+
+setTimeout(function () {
+    t.suite('the download is the whole table');
+    t.test('rows still waiting are placed first, a hit at a time', function () {
+        t.ok(dlDone, 'finished');
+        t.deepEq(dlAsked, ['q1/0', 'q1/1'], 'each hit with a waiting row, once');
+        t.eq(dlMost, 1, 'one request at a time');
+        var tsv = D.pgrRowsToTsv(D.pgrExportRows()).split('\n');
+        var head = tsv[0].split('\t'), second = tsv[2].split('\t');
+        t.eq(second[head.indexOf('contig')], 'CM9.1', 'so the file has their positions');
+    });
+    t.test('and the loci nobody paged to are read, 200 rows a request', function () {
+        t.deepEq(dlLoci, [200, 53], 'two requests for 253 rows');
+        t.eq(D.pgrRows.filter(function (r) { return r.locus === undefined; }).length, 0, 'none left blank');
+        t.eq(D.pgrRows[0].locus, 'exon LCT', 'one already known is not asked again');
+    });
+}, 25);
 
 setTimeout(function () {
     t.test('on this page the rows stop waiting and say so', function () {

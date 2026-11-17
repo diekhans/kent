@@ -1,0 +1,202 @@
+/* plotTests.js - tests for the ancestry plot (js/hgPangenomePclai.js).
+ *
+ * The plot is shared by PanView's results page and PanLift.  These test what
+ * it keeps between one set of regions and the next, how it reads its points
+ * in batches, and what it says when it cannot draw.  The file is loaded into
+ * a vm with just enough of a document to evaluate; nothing is fetched.
+ *
+ * Run:  node plotTests.js
+ */
+
+'use strict';
+
+var t = require('./testLib.js');
+var fs = require('fs');
+var path = require('path');
+var vm = require('vm');
+
+var JS = path.resolve(__dirname, '../../js');
+
+// The plot's file defines its functions at top level, so they land on the vm
+// context.  Every element asked for exists, and remembers what was put in it.
+function loadPlot(fetchStub) {
+    var nodes = {};
+    var node = function (id) {
+        if (!nodes[id]) {
+            nodes[id] = { id: id, style: { display: '' }, innerHTML: '', textContent: '',
+                          addEventListener: function () {}, querySelector: function () { return null; },
+                          appendChild: function (c) { return c; },
+                          getBoundingClientRect: function () { return { top: 0, bottom: 0, left: 0, width: 800, height: 600 }; } };
+        }
+        return nodes[id];
+    };
+    var ctx = {
+        window: { location: { pathname: '/cgi-bin/hgPangenome' }, scrollBy: function () {} },
+        document: { getElementById: node, addEventListener: function () {},
+                    createElement: function () {
+                        return { style: {}, appendChild: function (c) { return c; },
+                                 addEventListener: function () {} };
+                    } },
+        console: console, setTimeout: setTimeout, encodeURIComponent: encodeURIComponent,
+        fetch: fetchStub || function () { return new Promise(function () {}); },
+        Promise: Promise, Math: Math, JSON: JSON, Object: Object, String: String, Number: Number,
+        Array: Array, isNaN: isNaN, parseFloat: parseFloat
+    };
+    vm.createContext(ctx);
+    vm.runInContext(fs.readFileSync(path.join(JS, 'hgPangenomePclai.js'), 'utf8'), ctx);
+    ctx.node = node;
+    return ctx;
+}
+
+function spots(n, tag) {
+    var out = [];
+    for (var i = 0; i < n; i++) {
+        out.push({ id: 'a' + i, hap: (tag || 'S') + i + '#1', acc: 'GCA_1.1', contig: 'c', start: 0, end: 10,
+                   coverage: null, placement: 0, placements: 1 });
+    }
+    return out;
+}
+
+// The spots a request asked about.
+function asked(opts) {
+    return JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1])).spots;
+}
+function answer(body) {
+    return Promise.resolve({ ok: true, json: function () { return Promise.resolve(body); } });
+}
+function pointsFor(list) {
+    return list.map(function (s, i) { return { id: s.id, hap: s.hap, x: i / 100, y: 0.1 }; });
+}
+var PANEL = { points: [[0, 0], [1, 1], [0.5, 0.2]] };
+
+// ---- reading the points in batches -------------------------------------------
+
+var sent1 = [], got1 = null;
+var P1 = loadPlot(function (url, opts) {
+    var list = asked(opts);
+    sent1.push(list.length);
+    if (sent1.length === 2) { return answer({ status: 'error', error: 'busy' }); }
+    return answer({ status: 'ok', points: pointsFor(list), asked: list.length, found: list.length,
+                    panel: sent1.length === 3 ? PANEL : undefined });
+});
+P1.pgpFetch(spots(250)).then(function (r) { got1 = r; });
+
+var sent2 = [], got2 = null, err2 = null;
+var P2 = loadPlot(function (url, opts) {
+    var list = asked(opts);
+    sent2.push(list.length);
+    if (sent2.length === 2) { return Promise.reject(new Error('network')); }
+    return answer({ status: 'ok', points: pointsFor(list), asked: list.length, found: list.length, panel: PANEL });
+});
+P2.pgpFetch(spots(150)).then(function (r) { got2 = r; }, function (e) { err2 = e; });
+
+var sent3 = [], got3 = null;
+var P3 = loadPlot(function (url, opts) {
+    sent3.push(asked(opts).length);
+    return answer({ status: 'error', error: 'pcLAI is off' });
+});
+P3.pgpFetch(spots(250)).then(function (r) { got3 = r; });
+
+// ---- an answer that comes after the regions have changed ---------------------
+
+var late = {};
+var P4 = loadPlot(function () { return new Promise(function (resolve) { late.resolve = resolve; }); });
+var first = spots(3, 'OLD'), second = spots(3, 'NEW');
+P4.pgpInit(first, { fresh: true });
+P4.pgpOpen(first);
+// The request goes out a tick after the plot is opened.
+setTimeout(function () {
+    P4.pgpInit(second, { fresh: true });
+    late.resolve({ ok: true, json: function () {
+        return Promise.resolve({ status: 'ok', points: pointsFor(first), asked: 3, found: 3, panel: PANEL }); } });
+}, 5);
+
+// And one that comes in time, which is drawn.
+var P5 = loadPlot(function (url, opts) {
+    var list = asked(opts);
+    return answer({ status: 'ok', points: pointsFor(list), asked: list.length, found: list.length, panel: PANEL });
+});
+P5.pgpInit(spots(3), { fresh: true });
+P5.pgpOpen(spots(3));
+
+// No reference panel on the server.
+var P6 = loadPlot(function (url, opts) {
+    var list = asked(opts);
+    return answer({ status: 'ok', points: pointsFor(list), asked: list.length, found: list.length });
+});
+var s6 = spots(3);
+P6.pgpInit(s6, { fresh: true });
+P6.pgpOpen(s6);
+
+setTimeout(function () {
+    t.suite('reading the points in batches');
+    t.test('a later batch that fails is counted, and the rest is kept', function () {
+        t.deepEq(sent1, [100, 100, 50], 'three requests for 250 regions');
+        t.ok(got1 && got1.status === 'ok', 'there is a plot');
+        if (!got1) { return; }
+        t.eq(got1.points.length, 150, 'with the points that were read');
+        t.eq(got1.failed, 100, 'and the number that were not');
+        t.ok(got1.panel, 'the reference panel is taken from the first answer that has it');
+    });
+    t.test('so is one that never arrives', function () {
+        t.eq(err2, null, 'the plot is not given up');
+        t.ok(got2, 'answered');
+        if (!got2) { return; }
+        t.eq(got2.points.length, 100, 'the first batch stands');
+        t.eq(got2.failed, 50, 'the second is counted as missing');
+    });
+    t.test('when the first fails there is no plot, and nothing more is asked', function () {
+        t.deepEq(sent3, [100], 'one request');
+        t.eq(got3 && got3.status, 'error', 'and its error is the answer');
+    });
+    t.test('the plot says how many it is missing', function () {
+        var x = loadPlot();
+        x.pgpInit(spots(3), { legend: { many: 'regions' }, fresh: true });
+        x.pgpData = { status: 'ok', failed: 100 };
+        t.contains(x.pgpControlsHtml(150, 150, 0), '100 regions could not be read', 'beside its controls');
+        x.pgpData = { status: 'ok' };
+        t.notOk(/could not be read/.test(x.pgpControlsHtml(150, 150, 0)), 'and nothing when all were');
+    });
+
+    t.suite('a new set of regions');
+    t.test('nothing opened or read for the last one is kept', function () {
+        var x = loadPlot();
+        x.pgpInit(spots(3), { fresh: true, picked: ['S0#1'] });
+        x.pgpSelected = 'a1';
+        x.pgpSelGroup = ['a1', 'a2'];
+        x.pgpWindows.a1 = [{ x: 1, y: 1 }];
+        x.pgpPicked['S2#1'] = true;
+        x.pgpInit(spots(3, 'T'), { fresh: true, picked: ['T0#1'] });
+        t.eq(x.pgpSelected, null, 'no detail open');
+        t.eq(x.pgpSelGroup, null, 'no group open');
+        t.eq(x.pgpWindows.a1, undefined, 'the windows read for the old a1 are gone');
+        t.deepEq(Object.keys(x.pgpPicked), ['T0#1'], 'only the new source is ringed');
+    });
+    t.test('more rows of the same table keep what the reader chose', function () {
+        // The results page calls again as its table gains rows.
+        var x = loadPlot();
+        x.pgpInit(spots(3));
+        x.pgpSelected = 'a1';
+        x.pgpPicked['S2#1'] = true;
+        x.pgpInit(spots(5));
+        t.eq(x.pgpSelected, 'a1', 'the open detail');
+        t.ok(x.pgpPicked['S2#1'], 'and the ticked row');
+    });
+    t.test('an answer for the old regions is dropped', function () {
+        t.eq(P4.pgpData, null, 'not taken as the new regions\' points');
+        t.notOk(/OLD/.test(P4.node('pgrPclaiPlot').innerHTML), 'and not drawn');
+    });
+    t.test('an answer in time is drawn', function () {
+        t.ok(P5.pgpData && P5.pgpData.points.length === 3, 'kept');
+        t.contains(P5.node('pgrPclaiPlot').innerHTML, '<svg', 'and drawn');
+    });
+
+    t.suite('no reference panel');
+    t.test('the plot says so instead of waiting for ever', function () {
+        var html = P6.node('pgrPclaiPlot').innerHTML;
+        t.notOk(/Reading ancestry coordinates/.test(html), 'not still reading');
+        t.contains(html, 'no pcLAI reference panel', 'the reason');
+    });
+
+    process.exit(t.report());
+}, 40);

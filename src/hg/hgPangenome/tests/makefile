@@ -36,6 +36,8 @@ Individual layers:\n\
   ./proxyTests.sh       CGI proxy tests against a mock middleware (Layer 2)\n\
   node formTests.js     the PanView search form (Layer 3)\n\
   node resultsTests.js  results page: cells, row order, download\n\
+  node convertTests.js  PanLift\n\
+  node plotTests.js     the ancestry plot both tools share\n\
 \n\
 To test a CGI you built yourself:  PG_CGI=/path/to/hgPangenome ./proxyTests.sh\n"
 

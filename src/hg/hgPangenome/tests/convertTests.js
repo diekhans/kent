@@ -251,7 +251,6 @@ t.test('the plot is offered for the HPRC regions, with no ancestry read until it
     var c = startPage();
     var given = null;
     c.sandbox.pangenomePclai = { on: 1 };
-    c.sandbox.pgpPicked = {};
     c.sandbox.pgpInit = function (spots, opts) { given = { spots: spots, opts: opts }; return true; };
     var acts = c.sandbox.document.createElement('span');
     var spots = c.api.ancPlot(acts, [
@@ -261,7 +260,8 @@ t.test('the plot is offered for the HPRC regions, with no ancestry read until it
     t.eq(spots.length, 2, 'GRCh38 left out: it has no pcLAI');
     t.eq(given.spots.length, 2, 'handed to the plot');
     t.ok(!given.opts.data, 'no answer handed over: the plot reads its own when opened');
-    t.ok(c.sandbox.pgpPicked['HG00097#1'], 'the source is ringed');
+    t.deepEq(given.opts.picked, ['HG00097#1'], 'the source is ringed');
+    t.eq(given.opts.fresh, true, 'and nothing of the last conversion\'s plot is kept');
     t.eq(acts._kids.length, 1, 'one button');
     t.eq(acts._kids[0].textContent, 'Show ancestry plot', 'labelled as on the mapping page');
     t.eq(c.calls.filter(function (x) { return /cmd=pclai/.test((x.opts && x.opts.body) || x.url); }).length, 0,
@@ -275,7 +275,6 @@ t.test('no plot with pcLAI off, or with fewer than two regions to plot', functio
                { role: 'target', hap: 'HG00099#2', db: 'GCA_018466845.2' }];
     t.eq(c.api.ancPlot(acts, two), null, 'off');
     c.sandbox.pangenomePclai = { on: 1 };
-    c.sandbox.pgpPicked = {};
     t.eq(c.api.ancPlot(acts, two.slice(0, 1)), null, 'one region');
     t.eq(acts._kids.length, 0, 'and no button');
 });
@@ -378,6 +377,136 @@ t.test('the page is named by the source path and interval', function () {
     t.contains(u, 'page=liftAll&src=HG00097%231%23CM094066.1&start=100&end=200', 'source and interval');
     t.contains(u, 'hgsid=SID1', 'and the cart');
 });
+
+t.test('the download leaves a size change blank where the page says unclear', function () {
+    var A = startPage().api;
+    A.setAllSrcHap('CHM13#0');
+    var flood = [piece('c1', 0, 600, '+', 0, 600)];
+    for (var i = 0; i < 100; i++) flood.push(piece('c1', 300, 900000, '+', 600 + i, 601 + i));
+    var haps = A.allHapsFrom([
+        { haplotype: 'HG00097#1', pieces: flood, mapped_bp: 700 },
+        { haplotype: 'HG00097#2', pieces: [piece('c2', 1000, 1950, '+', 0, 1000)], mapped_bp: 950 }], 1000);
+    var rows = haps.map(function (h) { return { h: h, piece: h.pieces[0], i: 0 }; });
+    var lines = A.allTsv(rows, 1000).split('\n');
+    var col = lines[0].split('\t').indexOf('size_change_bp');
+    var by = {};
+    lines.slice(1).forEach(function (l) { var f = l.split('\t'); by[f[0] + '#' + f[1]] = f[col]; });
+    t.eq(by['HG00097#1'], '', 'unclear: no figure');
+    t.eq(by['HG00097#2'], '-50', 'a real one is kept');
+});
+
+// ======================================== a source that cannot be converted,
+// the sequence names arriving late, and a click that asks for a new tab
+
+(function () {
+    // hg19 is a human assembly the pangenome does not have.
+    var foreign = startPage({ db: 'hg19', position: 'chr1:1000-2000' });
+    var foreignAuto = startPage({ db: 'hg19', position: 'chr1:1000-2000',
+                                  config: { presetTarget: 'HG01234#2' } });
+    // The sequence names come when the test says so.
+    var late = {};
+    var slow = startPage({ position: 'chr7:1-100', config: { presetTarget: 'CHM13#0' },
+        respond: function (u) {
+            if (u.indexOf('cmd=contigs') < 0) return undefined;
+            return new Promise(function (resolve) { late.resolve = resolve; });
+        } });
+    // A result whose link carries the lifted tracks.
+    function tabPage() {
+        var c = startPage({ respond: function (u, b) {
+            if (b.indexOf('cmd=quickLift') >= 0) return { url: '../cgi-bin/hgTracks?lifted=1' };
+            if (b.indexOf('cmd=liftoverAll') >= 0)
+                return summ([['CHM13#0', [piece('chr9', 500, 600, '+', 100, 200)], 100]]);
+            return undefined;
+        } });
+        c.tabs = [];
+        c.window.open = function () { var tab = { closed: false, close: function () { this.closed = true; } };
+                                      c.tabs.push(tab); return tab; };
+        return c;
+    }
+    var ctrl = tabPage(), middle = tabPage(), right = tabPage(), plain = tabPage();
+    var click = function (type, more) {
+        var e = { type: type, preventDefault: function () { e.prevented = true; } };
+        Object.keys(more || {}).forEach(function (k) { e[k] = more[k]; });
+        return e;
+    };
+    var liftPosts = function (c) {
+        return c.calls.filter(function (x) {
+            return String((x.opts && x.opts.body) || '').indexOf('cmd=liftoverAll') >= 0; });
+    };
+    var slowBefore = null, slowStatus = null;
+
+    setTimeout(function () {
+        slowBefore = liftPosts(slow).length;
+        slowStatus = slow.el.pgcStatus.textContent;
+        late.resolve({ contigs: [{ name: 'CM094066.1', display: 'chr7', size: 134577915 }] });
+        foreign.el.pgcTargets.children.forEach(function (o) { o.selected = o.value === 'HG01234#2'; });
+        foreign.el.pgcSubmit.dispatch('click');
+        [ctrl, middle, right, plain].forEach(function (c) {
+            c.el.pgcQuickLift.checked = true;
+            convert(c, 'CM094066.1:101-200', ['CHM13#0']);
+        });
+        setTimeout(function () {
+            var linkOf = function (c) {
+                return c.findAll(c.el.pgcResults, function (n) {
+                    return n.tagName === 'A' && (n.getAttribute('href') || '').indexOf('hgTracks') >= 0;
+                })[0];
+            };
+            var events = { ctrl: click('click', { ctrlKey: true }),
+                           middle: click('auxclick', { button: 1 }),
+                           right: click('auxclick', { button: 2 }),
+                           plain: click('click') };
+            linkOf(ctrl).dispatch('click', events.ctrl);
+            linkOf(middle).dispatch('auxclick', events.middle);
+            linkOf(right).dispatch('auxclick', events.right);
+            linkOf(plain).dispatch('click', events.plain);
+            setTimeout(function () {
+                t.suite('an assembly that is not in the pangenome');
+                t.test('its position is not read on another assembly', function () {
+                    t.eq(foreign.el.pgcSrcDb.value, 'hg19', 'the assembly is not swapped');
+                    t.eq(foreign.el.pgcPos.value, 'chr1:1000-2000', 'the position is the reader\'s own');
+                    t.contains(foreign.el.pgcSrcLabel.textContent, 'hg19', 'and is shown with its assembly');
+                    t.contains(foreign.el.pgcSrcNote.textContent, 'hg19 is not in the pangenome', 'the page says so');
+                    t.contains(foreign.el.pgcSrcNote.textContent, 'hg38, hs1 or an HPRC assembly', 'and where to go');
+                });
+                t.test('Convert declines, and so does the hand-off', function () {
+                    t.eq(liftPosts(foreign).length, 0, 'nothing sent on a click');
+                    t.contains(foreign.el.pgcStatus.textContent, 'not in the pangenome', 'with the reason');
+                    t.eq(liftPosts(foreignAuto).length, 0, 'nothing sent on arrival');
+                });
+
+                t.suite('the sequence names arrive late');
+                t.test('the conversion waits for them, and sends the graph\'s name', function () {
+                    t.eq(slowBefore, 0, 'nothing sent before they are in');
+                    t.contains(slowStatus, 'sequence names', 'and the page says what it waits for');
+                    var sent = liftPosts(slow);
+                    t.eq(sent.length, 1, 'sent once they are');
+                    if (!sent.length) return;
+                    var p = JSON.parse(decodeURIComponent(sent[0].opts.body.split('payload=')[1].split('&')[0]));
+                    t.eq(p.src, 'HG00097#1#CM094066.1', 'chr7 under the name the graph knows');
+                });
+
+                t.suite('a click that asks for a new tab');
+                var here = function (c) { return String(c.window.location); };
+                t.test('Ctrl-click opens the lifted tracks in a new tab', function () {
+                    t.eq(ctrl.tabs.length, 1, 'a tab is opened');
+                    t.eq(ctrl.tabs[0] && ctrl.tabs[0].location, '../cgi-bin/hgTracks?lifted=1', 'on the lifted tracks');
+                    t.notOk(/lifted/.test(here(ctrl)), 'and this tab stays');
+                });
+                t.test('so does the middle button, and no other', function () {
+                    t.eq(middle.tabs.length, 1, 'a tab is opened');
+                    t.eq(middle.tabs[0] && middle.tabs[0].location, '../cgi-bin/hgTracks?lifted=1', 'on the lifted tracks');
+                    t.notOk(/lifted/.test(here(middle)), 'and this tab stays');
+                    t.eq(right.tabs.length, 0, 'the right button opens nothing');
+                    t.notOk(events.right.prevented, 'and is left to the browser');
+                });
+                t.test('a plain click still opens here', function () {
+                    t.eq(plain.tabs.length, 0, 'no tab');
+                    t.contains(here(plain), 'lifted=1', 'this tab goes to the lifted tracks');
+                });
+            }, 20);
+        }, 20);
+    }, 20);
+}());
 
 // ============================================================ position parsing
 
@@ -496,15 +625,17 @@ var hubDecorated = startPage({ db: 'hub_25071_hs1',
                                position: 'chr10:42477211-42540362' });
 // HG01234#2 rather than a name the stub graph does not list: the point is the
 // guard, and an absent target would make both tests pass for the wrong reason.
+// The hand-off waits for the source's sequence names, so hs1's are given.
+var HS1_CONTIGS = { contigs: [{ name: 'chr9', size: 150617247 }, { name: 'chr10', size: 134758134 }] };
 var hubHandoff = startPage({ db: 'hub_25071_hs1',
-                             position: 'chr10:42477211-42540362',
+                             position: 'chr10:42477211-42540362', contigs: HS1_CONTIGS,
                              config: { presetTarget: 'HG01234#2' } });
 var exampleHandoff = startPage({ db: 'hub_25071_hs1', position: '',
                                  config: { presetTarget: 'HG01234#2' } });
 // The SV page hands over several targets at once, comma separated, and may
 // include the source itself, which is dropped.
 var svHandoff = startPage({ db: 'hub_25071_hs1',
-                            position: 'chr10:42477211-42540362',
+                            position: 'chr10:42477211-42540362', contigs: HS1_CONTIGS,
                             config: { presetTarget: 'HG01234#2,GRCh38#0,CHM13#0' } });
 
 setTimeout(function () {

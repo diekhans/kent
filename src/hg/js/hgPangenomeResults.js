@@ -1205,15 +1205,7 @@ function pgrRefresh() {
     if (!dt || !document.getElementById("pgrTable")) { return false; }
     var rows = pgrRows.filter(function (r) { return !r.extra; });
     if (pgrColumnsSig(pgrQueryCount, rows) !== pgrDrawSig) { return false; }
-    var count = document.getElementById("pgrHapCount");
-    if (count) { count.textContent = pgrFmt(rows.length); }
-    var box = document.getElementById("pgrNotes");
-    if (box) {
-        var notes = pgrNotes(rows, pgrQueryCount > 1, rows.some(function (r) { return r.hits > 1; }));
-        var html = pgrNotesHtml(notes);
-        if (box.innerHTML !== html) { box.innerHTML = html; }
-        box.hidden = !notes.length;
-    }
+    pgrSayCounts(rows);
     // Where the table is on screen, so it can be put back there: the browser's
     // scroll anchoring, losing the rows it anchored to, moves the page.
     var table = document.getElementById("pgrTable");
@@ -1235,6 +1227,21 @@ function pgrRefresh() {
         window.convertTitleTagsToMouseovers();
     }
     return true;
+}
+
+// The count in the strip and the notes above the table, said again: both
+// depend on which rows are shown, which more rows placed or another coverage
+// floor changes.
+function pgrSayCounts(rows) {
+    var count = document.getElementById("pgrHapCount");
+    if (count) { count.textContent = pgrFmt(pgrHapsShown(rows)); }
+    var box = document.getElementById("pgrNotes");
+    if (box) {
+        var notes = pgrNotes(rows, pgrQueryCount > 1, rows.some(function (r) { return r.hits > 1; }));
+        var html = pgrNotesHtml(notes);
+        if (box.innerHTML !== html) { box.innerHTML = html; }
+        box.hidden = !notes.length;
+    }
 }
 
 // Scroll back by however far `node` moved from `top0` on screen.
@@ -1326,6 +1333,7 @@ function pgrSetCovFloor(v) {
     var input = document.getElementById("pgrMinCov");
     if (input) { input.value = pgrMinShown; }
     if (pgrDt) { pgrDt.draw(); }
+    pgrSayCounts(pgrRows.filter(function (r) { return !r.extra; }));
     pgrCacheWrite(pgrJobId());
 }
 
@@ -1342,6 +1350,28 @@ function pgrUnderFloor(r) {
 // Is this row shown?  The table's own rows that clear the coverage floor.
 function pgrShown(r) {
     return !r.extra && !pgrUnderFloor(r);
+}
+
+// How many haplotypes the table shows.  One with several hits, or hit by
+// several of the sequences, has a row for each and is one haplotype.
+function pgrHapsShown(rows) {
+    var seen = Object.create(null), n = 0;
+    rows.forEach(function (r) {
+        var key = pgrHapKey(r.hap);
+        if (pgrShown(r) && !seen[key]) { seen[key] = true; n++; }
+    });
+    return n;
+}
+
+// How many hits have rows and show none of them: every haplotype there is
+// under the coverage floor.
+function pgrHitsHidden(rows) {
+    var shown = Object.create(null);
+    rows.forEach(function (r) {
+        var key = pgrPlaceKey(r.query, r.placement);
+        shown[key] = shown[key] || pgrShown(r);
+    });
+    return Object.keys(shown).filter(function (k) { return !shown[k]; }).length;
 }
 
 // ---- one haplotype at every hit --------------------------------------------
@@ -1478,7 +1508,7 @@ function pgrSummaryStrip(queries, rows, multiPlace) {
                 pgrStat("Length", pgrFmt(r0.queryLength || 0) + " bp");
         if (multiPlace) { stats += div + pgrStat("Hits", pgrFmt(r0.hits)); }
     }
-    stats += div + pgrStat("Haplotypes", '<span id="pgrHapCount">' + pgrFmt(rows.length) + "</span>") +
+    stats += div + pgrStat("Haplotypes", '<span id="pgrHapCount">' + pgrFmt(pgrHapsShown(rows)) + "</span>") +
              div + pgrCovControl();
     var annot = pgrAnnotControl();
     if (annot) { stats += div + annot; }
@@ -1675,7 +1705,12 @@ function pgrNotes(rows, multiQuery, multiPlace) {
                     "in the pangenome graph." :
                     "Your sequence aligned to " + pgrFmt(multi[names[0]]) + " places in the " +
                     "pangenome graph.") +
-                   " Every one is listed; the Hit column says which, numbered best first.");
+                   " The Hit column says which, numbered best first.");
+        var hidden = pgrHitsHidden(rows);
+        if (hidden) {
+            notes.push(pgrFmt(hidden) + (hidden === 1 ? " place is" : " places are") +
+                       " under Min. coverage and not shown.");
+        }
     }
     // The mapper is asked for at most this many places a sequence; a repeat
     // such as an Alu has thousands, and the table should not look complete.
@@ -1922,10 +1957,18 @@ function pgrDraw(queries, allRows) {
     pgrFillPage(dt);
 
     document.getElementById("pgrTsvBtn").onclick = function () {
-        var shown = dt.rows({ search: "applied", order: "applied" }).data().toArray();
+        var btn = this;
+        if (btn.disabled) { return; }
+        var label = btn.textContent;
         var base = multiQuery ? "pangenomeResults" :
             "pangenome_" + String((rows[0] || {}).query || "query").replace(/[^A-Za-z0-9._-]+/g, "_");
-        pgrDownload(pgrRowsToTsv(shown), base + ".tsv", "text/tab-separated-values");
+        btn.disabled = true;
+        btn.textContent = "Preparing…";
+        pgrCompleteForExport().catch(function () { /* what there is, then */ }).then(function () {
+            btn.disabled = false;
+            btn.textContent = label;
+            pgrDownload(pgrRowsToTsv(pgrExportRows()), base + ".tsv", "text/tab-separated-values");
+        });
     };
     if (document.getElementById("pgrSeqBtn")) {
         document.getElementById("pgrSeqBtn").onclick = pgrShowSeq;
@@ -1975,23 +2018,24 @@ function pgrLocusCell(r) {
 var pgrLocusBusy = false;
 var pgrLocusOff = false;    // a lookup failed: do not keep asking on every draw
 
-function pgrFillLoci(dt) {
-    if (pgrLocusBusy || pgrLocusOff) { return; }
-    var want = dt.rows({ page: "current", search: "applied" }).data().toArray().filter(function (r) {
-        if (r.locus !== undefined || r.contig == null) { return false; }
-        // A hub assembly is opened elsewhere and its genes are not ours to read.
-        if (!r.db || /^https?:/.test(r.db)) { r.locus = ""; return false; }
-        return true;
-    });
-    if (!want.length) { return; }
-    // The server reads LOCUS_MAX_ITEMS a request; the redraw after the answer
-    // asks for the next ones, so a page of "All" fills in in turns.
-    want = want.slice(0, 200);
+var PGR_LOCUS_MAX = 200;    // rows a request; the server reads LOCUS_MAX_ITEMS
+
+// Is this a row whose locus has still to be asked for?
+function pgrWantsLocus(r) {
+    if (r.locus !== undefined || r.contig == null) { return false; }
+    // A hub assembly is opened elsewhere and its genes are not ours to read.
+    if (!r.db || /^https?:/.test(r.db)) { r.locus = ""; return false; }
+    return true;
+}
+
+// One request for the loci of these rows, written onto them.  Rejects when
+// it fails, and nothing is asked for again on this page.
+function pgrLocusAsk(want) {
     pgrLocusBusy = true;
     var payload = { items: want.map(function (r) {
         return { db: r.db, contig: r.contig, start: r.start, end: r.end };
     }) };
-    fetch(pgrSelf, {
+    return fetch(pgrSelf, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded",
                    Accept: "application/json" },
@@ -2004,6 +2048,22 @@ function pgrFillLoci(dt) {
         // on to the browser - is asked again next time rather than kept as
         // "no gene here".
         pgrCacheWrite(pgrJobId());
+    }).catch(function (err) {
+        pgrLocusBusy = false;
+        pgrLocusOff = true;
+        want.forEach(function (r) { r.locusFailed = true; });
+        throw err;
+    });
+}
+
+function pgrFillLoci(dt) {
+    if (pgrLocusBusy || pgrLocusOff) { return; }
+    // The redraw after the answer asks for the next ones, so a page of "All"
+    // fills in in turns.
+    var want = dt.rows({ page: "current", search: "applied" }).data().toArray()
+                 .filter(pgrWantsLocus).slice(0, PGR_LOCUS_MAX);
+    if (!want.length) { return; }
+    pgrLocusAsk(want).then(function () {
         // Redrawn meanwhile - the rest of a hit placed, say: the new table's
         // own draw found this lookup busy and asked for nothing, so carry on
         // with it here.
@@ -2014,11 +2074,40 @@ function pgrFillLoci(dt) {
         dt.rows().invalidate("data");
         dt.draw(false);
     }).catch(function () {
-        pgrLocusBusy = false;
-        pgrLocusOff = true;
-        want.forEach(function (r) { r.locusFailed = true; });
         if (pgrDt === dt) { dt.rows().invalidate("data"); dt.draw(false); }
     });
+}
+
+// ---- the download ----------------------------------------------------------
+//
+// The file is the table, as filtered and sorted, and whole.  What the page
+// looks up only as its pages are turned - the position of a row still
+// waiting, the locus of a placed one - is looked up first, one request at a
+// time, so the file has no row left blank for not having been on screen.
+
+function pgrExportRows() {
+    return pgrDt ? pgrDt.rows({ search: "applied", order: "applied" }).data().toArray() : [];
+}
+
+function pgrCompleteForExport() {
+    var want = [], seen = Object.create(null);
+    pgrExportRows().forEach(function (r) {
+        var key = pgrPlaceKey(r.query, r.placement);
+        if (r.pending && !seen[key] && !pgrFull[key]) {
+            seen[key] = true;
+            want.push({ query: r.query, index: r.placement });
+        }
+    });
+    return pgrPool(want.map(function (p) { return function () { return pgrPlaceAll(p); }; }), 1)
+        .then(pgrLociForExport);
+}
+
+function pgrLociForExport() {
+    if (pgrLocusOff) { return Promise.resolve(); }
+    var want = pgrExportRows().filter(pgrWantsLocus).slice(0, PGR_LOCUS_MAX);
+    if (!want.length) { return Promise.resolve(); }
+    // Each answer leaves fewer rows to ask about; a failure ends it.
+    return pgrLocusAsk(want).then(pgrLociForExport, function () {});
 }
 
 // The rows per page: the reader's last choice, else 50.

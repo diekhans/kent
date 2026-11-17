@@ -27,6 +27,7 @@ var pgpPicked = Object.create(null);   // haplotypes the user ticked
 var pgpSelected = null;     // the haplotype whose details are open, if any
 var pgpSelGroup = null;     // the haplotypes sharing the mark that was clicked
 var pgpWindows = Object.create(null);  // key -> its windows, or null while being read
+var pgpGen = 0;             // which set of regions this is; an answer for an older one is dropped
 
 // The hit index, shared by the hover readout and the click that opens details:
 // both ask the same question - which mark is under the cursor.
@@ -171,14 +172,25 @@ function pgpFetch(spots) {
     for (var i = 0; i < spots.length; i += PGP_PER_REQUEST) {
         chunks.push(spots.slice(i, i + PGP_PER_REQUEST));
     }
+    // The first answer decides whether there is a plot at all.  A later one
+    // that fails leaves its spots out, counted in "failed" so that the plot
+    // can say how many it is missing.
     var merged = null;
-    return chunks.reduce(function (prev, chunk) {
+    return chunks.reduce(function (prev, chunk, i) {
         return prev.then(function () {
+            if (i === 0) {
+                return pgpFetchOne(chunk).then(function (r) { merged = r; });
+            }
+            if (!merged || merged.status !== "ok") { return; }
             return pgpFetchOne(chunk).then(function (r) {
-                if (!merged || !r || r.status !== "ok") { merged = merged || r; return; }
+                if (!r || r.status !== "ok") { throw new Error("no answer"); }
                 merged.points = (merged.points || []).concat(r.points || []);
                 merged.asked = (merged.asked || 0) + (r.asked || 0);
                 merged.found = (merged.found || 0) + (r.found || 0);
+                // The panel comes with the first answer that could find it.
+                merged.panel = merged.panel || r.panel;
+            }).catch(function () {
+                merged.failed = (merged.failed || 0) + chunk.length;
             });
         });
     }, Promise.resolve()).then(function () { return merged; });
@@ -214,10 +226,6 @@ function pgpScales(panel, pts) {
 
 // How spread out a set of points is: the centroid, which the plot marks, and
 // the RMS distance from it, which is the dispersion figure under the plot.
-// major, minor and ang are the axes of the points' 1-SD covariance ellipse.
-// The plot used to draw that ellipse; it no longer does, but the axes are kept
-// because one number hides direction - fifty haplotypes strung along PC1 and
-// fifty in a disc have the same RMS and mean very different things.
 //
 // Sample covariance (n-1), so the figure is an estimate of the spread of the
 // haplotypes that carry this sequence rather than of these fifty exactly.
@@ -227,21 +235,15 @@ function pgpSpread(pts) {
     var cx = 0, cy = 0, i;
     for (i = 0; i < n; i++) { cx += pts[i].x; cy += pts[i].y; }
     cx /= n; cy /= n;
-    if (n < 2) { return {cx: cx, cy: cy, n: n, rms: 0, major: 0, minor: 0, ang: 0}; }
-    var sxx = 0, syy = 0, sxy = 0;
+    if (n < 2) { return {cx: cx, cy: cy, n: n, rms: 0}; }
+    var sxx = 0, syy = 0;
     for (i = 0; i < n; i++) {
         var dx = pts[i].x - cx, dy = pts[i].y - cy;
-        sxx += dx * dx; syy += dy * dy; sxy += dx * dy;
+        sxx += dx * dx; syy += dy * dy;
     }
-    sxx /= (n - 1); syy /= (n - 1); sxy /= (n - 1);
-    // Eigenvalues of the 2x2 covariance, closed form.
-    var tr = sxx + syy, det = sxx * syy - sxy * sxy;
-    var disc = Math.sqrt(Math.max(0, tr * tr / 4 - det));
+    sxx /= (n - 1); syy /= (n - 1);
     return {cx: cx, cy: cy, n: n,
-            rms: Math.sqrt(Math.max(0, tr)),       // RMS distance from centroid
-            major: Math.sqrt(Math.max(0, tr / 2 + disc)),
-            minor: Math.sqrt(Math.max(0, tr / 2 - disc)),
-            ang: 0.5 * Math.atan2(2 * sxy, sxx - syy)};
+            rms: Math.sqrt(Math.max(0, sxx + syy))};       // RMS distance from centroid
 }
 
 // Coincident hits are gathered into one mark.  Measured on a real 48-haplotype
@@ -596,20 +598,28 @@ function pgpReadWindows(key) {
     var spot = null;
     (pgpSpots || []).forEach(function (sp) { if (pgpKeyOf(sp) === key) { spot = sp; } });
     if (spot === null) { pgpWindows[key] = []; return; }
-    pgpWindows[key] = null;
+    // Kept in the list it was asked for: a plot set up anew meanwhile has its
+    // own, where this key may be another region.
+    var store = pgpWindows;
+    store[key] = null;
     pgpFetchOne([spot], true).then(function (r) {
         var p = r && r.points && r.points[0];
-        pgpWindows[key] = (p && p.windows) || [];
+        store[key] = (p && p.windows) || [];
     }).catch(function () {
-        pgpWindows[key] = [];
+        store[key] = [];
     }).then(function () {
-        if (pgpSelected === key) { pgpDraw(); }
+        if (store === pgpWindows && pgpSelected === key) { pgpDraw(); }
     });
 }
 
 function pgpDraw() {
     var host = pgpEl("pgrPclaiPlot");
-    if (!host || !pgpData || !pgpData.panel) { return; }
+    if (!host || !pgpData) { return; }
+    if (!pgpData.panel) {
+        // The cloud the points are drawn over: without it there is no plot.
+        host.innerHTML = "<p>No ancestry plot: this server has no pcLAI reference panel.</p>";
+        return;
+    }
     var panel = pgpData.panel, all = pgpData.points || [];
     if (pgpMinCov === null) { pgpMinCov = pgpMinCovDefault(); }
     var pts = all.filter(pgpKeep);
@@ -885,6 +895,10 @@ function pgpControlsHtml(shown, total, dropped) {
         o.push('<span class="pgpCtlNote">' + shown + ' of ' + total + ' shown, ' +
                dropped + ' filtered out (still listed in the table)</span>');
     }
+    if (pgpData && pgpData.failed) {
+        o.push('<span class="pgpCtlNote">' + pgpData.failed + ' ' + pgpEsc(pgpLegend.many) +
+               ' could not be read and are not plotted</span>');
+    }
     o.push('</div>');
     return o.join("");
 }
@@ -1020,7 +1034,9 @@ function pgpOpen(spots) {
     host.style.display = "";
     if (pgpData) { pgpDraw(); return; }
     host.innerHTML = "<p>Reading ancestry coordinates…</p>";
+    var gen = pgpGen;
     pgpFetch(spots).then(function (resp) {
+        if (gen !== pgpGen) { return; }        // an answer for regions no longer shown
         if (!resp || resp.status === "error") {
             throw new Error((resp && resp.error) || "server error");
         }
@@ -1030,6 +1046,7 @@ function pgpOpen(spots) {
         // The table gained rows while this was being read.
         if (pgpSpots !== spots) { pgpUpdate(pgpSpots); }
     }).catch(function (err) {
+        if (gen !== pgpGen) { return; }
         host.innerHTML = "<p>Could not load the ancestry plot: " +
                          pgpEsc(err.message) + "</p>";
     });
@@ -1051,6 +1068,7 @@ function pgpUpdate(spots) {
         var keep = (old.points || []).filter(function (pt) { return wanted[pgpKeyOf(pt)]; });
         var done = function (resp) {
             pgpData = { status: "ok", panel: old.panel || (resp && resp.panel),
+                        failed: (old.failed || 0) + ((resp && resp.failed) || 0),
                         points: keep.concat((resp && resp.points) || []),
                         asked: Math.max(0, (old.asked || 0) - gone) + ((resp && resp.asked) || 0),
                         found: keep.length + ((resp && resp.found) || 0) };
@@ -1082,13 +1100,27 @@ function pgpUpdate(spots) {
 // Called by the results page with one spot per plottable hit.  Returns false
 // when there is nothing to plot, so the caller can leave the control and the
 // checkbox column out entirely.
+//   opts.legend - {hit, pick, many}: what the page calls its points
+//   opts.fresh  - these are other regions than the last call's, not more of
+//                 the same: nothing chosen or read for those carries over
+//   opts.picked - the haplotypes to ring from the start, with opts.fresh
 function pgpInit(spots, opts) {
     if (!spots || !spots.length) { return false; }
     // Called again when the table gains placements; what was read for the
-    // old rows does not cover the new ones.  A caller that has already read
-    // them can hand its answer over instead.
-    pgpData = (opts && opts.data) || null;
-    pgpDataSpots = pgpData ? spots : null;
+    // old rows does not cover the new ones.
+    pgpData = null;
+    pgpDataSpots = null;
+    if (opts && opts.fresh) {
+        // PanLift draws each conversion with the same ids, so what was open
+        // for one would show on another's haplotype.
+        pgpGen++;
+        pgpWindows = Object.create(null);
+        pgpSelected = null;
+        pgpSelGroup = null;
+        pgpPicked = Object.create(null);
+        pgpUpdating = Promise.resolve();
+        (opts.picked || []).forEach(function (hap) { pgpPicked[hap] = true; });
+    }
     if (opts && opts.legend) {
         pgpLegend = { hit: opts.legend.hit || pgpLegend.hit,
                       pick: opts.legend.pick || pgpLegend.pick,

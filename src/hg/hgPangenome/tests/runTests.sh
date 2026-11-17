@@ -93,6 +93,7 @@ runCgi
 runJs formTests.js    "PanView form"
 runJs resultsTests.js "PanView results"
 runJs convertTests.js "PanLift"
+runJs plotTests.js    "Ancestry plot"
 
 echo
 echo "============================================================"
