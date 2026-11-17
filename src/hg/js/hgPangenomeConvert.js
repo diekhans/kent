@@ -15,12 +15,16 @@
  *     the target haplotype's own assembly.
  *
  * As with the mapping page, the browser only ever talks to this CGI; the
- * middleware URL and token stay server-side.
+ * middleware URL and token stay server-side.  The helpers named pg.* are
+ * hgPangenomeCommon.js; the ancestry plot is hgPangenomePclai.js.
  */
-/* global window, document, fetch, Promise, pgpInit */
+/* global window, document, pangenomePclai */
 
 (function () {
 'use strict';
+
+var pg = window.pangenomeCommon;
+var el = pg.el, clear = pg.clear, $ = pg.byId;
 
 var CFG = {};
 var MAX_SPAN = 1000000;         // the server's cap (pangenome.maxLiftSpan), which it enforces too
@@ -42,26 +46,12 @@ function buildDbToHap() {
     });
 }
 
-// An assembly served through a hub is known to the cart by a decorated name -
-// hs1 arrives as "hub_25071_hs1" from the curated hub, a GenArk sample as
-// "hub_146215_GCA_...".  The assembly table is keyed on the undecorated name,
-// so strip the prefix before looking one up.  Without this, arriving from the
-// browser on hs1 looked like an assembly outside the pangenome.
-function bareDb(db) {
-    return String(db == null ? "" : db).replace(/^hub_[0-9]+_/, "");
-}
-
 function hapForDb(db) {
     if (!dbToHap) buildDbToHap();
     if (!db) return null;
-    var bare = bareDb(db);
+    var bare = pg.bareDb(db);
     return dbToHap[db] || dbToHap[String(db).toLowerCase()] ||
            dbToHap[bare] || dbToHap[bare.toLowerCase()] || null;
-}
-function assemblyForHap(hap) {
-    var table = window.pangenomeAssemblies || {};
-    var key = String(hap).toLowerCase();
-    return Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
 }
 
 // PanSN ("HG00097#1#CM094066.1") is a storage convention.  The rest of the
@@ -73,10 +63,8 @@ function prettyHap(name) {
     var sample = parts[0] || String(name);
     var phase = parts.length > 1 ? parts[1] : null;
     var contig = parts.length > 2 ? parts.slice(2).join("#").split("#")[0] : null;
-    var db = (phase != null) ? assemblyForHap(sample + "#" + phase) : null;
-    var names = window.pangenomeAssemblyNames || {};
-    var aName = (db && Object.prototype.hasOwnProperty.call(names, db))
-        ? names[db] : null;
+    var db = (phase != null) ? pg.assemblyFor(sample + "#" + phase) : null;
+    var aName = db ? pg.assemblyName(db) : null;
     var parent = null;
     if (aName) {
         var pm = /[._](pat|mat)([._]|$)/.exec(aName);
@@ -92,24 +80,6 @@ function prettyHap(name) {
 }
 
 function hapLabel(name) { return prettyHap(name).label; }
-
-// ---- DOM helpers (kept local so this page stands alone) --------------------
-
-function el(tag, attrs, kids) {
-    var e = document.createElement(tag);
-    if (attrs) Object.keys(attrs).forEach(function (k) {
-        if (k === "class") e.className = attrs[k];
-        else if (k === "text") e.textContent = attrs[k];
-        else e.setAttribute(k, attrs[k]);
-    });
-    (kids || []).forEach(function (c) {
-        if (c == null) return;
-        e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
-    return e;
-}
-function $(id) { return document.getElementById(id); }
-function clear(n) { while (n.firstChild) n.removeChild(n.firstChild); }
 
 // ---- Position parsing -------------------------------------------------------
 
@@ -135,10 +105,6 @@ function parsePosition(text) {
 }
 
 // Display a 0-based half-open interval the way the browser does.
-function withCommas(n) {
-    return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ",");
-}
-
 function fmtPos(contig, start, end) {
     return contig + ":" + (start + 1) + "-" + end;
 }
@@ -147,20 +113,11 @@ function fmtPos(contig, start, end) {
 
 function selfUrl() { return window.location.pathname; }
 
+// With the session: commands that build a hub need the user's real cart, not a
+// fresh session per request - otherwise every conversion mints another hub and
+// connects it, and none of them is ever reused or taken away.
 function postCmd(cmd, payload) {
-    var body = "cmd=" + encodeURIComponent(cmd) +
-               "&payload=" + encodeURIComponent(JSON.stringify(payload));
-    // Commands that build a hub need the user's real cart, not a fresh session
-    // per request - otherwise every conversion mints another hub and connects
-    // it, and none of them is ever reused or taken away.
-    if (CFG.hgsid)
-        body += "&hgsid=" + encodeURIComponent(CFG.hgsid);
-    return fetch(selfUrl(), {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded",
-                   "Accept": "application/json" },
-        body: body
-    }).then(checkHttp);
+    return pg.post(cmd, payload, CFG.hgsid).then(pg.jsonOrBody);
 }
 
 // Ask for a wider chain on the way out of the page.
@@ -188,12 +145,11 @@ function requestWiderChain(base) {
     Object.keys(base).forEach(function (k) {
         if (k !== "blocks") lean[k] = base[k];
     });
-    var body = "cmd=extendChain&payload=" +
-               encodeURIComponent(JSON.stringify(lean));
+    var fields = { cmd: "extendChain", payload: JSON.stringify(lean) };
     if (CFG.hgsid)
-        body += "&hgsid=" + encodeURIComponent(CFG.hgsid);
+        fields.hgsid = CFG.hgsid;
     try {
-        navigator.sendBeacon(selfUrl(), new Blob([body],
+        navigator.sendBeacon(selfUrl(), new Blob([pg.formEncode(fields)],
             { type: "application/x-www-form-urlencoded" }));
     } catch (e) {
         /* Best effort: the narrower chain is already in place and works. */
@@ -201,17 +157,7 @@ function requestWiderChain(base) {
 }
 
 function getCmd(qs) {
-    return fetch(selfUrl() + "?" + qs, {
-        method: "GET", headers: { "Accept": "application/json" }
-    }).then(checkHttp);
-}
-
-function checkHttp(resp) {
-    if (!resp.ok)
-        return resp.text().then(function (t) {
-            throw new Error("HTTP " + resp.status + (t ? ": " + t.slice(0, 300) : ""));
-        });
-    return resp.json();
+    return pg.get(qs).then(pg.jsonOrBody);
 }
 
 // ---- Status -----------------------------------------------------------------
@@ -322,20 +268,13 @@ function loadHaplotypes() {
 
 var popFilter = null;          // the population the right pane shows, or null for all
 
-function samplePop(hap) {
-    var table = window.pangenomeSamples || {};
-    var key = String(hap || "").split("#")[0].toLowerCase();
-    var p = Object.prototype.hasOwnProperty.call(table, key) ? table[key] : null;
-    return p ? { code: p[0], desc: p[1] } : null;
-}
-
 // The group a haplotype is listed under: the references first, then each
 // population by name, then the samples with no population given.
 function popGroupOf(hap) {
     var lower = String(hap).toLowerCase();
     if (lower === "grch38#0" || lower === "chm13#0")
         return { key: "~ref", label: "Reference assemblies", rank: 0 };
-    var p = samplePop(hap);
+    var p = pg.population(hap);
     if (!p) return { key: "~none", label: "No population given", rank: 2 };
     return { key: p.code, label: p.desc + " (" + p.code + ")", rank: 1, desc: p.desc };
 }
@@ -403,7 +342,7 @@ function drawChosen(chosen) {
         chosen.length ? "Chosen " + chosen.length + (MAX_CHOSEN > 0 ? " of " + MAX_CHOSEN : "")
                       : (MAX_CHOSEN > 0 ? "Choose up to " + MAX_CHOSEN + " below" : "Choose below") }));
     chosen.forEach(function (h) {
-        var p = samplePop(h);
+        var p = pg.population(h);
         var chip = el("span", { class: "pgcChip", title: p ? p.desc : "" }, [
             el("span", { text: hapLabel(h) }),
             p ? el("span", { class: "pgcChipPop", text: p.code }) : null,
@@ -490,7 +429,7 @@ function drawHaps(shown, chosenSet) {
             box2.disabled = true;
             box2.title = MAX_CHOSEN + " is the most. Remove one to choose another.";
         }
-        var p = popFilter ? null : samplePop(h);
+        var p = popFilter ? null : pg.population(h);
         var cov = reachable ? reachable[h.toLowerCase()] : null;
         var lab = el("label", { class: "pgcHap" + (on ? " on" : "") + (box2.disabled ? " dis" : ""),
                                 for: id }, [
@@ -554,8 +493,8 @@ function fillTargets(filter) {
 
     // One short line under the picker, and only when the list was narrowed:
     // the pane's own heading counts what it shows.
-    $("pgcTargetCount").textContent = reachable
-        ? candidates.length + " of " + allHaplotypes.length + " haplotypes have this region" : "";
+    $("pgcTargetCount").textContent = reachable ?
+        candidates.length + " of " + allHaplotypes.length + " haplotypes have this region" : "";
 }
 
 // Ask the graph which haplotypes this region exists on, and narrow the picker to
@@ -732,17 +671,17 @@ function showSourceLabel() {
     var pos = (($("pgcPos") || {}).value || "").trim();
     // An assembly the pangenome does not have is still named: the position
     // beside it is on that assembly.
-    var text = hap ? hapLabel(hap) : bareDb(($("pgcSrcDb") || {}).value || "");
+    var text = hap ? hapLabel(hap) : pg.bareDb(($("pgcSrcDb") || {}).value || "");
     if (pos) { text += (text ? " \u2014 " : "") + pos; }
     el2.textContent = text;
 }
 
 // What to say of an assembly that is not in the graph, and where to go.
 function notInPangenome(db) {
-    var from = ["GRCh38#0", "CHM13#0"].map(assemblyForHap).filter(function (a) {
+    var from = ["GRCh38#0", "CHM13#0"].map(pg.assemblyFor).filter(function (a) {
         return a && !/^https?:/.test(a);
     });
-    return bareDb(db) + " is not in the pangenome. Open PanLift from " +
+    return pg.bareDb(db) + " is not in the pangenome. Open PanLift from " +
            from.concat(["an HPRC assembly"]).join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
 }
 
@@ -773,10 +712,11 @@ function applySourceFallback() {
     var havePos = pos.trim() !== "";
     if (haveDb && havePos) return null;
 
-    var why = !haveDb
-        ? (!db ? "no assembly was carried over"
-               : "assembly " + bareDb(db) + " is not part of the pangenome")
-        : "no position was carried over";
+    var why = "no position was carried over";
+    if (!haveDb) {
+        why = db ? "assembly " + pg.bareDb(db) + " is not part of the pangenome"
+                 : "no assembly was carried over";
+    }
     if (db && !haveDb && havePos)
         return { why: why, tookPosition: false };
     if (!haveDb) {
@@ -803,7 +743,7 @@ function describeSource(fallback) {
         note.textContent = db ? notInPangenome(db) : "";
         return;
     }
-    var assembly = assemblyForHap(hap);
+    var assembly = pg.assemblyFor(hap);
     var parts = [];
     if (assembly && !/^https?:/.test(assembly)) parts.push("assembly " + assembly);
     // The caveat about the contig belonging to this haplotype has gone with the
@@ -834,7 +774,7 @@ var nativeForSource = null;
 
 function loadContigs() {
     var hap = currentSourceHap();
-    var assembly = hap ? assemblyForHap(hap) : null;
+    var assembly = hap ? pg.assemblyFor(hap) : null;
     contigsForSource = null;
     // Hub-URL assemblies are not ours to query, and an unknown haplotype has no
     // assembly at all; in both cases just stay quiet and let the server judge.
@@ -925,7 +865,7 @@ function contigProblem(contig) {
     if (!contigsForSource) return null;                 // unknown; let the server judge
     if (contigsForSource.indexOf(nativeContig(contig)) >= 0) return null;
     var lower = String(contig).toLowerCase();
-    var info = contigCache[assemblyForHap(currentSourceHap())] || {};
+    var info = contigCache[pg.assemblyFor(currentSourceHap())] || {};
     var near = contigsForSource.filter(function (n) {
         return n.toLowerCase().indexOf(lower) >= 0 ||
                nameShown(info, n).toLowerCase().indexOf(lower) >= 0;
@@ -954,7 +894,7 @@ function ancOn() {
 // region that has pcLAI - an HPRC assembly - when there are at least two.
 // `asks` is one {role, hap, db, contig, start, end, url, anchor} per region.
 function ancPlot(acts, asks) {
-    if (!ancOn() || typeof pgpInit !== "function") return null;
+    if (!ancOn() || !window.pangenomePlot) return null;
     var plotted = asks.filter(function (a) { return a.db && /^GC[AF]_/.test(a.db); });
     if (plotted.length < 2) return null;
     var spots = plotted.map(function (a, i) {
@@ -970,10 +910,11 @@ function ancPlot(acts, asks) {
         title: "Where these regions sit in the pcLAI reference space", text: "Show ancestry plot" }));
     // Each conversion is a plot of its own: nothing opened or read for the
     // last one belongs on this one.
-    pgpInit(spots, { legend: { hit: "a region", pick: "the source", many: "regions" },
-                     fresh: true,
-                     picked: plotted.filter(function (a) { return a.role === "source"; })
-                                    .map(function (a) { return a.hap; }) });
+    window.pangenomePlot.init(spots, {
+        legend: { hit: "a region", pick: "the source", many: "regions" },
+        fresh: true,
+        picked: plotted.filter(function (a) { return a.role === "source"; })
+                       .map(function (a) { return a.hap; }) });
     return spots;
 }
 
@@ -987,7 +928,7 @@ function browserLinkFor(interval) {
     if (parts.length < 3) return null;
     var hap = parts[0] + "#" + parts[1];
     var contig = parts.slice(2).join("#");
-    var assembly = assemblyForHap(hap);
+    var assembly = pg.assemblyFor(hap);
     if (!assembly) return null;
     var pos = fmtPos(contig, interval.start, interval.end);
     if (/^https?:\/\//.test(assembly)) {          // per-server hub id: link off-site
@@ -1007,17 +948,12 @@ function pctText(v) { return v == null ? "" : v.toFixed(1) + "%"; }
 function pgcPageTable(table, order) {
     var jq = window.jQuery;
     if (!jq || !jq.fn || !jq.fn.dataTable) return null;
-    var len = 50;
-    try {
-        var v = parseInt(window.localStorage.getItem("hgPangenome.pageLen"), 10);
-        if (v === -1 || v === 25 || v === 50 || v === 100) len = v;
-    } catch (e) { /* the default */ }
     var dt = jq(table).DataTable({
         // Widths from the content, not pinned to what the first draw measured:
         // the loci, the coverage bars and the ancestry arrive after it.
         autoWidth: false,
         paging: true,
-        pageLength: len,
+        pageLength: pg.pageLen(),
         lengthMenu: [[25, 50, 100, -1], [25, 50, 100, "All"]],
         pagingType: "simple_numbers",
         dom: '<"pgrPageBar"lfip>rt<"pgrPageBar"ip>',
@@ -1030,9 +966,7 @@ function pgcPageTable(table, order) {
                     infoFiltered: "(filtered from _MAX_)",
                     paginate: { previous: "Previous", next: "Next" } }
     });
-    dt.on("length", function (e, settings, n) {
-        try { window.localStorage.setItem("hgPangenome.pageLen", String(n)); } catch (err) { /* this page only */ }
-    });
+    dt.on("length", function (e, settings, n) { pg.keepPageLen(n); });
     return dt;
 }
 
@@ -1044,8 +978,8 @@ function pgcPageTable(table, order) {
 function annotationsPossible(iv) {
     var parts = String(iv.haplotype || "").split("#");
     if (parts.length < 2 || !lastSource) return false;
-    var srcDb = assemblyForHap(currentSourceHap());
-    var tgtDb = assemblyForHap(parts[0] + "#" + parts[1]);
+    var srcDb = pg.assemblyFor(currentSourceHap());
+    var tgtDb = pg.assemblyFor(parts[0] + "#" + parts[1]);
     return !!(srcDb && tgtDb && !/^https?:/.test(srcDb) && !/^https?:/.test(tgtDb));
 }
 
@@ -1077,8 +1011,8 @@ function armAnnotationLink(a, iv, link) {
         // aborts with an HTML page and surfaced here as
         // "Unexpected token '<' ... is not valid JSON".
         var payload = {
-            srcDb: assemblyForHap(currentSourceHap()),
-            tgtDb: assemblyForHap(hap),
+            srcDb: pg.assemblyFor(currentSourceHap()),
+            tgtDb: pg.assemblyFor(hap),
             src: lastSource.src,
             srcHap: hapLabel(currentSourceHap()),
             srcStart: lastSource.start,
@@ -1229,6 +1163,7 @@ var allDt = null;              // the table's DataTable, when there is one
 var allFilter = null;          // {label, test(h)} narrowing the table, or null
 var ALL_WHOLE = 99;            // % of the region's bases that counts as all of it
 var ALL_MERGED_MAX = 50;       // pieces past this, merged into one, make a size unclear
+function sizeUnclear(p) { return p.merged > ALL_MERGED_MAX; }
 var allSearchHooked = false;   // our row filter is in DataTables' list
 
 // The link to that page for a source {src, start, end}, carrying the two
@@ -1279,7 +1214,7 @@ function allHapsFrom(summary, len) {
         var spanned = unionLength(pieces.map(function (p) { return [p.source_start, p.source_end]; }));
         // Hundreds of pieces merged into one: the service could not settle
         // where these bases go, and the span they add up to is not a length.
-        var unsure = pieces.some(function (p) { return p.merged > ALL_MERGED_MAX; });
+        var unsure = pieces.some(sizeUnclear);
         haps.push({ hap: s.haplotype, pieces: pieces, mapped: mapped,
                     bases: len > 0 ? Math.min(100, 100 * mapped / len) : 0,
                     change: pieces.length && !unsure ? change : null,
@@ -1343,10 +1278,10 @@ function mergePieces(pieces) {
 function fmtChange(v) {
     if (v == null) return "";
     if (v === 0) return "0 bp";
-    return (v > 0 ? "+" : "−") + withCommas(Math.abs(v)) + " bp";
+    return (v > 0 ? "+" : "−") + pg.commas(Math.abs(v)) + " bp";
 }
 
-function fmtBp(v) { return v == null ? "" : withCommas(v) + " bp"; }
+function fmtBp(v) { return v == null ? "" : pg.commas(v) + " bp"; }
 
 // Axis labels: "-6 kb", "0", "+250 bp".
 function fmtChangeShort(v) {
@@ -1358,7 +1293,7 @@ function fmtChangeShort(v) {
 
 // 1, 2 or 5 times a power of ten, at least x.
 function niceStep(x) {
-    if (!(x > 0)) return 1;
+    if (isNaN(x) || x <= 0) return 1;
     var p = Math.pow(10, Math.floor(Math.log(x) / Math.LN10));
     var m = x / p;
     return (m <= 1 ? 1 : m <= 2 ? 2 : m <= 5 ? 5 : 10) * p;
@@ -1394,7 +1329,7 @@ function metricKeeps(r) {
 
 function metricFilterText(f) {
     return f.metric.label + (f.op === "min" ? " at least " : " below ") +
-           (f.metric.unit === "bp" ? withCommas(f.value) + " bp" : f.value + f.metric.unit);
+           (f.metric.unit === "bp" ? pg.commas(f.value) + " bp" : f.value + f.metric.unit);
 }
 
 // The row of controls that adds a filter, and the filters in force as chips.
@@ -1463,7 +1398,7 @@ function setAllFilter(f) {
         bar.hidden = !f;
         if (f) {
             var n = allHaps.filter(f.test).length;
-            bar.appendChild(el("span", { text: "Showing the " + withCommas(n) + " haplotype" +
+            bar.appendChild(el("span", { text: "Showing the " + pg.commas(n) + " haplotype" +
                                                (n === 1 ? "" : "s") + " " + f.label + "." }));
             var b = el("button", { type: "button", class: "gbPill", text: "Show all" });
             b.addEventListener("click", function () { setAllFilter(null); });
@@ -1510,7 +1445,7 @@ function allCoveragePanel(haps) {
         var row = el("div", { class: "pgcBarRow" }, [
             el("span", { class: "pgcBarK", text: b.label }),
             el("span", { class: "pgcBarTrack" }, [fill]),
-            el("span", { class: "pgcBarV", text: withCommas(b.n) +
+            el("span", { class: "pgcBarV", text: pg.commas(b.n) +
                          (haps.length ? " (" + Math.round(100 * b.n / haps.length) + "%)" : "") })
         ]);
         list.appendChild(b.n ? filterLink(row, b.says, b.test) : row);
@@ -1524,7 +1459,7 @@ function allCoveragePanel(haps) {
     var grid = el("div", { class: "pgcShapes" });
     shapes.forEach(function (s) {
         var n = haps.filter(s[2]).length;
-        var cell = el("div", { class: "pgcShape" }, [el("span", { class: "v", text: withCommas(n) }),
+        var cell = el("div", { class: "pgcShape" }, [el("span", { class: "v", text: pg.commas(n) }),
                                                      el("span", { class: "k", text: s[0] })]);
         grid.appendChild(n ? filterLink(cell, s[1], s[2]) : cell);
     });
@@ -1549,7 +1484,7 @@ function allSizePanel(haps) {
     var panel = el("div", { class: "pgcStatPanel" }, [el("h3", { text: "Insertions and deletions" })]);
     if (unsure.length)
         panel.appendChild(filterLink(el("p", { class: "pgcStatText pgcUnsure",
-            text: withCommas(unsure.length) + " haplotype" + (unsure.length === 1 ? " is" : "s are") +
+            text: pg.commas(unsure.length) + " haplotype" + (unsure.length === 1 ? " is" : "s are") +
                   " left out: the graph server could not settle where this region goes on " +
                   (unsure.length === 1 ? "it" : "them") + "." }),
             "whose size change is unclear", function (h) { return h.unsure; }));
@@ -1580,7 +1515,7 @@ function allSizePanel(haps) {
         el("span", { text: ": median " + fmtChange(median(vals)) + (common.length ? "; most common " : ".") })]);
     common.forEach(function (v, i) {
         if (i) line.appendChild(document.createTextNode(" · "));
-        line.appendChild(filterLink(el("span", { text: fmtChange(v) + " on " + withCommas(bySize[v]) }),
+        line.appendChild(filterLink(el("span", { text: fmtChange(v) + " on " + pg.commas(bySize[v]) }),
             "with a net size change of " + fmtChange(v),
             function (h) { return h.change === v; }));
     });
@@ -1615,7 +1550,7 @@ function allHistogram(vals, lo, hi, kind) {
     // The count axis: its top and the baseline.
     svg.appendChild(svgEl("line", { x1: L, x2: W - R, y1: y(most), y2: y(most), class: "grid" }));
     svg.appendChild(svgEl("text", { x: L - 5, y: y(most) + 4, "text-anchor": "end", class: "tick" },
-                          withCommas(most)));
+                          pg.commas(most)));
     svg.appendChild(svgEl("text", { x: L - 5, y: y(0) + 4, "text-anchor": "end", class: "tick" }, "0"));
     var tickStep = niceStep((nBins * step) / 5);
     for (var t = Math.ceil(first / tickStep) * tickStep; t <= first + nBins * step; t += tickStep) {
@@ -1634,8 +1569,8 @@ function allHistogram(vals, lo, hi, kind) {
                                       height: y(0) - top }));
         // A wider target than the bar, so the thin ones can be hovered.
         g.appendChild(svgEl("rect", { x: x(a), y: T, width: barW, height: y(0) - T, class: "hit" }));
-        var range = step === 1 ? kind.fmt(a) : withCommas(a) + " to " + kind.fmt(b - 1);
-        g.appendChild(svgEl("title", null, range + ": " + withCommas(n) + " haplotype" +
+        var range = step === 1 ? kind.fmt(a) : pg.commas(a) + " to " + kind.fmt(b - 1);
+        g.appendChild(svgEl("title", null, range + ": " + pg.commas(n) + " haplotype" +
                                            (n === 1 ? "" : "s") + ". Click to list them."));
         var go = function () {
             setAllFilter({ label: "with " + range + " " + kind.says,
@@ -1693,8 +1628,8 @@ function allPopPanel(haps) {
         }).forEach(function (r) {
             var tr = el("tr", null, [
                 el("td", { class: "pgcPopName", text: r.g.label }),
-                el("td", { class: "num", text: withCommas(r.n) }),
-                el("td", { class: "num", text: withCommas(r.found) }),
+                el("td", { class: "num", text: pg.commas(r.n) }),
+                el("td", { class: "num", text: pg.commas(r.found) }),
                 el("td", { class: "num", text: fmtBp(r.ins) }),
                 el("td", { class: "num", text: fmtBp(r.del) }),
                 el("td", { class: "num", text: r.net == null ? "" : fmtChange(r.net) })
@@ -1735,27 +1670,17 @@ function allTsv(rows, len) {
         return String(v === undefined || v === null ? "" : v).replace(/[\t\r\n]/g, " ");
     };
     return head.join("\t") + "\n" + rows.map(function (r) {
-        var h = r.h, p = r.piece, info = prettyHap(h.hap), pop = samplePop(h.hap);
+        var h = r.h, p = r.piece, info = prettyHap(h.hap), pop = pg.population(h.hap);
         return [info.sample, info.phase, pop ? pop.desc + " (" + pop.code + ")" : "",
-                p ? r.i + 1 : "", h.pieces.length, assemblyForHap(h.hap) || "",
+                p ? r.i + 1 : "", h.pieces.length, pg.assemblyFor(h.hap) || "",
                 p ? p.contig : "", p ? p.start + 1 : "", p ? p.end : "", p ? p.strand : "",
                 h.bases.toFixed(1),
                 p && len ? (100 * (p.source_end - p.source_start) / len).toFixed(1) : "",
                 h.inserted, h.deleted,
                 // Blank where the page says "unclear".
-                p && !(p.merged > ALL_MERGED_MAX) ? (p.end - p.start) - (p.source_end - p.source_start) : "",
+                p && !sizeUnclear(p) ? (p.end - p.start) - (p.source_end - p.source_start) : "",
                 h.mapped, p ? p.source_start + 1 : "", p ? p.source_end : ""].map(clean).join("\t");
     }).join("\n") + "\n";
-}
-
-function saveFile(text, fileName, mime) {
-    var a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([text], { type: mime }));
-    a.download = fileName;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 0);
 }
 
 // The annotation choices, as stats in the strip, as the mapping results page
@@ -1820,15 +1745,15 @@ function renderAll(resp, src, chosen) {
                                                el("span", { class: "v", text: v })]);
     };
     var div = function () { return el("span", { class: "gbDiv" }); };
-    var sPop = samplePop(allSrcHap);
+    var sPop = pg.population(allSrcHap);
     var acts = el("span", { class: "gbStripActions", id: "pgcStripActs" });
     var strip = el("div", { class: "gbStrip" }, [
         stat("Converted from", srcLabel), div(),
         stat("Population", sPop ? sPop.desc + " (" + sPop.code + ")" : "—"), div(),
-        stat("Length", withCommas(len) + " bp"), div(),
-        stat(chosen ? "Targets" : "Haplotypes", withCommas(haps.length)), div(),
-        stat("Found on", chosen ? withCommas(found) + " of " + withCommas(haps.length)
-                                : withCommas(found) + " (" +
+        stat("Length", pg.commas(len) + " bp"), div(),
+        stat(chosen ? "Targets" : "Haplotypes", pg.commas(haps.length)), div(),
+        stat("Found on", chosen ? pg.commas(found) + " of " + pg.commas(haps.length)
+                                : pg.commas(found) + " (" +
              (haps.length ? Math.round(100 * found / haps.length) : 0) + "%)")]);
     // The form has the two annotation choices already; that page has no form.
     var annot = chosen ? null : allAnnotControl();
@@ -1853,7 +1778,7 @@ function renderAll(resp, src, chosen) {
     if (anc) {
         var sp = String(src.src).split("#");
         anc.push({ role: "source", hap: allSrcHap,
-                   db: assemblyForHap(allSrcHap), contig: sp.slice(2).join("#"),
+                   db: pg.assemblyFor(allSrcHap), contig: sp.slice(2).join("#"),
                    start: src.start, end: src.end,
                    url: (browserLinkFor({ haplotype: src.src, start: src.start, end: src.end }) || {}).url });
     }
@@ -1906,13 +1831,14 @@ function renderAll(resp, src, chosen) {
     }))]));
     var tbody = el("tbody");
     table.appendChild(tbody);
-    var rows = allRows = [];
+    allRows = [];
+    var rows = allRows;
     haps.forEach(function (h) {
         (h.pieces.length ? h.pieces : [null]).forEach(function (p, i) {
             rows.push({ h: h, piece: p, i: i,
                         span: p ? (len ? 100 * (p.source_end - p.source_start) / len : null) : 0,
-                        change: p && p.merged <= ALL_MERGED_MAX
-                                ? (p.end - p.start) - (p.source_end - p.source_start) : null });
+                        change: p && p.merged <= ALL_MERGED_MAX ?
+                                (p.end - p.start) - (p.source_end - p.source_start) : null });
         });
     });
     // The form has the Annotations box only where the browser can lift tracks.
@@ -1920,7 +1846,7 @@ function renderAll(resp, src, chosen) {
     rows.forEach(function (r, idx) {
         var h = r.h, p = r.piece;
         var info = prettyHap(h.hap);
-        var pop = samplePop(h.hap);
+        var pop = pg.population(h.hap);
         var parent = info.label.split(" ")[1];
         parent = (parent === "paternal" || parent === "maternal") ? parent : null;
         var cells = [el("td", { class: "rankCol", text: String(idx + 1), "data-order": String(idx) }),
@@ -1958,16 +1884,16 @@ function renderAll(resp, src, chosen) {
             }
             var spanPct = len ? 100 * (p.source_end - p.source_start) / len : null;
             var change = (p.end - p.start) - (p.source_end - p.source_start);
-            var changeCell = p.merged > ALL_MERGED_MAX
-                ? el("td", { class: "pctCol pgcUnsure", text: "unclear", "data-order": "",
-                             title: "The graph server reported this place as " + withCommas(p.merged) +
-                                    " overlapping pieces, shown here as one; its length is not a size change" })
-                : el("td", { class: "pctCol" + (change ? "" : " zero"), text: fmtChange(change),
-                             "data-order": String(change) });
+            var changeCell = sizeUnclear(p) ?
+                el("td", { class: "pctCol pgcUnsure", text: "unclear", "data-order": "",
+                           title: "The graph server reported this place as " + pg.commas(p.merged) +
+                                  " overlapping pieces, shown here as one; its length is not a size change" }) :
+                el("td", { class: "pctCol" + (change ? "" : " zero"), text: fmtChange(change),
+                           "data-order": String(change) });
             var bpCell = function (v) {
-                return v == null
-                    ? el("td", { class: "pctCol pgcUnsure", text: "unclear", "data-order": "" })
-                    : el("td", { class: "pctCol" + (v ? "" : " zero"), text: fmtBp(v), "data-order": String(v) });
+                return v == null ?
+                    el("td", { class: "pctCol pgcUnsure", text: "unclear", "data-order": "" }) :
+                    el("td", { class: "pctCol" + (v ? "" : " zero"), text: fmtBp(v), "data-order": String(v) });
             };
             cells.push(posCell,
                 el("td", { class: "pctCol", text: pctText(h.bases), "data-order": h.bases.toFixed(3) }),
@@ -1978,7 +1904,7 @@ function renderAll(resp, src, chosen) {
                                           : { class: "strandCol", text: "+" }));
             if (anc)
                 anc.push({ role: "target", hap: h.hap,
-                           db: assemblyForHap(h.hap), contig: p.contig, start: p.start, end: p.end,
+                           db: pg.assemblyFor(h.hap), contig: p.contig, start: p.start, end: p.end,
                            url: link ? link.url : null, anchor: a });
         }
         r.tr = el("tr", { "data-i": String(idx), class: p ? "" : "pgcNone" }, cells);
@@ -2009,7 +1935,7 @@ function renderAll(resp, src, chosen) {
             shown = allRows.filter(function (r) { return !r.tr.hidden; });
         }
         var name = String(src.src).replace(/#/g, "_") + "_" + (src.start + 1) + "-" + src.end;
-        saveFile(allTsv(shown, len), "panLift_" + name + ".tsv", "text/tab-separated-values");
+        pg.saveFile(allTsv(shown, len), "panLift_" + name + ".tsv", "text/tab-separated-values");
     });
     if (anc) ancPlot(acts, anc);
 }
@@ -2032,7 +1958,8 @@ function initAll() {
     CFG = window.pangenomeConfig || {};
     allHeadActions(page);
     var parts = String(page.src || "").split("#");
-    if (parts.length < 3 || !(page.start >= 0) || !(page.end > page.start)) {
+    var named = parts.length >= 3 && page.start >= 0 && page.end > page.start;
+    if (!named) {
         showError("This link does not name a region to convert. Go to the region in the " +
                   "Genome Browser and open PanLift from there.");
         return;
@@ -2153,10 +2080,8 @@ if (typeof module !== "undefined" && module.exports)
         preselectDefaultTarget: preselectDefaultTarget,
         fmtPos: fmtPos,
         hapForDb: hapForDb,
-        assemblyForHap: assemblyForHap,
         browserLinkFor: browserLinkFor,
         ancPlot: ancPlot,
-        samplePop: samplePop,
         allHapsFrom: allHapsFrom,
         mergePieces: mergePieces,
         allTsv: allTsv,

@@ -1108,6 +1108,21 @@ else
     out=$(cgi_box "$QCONF" "page=convert&db=hg38&position=$(enc "chr1:1-2'><script>alert(1)</script>")")
     check_contains "PanLift form: drawn" "$out" "id='pgcPos'"
     check_not_contains "... with the position escaped" "$out" "'><script>alert(1)"
+
+    # every page names the shared script first and its own script last: the
+    # page scripts read hgPangenomeCommon.js as they load
+    ends() {                         # ends <page html>: first and last pangenome script
+        printf '%s' "$1" | grep -oE "hgPangenome[A-Za-z]*(-v[0-9]+)?\.js" | sed -E 's/-v[0-9]+//' |
+            awk 'NR == 1 { first = $0 } { last = $0 } END { print first, last }'
+    }
+    check_eq "PanLift form: the shared script, then the page's" "$(ends "$out")" \
+        "hgPangenomeCommon.js hgPangenomeConvert.js"
+    out=$(cgi_box "$QCONF" "page=results&job_id=job1")
+    check_eq "results page: the shared script, then the page's" "$(ends "$out")" \
+        "hgPangenomeCommon.js hgPangenomeResults.js"
+    out=$(cgi_box "$QCONF" "db=hg38")
+    check_eq "search form: the shared script, then the page's" "$(ends "$out")" \
+        "hgPangenomeCommon.js hgPangenome.js"
 fi
 fi
 

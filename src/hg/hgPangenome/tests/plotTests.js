@@ -11,14 +11,12 @@
 'use strict';
 
 var t = require('./testLib.js');
-var fs = require('fs');
-var path = require('path');
 var vm = require('vm');
+var loader = require('./loadClient.js');
 
-var JS = path.resolve(__dirname, '../../js');
-
-// The plot's file defines its functions at top level, so they land on the vm
-// context.  Every element asked for exists, and remembers what was put in it.
+// The plot's file is loaded without its module wrapper (loadClient.js body()),
+// so its functions land on the vm context.  Every element asked for exists,
+// and remembers what was put in it.
 function loadPlot(fetchStub) {
     var nodes = {};
     var node = function (id) {
@@ -43,7 +41,8 @@ function loadPlot(fetchStub) {
         Array: Array, isNaN: isNaN, parseFloat: parseFloat
     };
     vm.createContext(ctx);
-    vm.runInContext(fs.readFileSync(path.join(JS, 'hgPangenomePclai.js'), 'utf8'), ctx);
+    vm.runInContext(loader.source('hgPangenomeCommon.js'), ctx);
+    vm.runInContext(loader.body('hgPangenomePclai.js'), ctx);
     ctx.node = node;
     return ctx;
 }

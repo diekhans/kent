@@ -21,7 +21,7 @@ var pg = client.api;
 // Sanity: the test hook is present and exports what we expect.
 t.suite('test harness');
 t.test('client loads and exports its pure helpers', function () {
-    ['parseInput', 'validate', 'formEncode', 'readConfig'].forEach(function (name) {
+    ['parseInput', 'validate', 'readConfig'].forEach(function (name) {
         t.eq(typeof pg[name], 'function', 'exports ' + name);
     });
 });
@@ -300,27 +300,6 @@ t.test('where the server has not said, nothing is assumed', function () {
     var c = loader.load();
     var p = c.api.parseInput('>a\nACGT');
     t.ok(c.api.validate(p), 'no form data, no total check');
-});
-
-// ---------------------------------------------------------------- formEncode
-
-t.suite('formEncode - request body encoding');
-
-t.test('single and multiple pairs', function () {
-    t.eq(pg.formEncode({ cmd: 'map' }), 'cmd=map', 'one pair');
-    t.eq(pg.formEncode({ cmd: 'poll', job_id: 'abc123' }), 'cmd=poll&job_id=abc123', 'two pairs');
-});
-
-t.test('JSON payloads are percent-encoded', function () {
-    t.eq(pg.formEncode({ payload: '{"a":1}' }), 'payload=%7B%22a%22%3A1%7D', 'json');
-});
-
-t.test('characters that would break the body are escaped', function () {
-    t.eq(pg.formEncode({ v: 'a&b' }), 'v=a%26b', 'ampersand');
-    t.eq(pg.formEncode({ v: 'a=b' }), 'v=a%3Db', 'equals');
-    t.eq(pg.formEncode({ v: 'a+b' }), 'v=a%2Bb', 'plus');
-    t.eq(pg.formEncode({ v: 'a b' }), 'v=a%20b', 'space');
-    t.eq(pg.formEncode({ v: '#frag' }), 'v=%23frag', 'hash');
 });
 
 process.exit(t.report());

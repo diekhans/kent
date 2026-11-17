@@ -13,14 +13,15 @@
 'use strict';
 
 var t = require('./testLib.js');
-var fs = require('fs');
-var path = require('path');
 var vm = require('vm');
+var loader = require('./loadClient.js');
 
-var JS = path.resolve(__dirname, '../../js');
+// The results page's file is loaded without its module wrapper (loadClient.js
+// body()), so its functions land on the vm context and can be called from
+// here.  "plot" in extra stands in for the ancestry plot.
+var NO_PLOT = { init: function () {}, update: function () {}, togglePick: function () {},
+                isPicked: function () { return false; } };
 
-// The results page's file defines its functions at top level (no module
-// wrapper), so they land on the vm context and can be called from here.
 function loadResults(extra) {
     var ctx = {
         window: { location: { pathname: '/cgi-bin/hgPangenome' },
@@ -33,11 +34,13 @@ function loadResults(extra) {
         Promise: Promise, Math: Math, JSON: JSON, Date: Date, Object: Object,
         String: String, Number: Number, Array: Array, RegExp: RegExp, isNaN: isNaN
     };
-    Object.keys(extra || {}).forEach(function (k) { ctx[k] = extra[k]; });
+    Object.keys(extra || {}).forEach(function (k) {
+        if (k === 'plot') { ctx.window.pangenomePlot = extra[k]; } else { ctx[k] = extra[k]; }
+    });
     vm.createContext(ctx);
-    vm.runInContext(fs.readFileSync(path.join(JS, 'hgPangenomeAssemblies.js'), 'utf8'), ctx);
-    ctx.pangenomeAssemblies = ctx.window.pangenomeAssemblies;
-    vm.runInContext(fs.readFileSync(path.join(JS, 'hgPangenomeResults.js'), 'utf8'), ctx);
+    vm.runInContext(loader.source('hgPangenomeAssemblies.js'), ctx);
+    vm.runInContext(loader.source('hgPangenomeCommon.js'), ctx);
+    vm.runInContext(loader.body('hgPangenomeResults.js'), ctx);
     return ctx;
 }
 
@@ -148,7 +151,7 @@ t.test('a MAPQ that is not a number prints nothing, not itself', function () {
     t.eq(R.pgrMapqCell(row({ surjMapq: '7' })), R.pgrMapqCell(row({ surjMapq: 7 })), 'numeric string as number');
 });
 t.test('no box on a row the plot cannot draw', function () {
-    var P = loadResults({ pangenomePclai: true, pgpInit: function () {} });
+    var P = loadResults({ pangenomePclai: true, plot: NO_PLOT });
     t.contains(P.pgrPickCell(row()), 'pgrPick', 'a GenArk haplotype gets one');
     t.eq(P.pgrPickCell(row({ hap: 'GRCh38#0', db: 'hg38' })), '', 'GRCh38 does not');
     t.eq(P.pgrPickCell(row({ hap: 'CHM13#0', db: 'hs1' })), '', 'nor CHM13');
@@ -403,38 +406,6 @@ t.test('no surjection at all is a failure, not a crash', function () {
     t.ok(r.placeFailed, 'no answer');
 });
 
-t.suite('the assembly a haplotype is served from');
-t.test('the generated HPRC table is loaded', function () {
-    var n = Object.keys(R.window.pangenomeAssemblies || {}).length;
-    t.ok(n > 400, 'populated (' + n + ' haplotypes)');
-});
-t.test('sample haplotypes resolve to their GenArk assembly', function () {
-    t.eq(R.pgrAssembly('HG00097#1'), 'GCA_044165215.1', 'HG00097 hap1');
-    t.eq(R.pgrAssembly('HG00097#2'), 'GCA_044164745.1', 'HG00097 hap2');
-    t.eq(R.pgrAssembly('NA19338#1'), 'GCA_042035195.1', 'NA19338 hap1');
-});
-t.test('a name is matched on sample and haplotype, in any case, contig or not', function () {
-    t.eq(R.pgrAssembly('hg00097#1'), 'GCA_044165215.1', 'lower case');
-    t.eq(R.pgrAssembly('HG00097#1#CM094066.1'), 'GCA_044165215.1', 'with its contig');
-});
-t.test('the two haplotypes of a sample are different assemblies', function () {
-    t.notOk(R.pgrAssembly('HG00408#1') === R.pgrAssembly('HG00408#2'), 'pat and mat differ');
-});
-t.test('the references come from the same table', function () {
-    t.eq(R.pgrAssembly('CHM13#0'), 'hs1', 'CHM13');
-    t.eq(R.pgrAssembly('GRCh38#0'), 'hg38', 'GRCh38');
-});
-t.test('an assembly served only from a hub elsewhere is kept as its URL', function () {
-    var v = R.pgrAssembly('HG002#1');
-    t.contains(v, 'https://genome.ucsc.edu', 'absolute');
-    t.contains(v, 'db=hub_', 'hub id db, which only resolves on that server');
-});
-t.test('an unknown haplotype has no assembly', function () {
-    t.isNull(R.pgrAssembly('NOSUCHSAMPLE#1'), 'unknown sample');
-    t.isNull(R.pgrAssembly('HG00097#9'), 'unknown haplotype of a known sample');
-    t.isNull(R.pgrAssembly('toString'), 'a name Object.prototype has');
-});
-
 t.suite('one haplotype at every hit');
 t.test('every placement of every query is a place to fill, from the rows alone', function () {
     R.pgrMapping = null;
@@ -472,7 +443,7 @@ t.test('a haplotype with no path there reads "not present"', function () {
     t.eq(r.coverage, null, 'no coverage to show');
 });
 t.test('a row placed on request gets no number and no plot box', function () {
-    var R2 = loadResults({ pangenomePclai: true, pgpInit: function () {} });
+    var R2 = loadResults({ pangenomePclai: true, plot: NO_PLOT });
     t.eq(R2.pgrPickCell(row({ extra: true })), '', 'no box');
     t.contains(R2.pgrPickCell(row()), 'pgrPick', 'a table row keeps its box');
 });

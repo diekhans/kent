@@ -15,9 +15,19 @@
  * its samples and will not fit the next release's.  Colour means one thing
  * throughout, a position in the space, exactly as the pcLAI tracks paint it.
  *
+ * A page reaches this as window.pangenomePlot: init() once the page has its
+ * regions, update() as it learns more of them, togglePick() and isPicked() for
+ * the haplotypes ticked in a table.  The helpers named pg.* are
+ * hgPangenomeCommon.js.
+ *
  * Copyright (C) 2026 The Regents of the University of California */
 
-/* globals pangenomeConfig */
+/* global window, document, pangenomePclaiMinCoverage */
+
+(function () {
+'use strict';
+
+var pg = window.pangenomeCommon;
 
 var pgpSpots = null;        // one {hap, acc, contig, start, end} per hit
 var pgpData = null;         // the server's answer, kept so a redraw is free
@@ -55,8 +65,7 @@ var pgpMinCov = null;       // coverage floor, % - null until the config is read
 var pgpBestOnly = true;     // only the best placement of each query
 
 function pgpMinCovDefault() {
-    return (typeof pangenomePclaiMinCoverage === "number")
-           ? pangenomePclaiMinCoverage : 50;
+    return (typeof pangenomePclaiMinCoverage === "number") ? pangenomePclaiMinCoverage : 50;
 }
 
 // A point is drawn when the row behind it clears both filters.
@@ -134,14 +143,6 @@ function pgpField(s) {
     return href;
 }
 
-function pgpEl(id) { return document.getElementById(id); }
-
-function pgpEsc(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-        return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
-    });
-}
-
 // ---- fetching ---------------------------------------------------------------
 
 // Each haplotype is read in its own assembly's coordinates, at the interval the
@@ -153,18 +154,7 @@ function pgpEsc(s) {
 var PGP_PER_REQUEST = 100;
 
 function pgpFetchOne(spots, windows) {
-    var body = "cmd=pclai&payload=" +
-               encodeURIComponent(JSON.stringify(windows ? {spots: spots, windows: true}
-                                                         : {spots: spots}));
-    return fetch(window.location.pathname, {
-        method: "POST",
-        headers: {"Content-Type": "application/x-www-form-urlencoded",
-                  Accept: "application/json"},
-        body: body
-    }).then(function (r) {
-        if (!r.ok) { throw new Error("HTTP " + r.status); }
-        return r.json();
-    });
+    return pg.post("pclai", windows ? {spots: spots, windows: true} : {spots: spots}).then(pg.json);
 }
 
 function pgpFetch(spots) {
@@ -265,13 +255,7 @@ function pgpGroups(pts, scale) {
             var g = groups[i];
             if (Math.hypot(g.x - px, g.y - py) < PGP_GROUP_R) {
                 g.members.push(p);
-                // Re-centre on the members, so the mark sits where they are
-                // rather than where the first of them happened to be.
-                g.x = 0; g.y = 0;
-                g.members.forEach(function (m) {
-                    g.x += scale.X(m.x); g.y += scale.Y(m.y);
-                });
-                g.x /= g.members.length; g.y /= g.members.length;
+                centre(g);
                 return;
             }
         }
@@ -282,6 +266,8 @@ function pgpGroups(pts, scale) {
     // still overlap once drawn.  Merge the worst offending pair and look again,
     // until no two marks touch - the invariant we actually want is about the
     // circles, not about the centres.
+    // Put a mark where its members are, rather than where the first of them
+    // happened to be.
     function centre(g) {
         g.x = 0; g.y = 0;
         g.members.forEach(function (m) { g.x += scale.X(m.x); g.y += scale.Y(m.y); });
@@ -509,8 +495,8 @@ function pgpSpotFor(p) {
 // A hit's fill: the authors' colour for its coordinate where the file gave one,
 // and a plain light fill where it did not, so a mark is never invisible.
 function pgpFill(p) {
-    return (p && typeof p.rgb === "string" && /^[0-9]+,[0-9]+,[0-9]+$/.test(p.rgb))
-           ? "rgb(" + p.rgb + ")" : "#ffffff";
+    return (p && typeof p.rgb === "string" && /^[0-9]+,[0-9]+,[0-9]+$/.test(p.rgb)) ?
+           "rgb(" + p.rgb + ")" : "#ffffff";
 }
 
 function pgpTipHtml(m) {
@@ -518,25 +504,25 @@ function pgpTipHtml(m) {
     if (!m.hit) {
         // A reference haplotype: which one, and where.  Its population is
         // left out with the rest of the labels.
-        return "<b>" + pgpEsc(m.name) + "</b> (reference)<br>" +
+        return "<b>" + pg.esc(m.name) + "</b> (reference)<br>" +
                '<span style="color:#5b6572">' + coord + "</span>";
     }
     if (m.group && m.group.members.length > 1) {
         var names = m.group.members.slice(0, 4).map(function (x) {
-            return pgpEsc(x.hap); }).join(", ");
+            return pg.esc(x.hap); }).join(", ");
         var more = m.group.members.length - 4;
         return "<b>" + m.group.members.length + " haplotypes here</b><br>" +
                names + (more > 0 ? ", and " + more + " more" : "") +
                '<br><span style="color:#5b6572">' + coord +
                " \u2014 click to list them</span>";
     }
-    var out = "<b>" + pgpEsc(m.name) + "</b><br>" + coord +
+    var out = "<b>" + pg.esc(m.name) + "</b><br>" + coord +
               '<br><span style="color:#5b6572">pcLAI confidence ' + m.conf +
               "/1000</span>";
     if (m.spot) {
         // Where this haplotype was read, which is its own match and not a
         // position shared with the others.
-        out += '<br><span style="color:#5b6572">' + pgpEsc(m.spot.contig) + ":" +
+        out += '<br><span style="color:#5b6572">' + pg.esc(m.spot.contig) + ":" +
                (m.spot.start + 1).toLocaleString() + "-" +
                m.spot.end.toLocaleString() + "</span>";
     }
@@ -613,7 +599,7 @@ function pgpReadWindows(key) {
 }
 
 function pgpDraw() {
-    var host = pgpEl("pgrPclaiPlot");
+    var host = pg.byId("pgrPclaiPlot");
     if (!host || !pgpData) { return; }
     if (!pgpData.panel) {
         // The cloud the points are drawn over: without it there is no plot.
@@ -766,7 +752,7 @@ function pgpDraw() {
                    '" fill="none" stroke="#1664c0" stroke-width="2.6"/>');
         }
         o.push('<circle class="pgrPclaiHit" data-haps="' +
-               pgpEsc(String(g.members.length)) + '" cx="' + cx + '" cy="' + cy +
+               pg.esc(String(g.members.length)) + '" cx="' + cx + '" cy="' + cy +
                '" r="' + r.toFixed(1) + '" fill="' + pgpFill(g.rep) +
                '" fill-opacity="' + (g.members.length > 1 ? "0.85" : "1") +
                '" stroke="#1e2833" stroke-width="1.6"/>');
@@ -802,9 +788,9 @@ function pgpDraw() {
                      'style="pointer-events:none"';
         o.push('<text x="' + lx2 + '"' + common + ' fill="none" ' +
                'stroke="#ffffff" stroke-width="3" stroke-linejoin="round">' +
-               pgpEsc(label) + '</text>');
+               pg.esc(label) + '</text>');
         o.push('<text x="' + lx2 + '"' + common + ' fill="#1664c0">' +
-               pgpEsc(label) + '</text>');
+               pg.esc(label) + '</text>');
     });
     o.push('</g>');
 
@@ -812,7 +798,7 @@ function pgpDraw() {
     var lx = PGP_W - PGP_R + 54, ly = PGP_T + 4;
     var keyText = function (x, y, text) {
         o.push('<text x="' + x + '" y="' + y + '" font-size="10" fill="#1e2833">' +
-               pgpEsc(text) + '</text>');
+               pg.esc(text) + '</text>');
     };
     var hitInk = 'rgb(' + pgpLabRgb(sp.cx, sp.cy).join(",") + ')';
     o.push('<circle cx="' + (lx + 5) + '" cy="' + ly + '" r="1.9" fill="#2b333d" opacity="0.55"/>');
@@ -855,7 +841,7 @@ function pgpDraw() {
     pgpBindControls();
     if (pgpSelected !== null) { pgpReadWindows(pgpSelected); }
     pgpBuildIndex(panel, pts, s);
-    pgpAttachHover(pgpEl("pgpPlotWrap"));
+    pgpAttachHover(pg.byId("pgpPlotWrap"));
 
     // The list in the panel sits outside the plot, so its own clicks are
     // caught here.  Assigned rather than added, so a redraw cannot stack it.
@@ -896,7 +882,7 @@ function pgpControlsHtml(shown, total, dropped) {
                dropped + ' filtered out (still listed in the table)</span>');
     }
     if (pgpData && pgpData.failed) {
-        o.push('<span class="pgpCtlNote">' + pgpData.failed + ' ' + pgpEsc(pgpLegend.many) +
+        o.push('<span class="pgpCtlNote">' + pgpData.failed + ' ' + pg.esc(pgpLegend.many) +
                ' could not be read and are not plotted</span>');
     }
     o.push('</div>');
@@ -904,7 +890,7 @@ function pgpControlsHtml(shown, total, dropped) {
 }
 
 function pgpBindControls() {
-    var cov = pgpEl("pgpCovFloor");
+    var cov = pg.byId("pgpCovFloor");
     if (cov) {
         // "change", not "input": retyping a two-digit floor would otherwise
         // redraw at the intermediate value.
@@ -914,7 +900,7 @@ function pgpBindControls() {
             pgpDraw();
         });
     }
-    var best = pgpEl("pgpBestOnly");
+    var best = pg.byId("pgpBestOnly");
     if (best) {
         best.addEventListener("change", function () {
             pgpBestOnly = !!best.checked;
@@ -946,8 +932,8 @@ function pgpDetailHtml() {
         pgpSelGroup.slice().sort(function (a, b) {
             return a.hap < b.hap ? -1 : (a.hap > b.hap ? 1 : 0);
         }).forEach(function (m) {
-            g.push('<a href="#" data-pgp-hap="' + pgpEsc(pgpKeyOf(m)) + '">' +
-                   pgpSwatch(m) + pgpEsc(m.hap) + '</a>');
+            g.push('<a href="#" data-pgp-hap="' + pg.esc(pgpKeyOf(m)) + '">' +
+                   pgpSwatch(m) + pg.esc(m.hap) + '</a>');
         });
         g.push('</div></div>');
         return g.join("");
@@ -963,7 +949,7 @@ function pgpDetailHtml() {
     // and a row answer in the same form.
     var tiles = [];
     function tile(k, v) {
-        tiles.push('<div class="pgrTile"><div class="k">' + pgpEsc(k) +
+        tiles.push('<div class="pgrTile"><div class="k">' + pg.esc(k) +
                    '</div><div class="v">' + v + '</div></div>');
     }
     if (point !== null) {
@@ -989,11 +975,11 @@ function pgpDetailHtml() {
             tile("From the centre", d.toFixed(3) + " (dispersion " + sp.rms.toFixed(3) + ")");
         }
     }
-    ((spot && spot.info) || []).forEach(function (pair) { tile(pair[0], pgpEsc(pair[1])); });
+    ((spot && spot.info) || []).forEach(function (pair) { tile(pair[0], pg.esc(pair[1])); });
 
     var o = ['<div id="pgpDetail" class="pgpDetail">'];
     o.push('<div class="dhead"><span class="lab">Selected</span><span class="loc">' +
-           pgpEsc((spot && spot.hap) || pgpSelected) + '</span></div>');
+           pg.esc((spot && spot.hap) || pgpSelected) + '</span></div>');
     o.push('<div class="pgrDetailCard"><div class="pgrTiles">' + tiles.join("") + '</div></div>');
     // The same links the table rows carry, answered by the results page's own
     // click delegation - the plot does not need to know how a lift is armed.
@@ -1003,8 +989,8 @@ function pgpDetailHtml() {
                '" data-act="browser">View in Genome Browser</a>' +
                '<a class="gbPill" href="#" data-rank="' + spot.rank +
                '" data-act="details">Alignment</a>' +
-               ((pgpSelGroup !== null && pgpSelGroup.length > 1)
-                ? '<a class="gbPill" href="#" data-pgp-hap="">\u2039 The ' +
+               ((pgpSelGroup !== null && pgpSelGroup.length > 1) ?
+                '<a class="gbPill" href="#" data-pgp-hap="">\u2039 The ' +
                   pgpSelGroup.length + ' here</a>' : "") +
                '</div>');
     } else if (spot && spot.url) {
@@ -1012,8 +998,8 @@ function pgpDetailHtml() {
         // an openId the page answers the click itself - PanLift sends it to the
         // region's own link, so the plot opens exactly what the card does.
         o.push('<div class="pgrDetailActions"><a class="gbPill primary" href="' +
-               pgpEsc(spot.url) + '"' +
-               (spot.openId ? ' data-pgp-open="' + pgpEsc(spot.openId) + '"' : '') +
+               pg.esc(spot.url) + '"' +
+               (spot.openId ? ' data-pgp-open="' + pg.esc(spot.openId) + '"' : '') +
                '>View in Genome Browser</a></div>');
     }
     o.push('</div>');
@@ -1029,7 +1015,7 @@ function pgpTogglePick(hap, on) {
 }
 
 function pgpOpen(spots) {
-    var host = pgpEl("pgrPclaiPlot");
+    var host = pg.byId("pgrPclaiPlot");
     if (!host) { return; }
     host.style.display = "";
     if (pgpData) { pgpDraw(); return; }
@@ -1048,7 +1034,7 @@ function pgpOpen(spots) {
     }).catch(function (err) {
         if (gen !== pgpGen) { return; }
         host.innerHTML = "<p>Could not load the ancestry plot: " +
-                         pgpEsc(err.message) + "</p>";
+                         pg.esc(err.message) + "</p>";
     });
 }
 
@@ -1073,7 +1059,7 @@ function pgpUpdate(spots) {
                         asked: Math.max(0, (old.asked || 0) - gone) + ((resp && resp.asked) || 0),
                         found: keep.length + ((resp && resp.found) || 0) };
             pgpDataSpots = spots;
-            var host = pgpEl("pgrPclaiPlot");
+            var host = pg.byId("pgrPclaiPlot");
             if (host && host.style.display === "") {
                 // Drawn again in place: what follows the plot stays where it
                 // was on screen, whatever the browser's scroll anchoring makes
@@ -1127,11 +1113,11 @@ function pgpInit(spots, opts) {
                       many: opts.legend.many || pgpLegend.many };
     }
     pgpSpots = spots;
-    var btn = pgpEl("pgrPclaiBtn");
+    var btn = pg.byId("pgrPclaiBtn");
     if (btn) {
         btn.addEventListener("click", function (e) {
             e.preventDefault();
-            var host = pgpEl("pgrPclaiPlot");
+            var host = pg.byId("pgrPclaiPlot");
             if (host && host.style.display === "" && pgpData) {
                 host.style.display = "none";
                 btn.textContent = "Show ancestry plot";
@@ -1144,8 +1130,11 @@ function pgpInit(spots, opts) {
     return true;
 }
 
-if (typeof module !== "undefined" && module.exports) {
-    module.exports = {pgpInit: pgpInit, pgpOpen: pgpOpen, pgpUpdate: pgpUpdate,
-                      pgpTogglePick: pgpTogglePick, pgpDraw: pgpDraw,
-                      pgpLabRgb: pgpLabRgb};
-}
+window.pangenomePlot = {
+    init: pgpInit,
+    update: pgpUpdate,
+    togglePick: pgpTogglePick,
+    isPicked: function (hap) { return pgpPicked[hap] === true; }
+};
+
+}());

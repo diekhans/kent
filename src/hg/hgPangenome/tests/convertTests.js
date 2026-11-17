@@ -107,14 +107,6 @@ var pg = page.api;
 // ---- populations in the target picker ---------------------------------------
 
 t.suite('populations');
-t.test("a sample's population is the HPRC's own description", function () {
-    t.eq(JSON.stringify(pg.samplePop('HG00097#1')),
-         JSON.stringify({ code: 'GBR', desc: 'British from England and Scotland' }), 'GBR');
-    t.eq(pg.samplePop('hg00097#2').code, 'GBR', 'either phase, any case');
-    t.eq(pg.samplePop('HG002#1'), null, 'HG002 has none given');
-    t.eq(pg.samplePop('GRCh38#0'), null, 'nor the references');
-    t.contains(pg.samplePop('HG02572#1').desc, 'Western Division \u2013 Mandinka', 'the mis-encoded dash repaired');
-});
 t.test('groups: the references, then populations by name, then none given', function () {
     var g = pg.popGroups(['HG002#1', 'HG02572#1', 'GRCh38#0', 'HG00097#1', 'HG00097#2', 'CHM13#0']);
     t.eq(g.map(function (x) { return x.key; }).join(','), '~ref,GBR,GWD,~none', 'order');
@@ -251,7 +243,7 @@ t.test('the plot is offered for the HPRC regions, with no ancestry read until it
     var c = startPage();
     var given = null;
     c.sandbox.pangenomePclai = { on: 1 };
-    c.sandbox.pgpInit = function (spots, opts) { given = { spots: spots, opts: opts }; return true; };
+    c.window.pangenomePlot = { init: function (spots, opts) { given = { spots: spots, opts: opts }; return true; } };
     var acts = c.sandbox.document.createElement('span');
     var spots = c.api.ancPlot(acts, [
         { role: 'source', hap: 'HG00097#1', db: 'GCA_018466835.2', contig: 'CM1', start: 0, end: 10 },
@@ -269,7 +261,7 @@ t.test('the plot is offered for the HPRC regions, with no ancestry read until it
 });
 t.test('no plot with pcLAI off, or with fewer than two regions to plot', function () {
     var c = startPage();
-    c.sandbox.pgpInit = function () { return true; };
+    c.window.pangenomePlot = { init: function () { return true; } };
     var acts = c.sandbox.document.createElement('span');
     var two = [{ role: 'source', hap: 'HG00097#1', db: 'GCA_018466835.2' },
                { role: 'target', hap: 'HG00099#2', db: 'GCA_018466845.2' }];
@@ -579,11 +571,6 @@ t.test('reference assemblies resolve too', function () {
 t.test('an assembly outside the pangenome has no haplotype', function () {
     t.isNull(pg.hapForDb('mm39'), 'mouse');
     t.isNull(pg.hapForDb(''), 'empty');
-});
-
-t.test('haplotype -> assembly is the inverse', function () {
-    t.eq(pg.assemblyForHap('hg00097#1'), 'GCA_044165215.1', 'round trip');
-    t.eq(pg.assemblyForHap('CHM13#0'), 'hs1', 'case-insensitive');
 });
 
 // ================================================================ page wiring

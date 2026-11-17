@@ -3,12 +3,16 @@
  * Builds the form, parses pasted or uploaded sequences (one per line or
  * FASTA), validates them, submits them as a mapping job, polls until the job
  * is done, and then opens the results page (hgPangenomeResults.js) on that
- * job.  Config comes from window.pangenomeConfig, written by the CGI.
+ * job.  Config comes from window.pangenomeConfig, written by the CGI; the
+ * helpers named pg.* are hgPangenomeCommon.js.
  */
-/* global window, document, fetch, Promise */
+/* global window, document, fetch */
 
 (function () {
 'use strict';
+
+var pg = window.pangenomeCommon;
+var el = pg.el, clear = pg.clear, $ = pg.byId;
 
 // ---- Config ----------------------------------------------------------------
 // NOTE: window.pangenomeConfig is emitted by the CGI as an inline script that
@@ -36,44 +40,15 @@ var POLL_MAX_MS = 30 * 60 * 1000;   // a job not done by then is given up on
 
 // ---- Transport --------------------------------------------------------------
 //
-// The browser talks ONLY to this CGI (same origin).  The CGI forwards each
-// request to the mapping middleware and returns its JSON.  So there is no
-// middleware URL here and no cross-origin request: we POST form-encoded
-// commands back to our own script.
-//   submit  -> POST  cmd=map & payload=<json>
-//   poll    -> GET   ?cmd=poll&job_id=<id>
+// The browser talks only to this CGI, which forwards each request to the
+// mapping server and returns its JSON.
 
-function PangenomeApi() {
-    // Our own script URL, without any query string.
-    this.self = window.location.pathname;
+function submitJob(payload) {
+    return pg.post("map", payload).then(pg.jsonOrBody);
 }
 
-function formEncode(obj) {
-    return Object.keys(obj).map(function (k) {
-        return encodeURIComponent(k) + "=" + encodeURIComponent(obj[k]);
-    }).join("&");
-}
-
-PangenomeApi.prototype.submit = function (payload) {
-    return fetch(this.self, {
-        method: "POST",
-        headers: { "Content-Type": "application/x-www-form-urlencoded", "Accept": "application/json" },
-        body: formEncode({ cmd: "map", payload: JSON.stringify(payload) })
-    }).then(checkHttp);
-};
-
-PangenomeApi.prototype.poll = function (jobId) {
-    return fetch(this.self + "?cmd=poll&job_id=" + encodeURIComponent(jobId), {
-        method: "GET", headers: { "Accept": "application/json" }
-    }).then(checkHttp);
-};
-
-function checkHttp(resp) {
-    if (!resp.ok)
-        return resp.text().then(function (t) {
-            throw new Error("HTTP " + resp.status + (t ? ": " + t.slice(0, 300) : ""));
-        });
-    return resp.json();
+function readJob(jobId) {
+    return pg.get("cmd=poll&job_id=" + encodeURIComponent(jobId)).then(pg.jsonOrBody);
 }
 
 // ---- Input parsing ---------------------------------------------------------
@@ -159,30 +134,11 @@ function validate(parsed) {
     var room = totalRoom(parsed.sequences.length);
     if (room !== null && bases > room)
         parsed.errors.push({ line: 0,
-            message: "the sequences are " + commas(bases) + " bases together (limit is " +
-                     commas(room) + ")" });
+            message: "the sequences are " + pg.commas(bases) + " bases together (limit is " +
+                     pg.commas(room) + ")" });
 
     return parsed.errors.length === 0;
 }
-
-// ---- Small DOM helpers ------------------------------------------------------
-
-function el(tag, attrs, kids) {
-    var e = document.createElement(tag);
-    if (attrs) Object.keys(attrs).forEach(function (k) {
-        if (k === "class") e.className = attrs[k];
-        else if (k === "text") e.textContent = attrs[k];
-        else if (k === "html") e.innerHTML = attrs[k];   // only for trusted, code-built strings
-        else e.setAttribute(k, attrs[k]);
-    });
-    (kids || []).forEach(function (c) {
-        if (c == null) return;
-        e.appendChild(typeof c === "string" ? document.createTextNode(c) : c);
-    });
-    return e;
-}
-function clear(node) { while (node.firstChild) node.removeChild(node.firstChild); }
-function $(id) { return document.getElementById(id); }
 
 var statusEl;
 
@@ -233,7 +189,6 @@ function showProgress(completed, total) {
 
 // ---- Submit / poll orchestration -------------------------------------------
 
-var api = null;             // created in init(), after readConfig()
 var lastPayload = null;
 var pollTimer = null;
 var runSeq = 0;             // the search the page is waiting for: see pollJob()
@@ -280,7 +235,7 @@ function run() {
     // to this one is then not followed up.
     var seq = ++runSeq;
 
-    api.submit(lastPayload).then(function (resp) {
+    submitJob(lastPayload).then(function (resp) {
         if (seq !== runSeq) return;
         // The proxy returns {status:"error",error} when it cannot reach the middleware.
         if (resp && resp.status === "error") throw new Error(resp.error || "server error");
@@ -327,7 +282,7 @@ function pollJob(jobId, total) {
                       " minutes. The server may be busy.", run);
             return;
         }
-        api.poll(jobId).then(function (job) {
+        readJob(jobId).then(function (job) {
             if (seq !== runSeq) return;
             if (pollEndsJob(job)) {
                 showFatal("Job failed: " + (job.error || "unknown error"), run);
@@ -414,24 +369,16 @@ var BUSY_DELAY_MS = 350;      // as hgBlat.js: a scrim that flashes reads as a g
 var busyTimer = null;
 var countTimer = null;
 
-function escHtml(s) {
-    return String(s == null ? "" : s).replace(/[&<>"']/g, function (c) {
-        return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
-    });
-}
-
-function commas(n) { return Number(n).toLocaleString("en-US"); }
-
 function infoIcon(tip) {
-    return '<span class="pgInfo" title="' + escHtml(tip) + '">' + PG_INFO_SVG + "</span>";
+    return '<span class="pgInfo" title="' + pg.esc(tip) + '">' + PG_INFO_SVG + "</span>";
 }
 
 function formSidebar(fd) {
     return '<div>' +
         '<div class="gbCard"><h3>Similar tools</h3>' +
-        '<div><a href="' + escHtml(fd.blatUrl) + '">BLAT</a> - finds a sequence ' +
+        '<div><a href="' + pg.esc(fd.blatUrl) + '">BLAT</a> - finds a sequence ' +
         'in one assembly, rather than across every haplotype at once.</div>' +
-        '<div><a href="' + escHtml(fd.panLiftUrl) + '">PanLift</a> - for a region ' +
+        '<div><a href="' + pg.esc(fd.panLiftUrl) + '">PanLift</a> - for a region ' +
         'you already have coordinates for: translates it from one assembly to ' +
         'another through the graph.</div>' +
         '</div>' +
@@ -519,15 +466,15 @@ function formCount() {
         if (n > longest) longest = n;
     });
     var nSeq = parsed.sequences.length;
-    var text = commas(bases) + " bases in " + commas(nSeq) + " sequence" + (nSeq === 1 ? "" : "s");
+    var text = pg.commas(bases) + " bases in " + pg.commas(nSeq) + " sequence" + (nSeq === 1 ? "" : "s");
     var problem = null;
     var room = totalRoom(nSeq);
     if (nSeq > MAX_SEQUENCES)
-        problem = "up to " + commas(MAX_SEQUENCES) + " sequences";
+        problem = "up to " + pg.commas(MAX_SEQUENCES) + " sequences";
     else if (fd.maxSeqLen && longest > fd.maxSeqLen)
-        problem = "longest is " + commas(longest) + " bp, limit " + commas(fd.maxSeqLen) + " bp";
+        problem = "longest is " + pg.commas(longest) + " bp, limit " + pg.commas(fd.maxSeqLen) + " bp";
     else if (room !== null && bases > room)
-        problem = "too long together, limit " + commas(room) + " bases";
+        problem = "too long together, limit " + pg.commas(room) + " bases";
     out.textContent = problem ? text + " — " + problem : text;
     out.className = problem ? "over" : "";
 }
@@ -552,7 +499,7 @@ function formBuild() {
                          "haplotype in it is searched at once. If a sequence aligns " +
                          "to more than one place, the results show the best one, and " +
                          "the others are a click away.") + '</span>' +
-                '<div class="pgGraphName">' + escHtml(fd.graphLabel) + '</div></div>' +
+                '<div class="pgGraphName">' + pg.esc(fd.graphLabel) + '</div></div>' +
         '</div>' +
 
         '<div class="gbSection">Query sequence</div>' +
@@ -563,10 +510,10 @@ function formBuild() {
 
         '<div id="pgPanePaste">' +
             '<div class="pgPaneHint"><span>Separate multiple sequences with a &gt;name ' +
-            'line. Up to ' + commas(MAX_SEQUENCES) + ' sequences, ' +
-            commas(fd.maxSeqLen) + ' bp each.</span>' +
+            'line. Up to ' + pg.commas(MAX_SEQUENCES) + ' sequences, ' +
+            pg.commas(fd.maxSeqLen) + ' bp each.</span>' +
             '<button type="button" id="pgExample" class="pgChip" title="' +
-            escHtml(fd.exampleTitle) + '">' + escHtml(fd.exampleLabel) + '</button></div>' +
+            pg.esc(fd.exampleTitle) + '">' + pg.esc(fd.exampleLabel) + '</button></div>' +
             '<textarea class="pgSeqBox" id="pgSeq" spellcheck="false" ' +
             'aria-label="Paste query sequences, one per line or in FASTA"></textarea>' +
             '<div class="pgCount"><span id="pgCountText"></span></div>' +
@@ -576,7 +523,7 @@ function formBuild() {
             '<div class="pgDrop" id="pgDrop">' +
                 '<div class="pgDropTitle">Drop a sequence file here</div>' +
                 '<div class="pgDropSub">Plain text or FASTA, up to ' +
-                commas(MAX_SEQUENCES) + ' sequences</div>' +
+                pg.commas(MAX_SEQUENCES) + ' sequences</div>' +
                 '<input type="file" id="pgFile">' +
                 '<div class="pgFileName" id="pgFileName"></div>' +
             '</div>' +
@@ -658,8 +605,6 @@ function init() {
     statusEl = $("pgStatus");
     if (!statusEl) return;    // not our page
 
-    api = new PangenomeApi();
-
     $("pgSubmit").addEventListener("click", onSubmit);
     $("pgClear").addEventListener("click", onClear);
     $("pgFile").addEventListener("change", onFile);
@@ -680,7 +625,6 @@ if (typeof module !== "undefined" && module.exports)
     module.exports = {
         parseInput: parseInput,
         validate: validate,
-        formEncode: formEncode,
         readConfig: readConfig,
         init: init
     };

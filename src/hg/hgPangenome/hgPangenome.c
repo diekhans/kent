@@ -4239,6 +4239,7 @@ if (sameOk(cgiOptionalString("page"), "results"))
      * change this; this is only where the slider starts. */
     jsInlineF("var pangenomePclaiMinCoverage = %s;\n",
               cfgOr("pangenome.pclaiMinCoverage", "50"));
+    jsIncludeFile("hgPangenomeCommon.js", NULL);    /* first: the others are written on it */
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
     if (pclai)
         jsIncludeFile("hgPangenomePclai.js", NULL);
@@ -4292,6 +4293,7 @@ if (sameOk(cgiOptionalString("page"), "liftAll"))
     jsonWriteFree(&jw);
     boolean pclai = sameString(cfgOr("pangenome.resultsPclai", "off"), "on");
     jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
+    jsIncludeFile("hgPangenomeCommon.js", NULL);
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
     jsIncludeFile("hgPangenomeSamples.js", NULL);
     if (pclai)
@@ -4319,6 +4321,7 @@ if (sameOk(cgiOptionalString("page"), "convert"))
     jsInlineF("var pangenomePclai = %s;\n", pclai ? "true" : "false");
     /* The results table pages and sorts as the mapping results page's does. */
     jsIncludeDataTablesLibs();
+    jsIncludeFile("hgPangenomeCommon.js", NULL);
     jsIncludeFile("hgPangenomeAssemblies.js", NULL);
     jsIncludeFile("hgPangenomeSamples.js", NULL);   /* generated sample->population table */
     if (pclai)
@@ -4347,6 +4350,7 @@ drawForm();
 
 /* Config first (inline, runs before DOMContentLoaded), then the app. */
 injectConfig();
+jsIncludeFile("hgPangenomeCommon.js", NULL);
 jsIncludeFile("hgPangenome.js", NULL);
 
 cartWebEnd();

@@ -89,6 +89,7 @@ runCgi() {
 }
 
 runJs unitTests.js    "Pure functions"
+runJs commonTests.js  "Shared helpers"
 runCgi
 runJs formTests.js    "PanView form"
 runJs resultsTests.js "PanView results"

@@ -73,6 +73,25 @@ function findAll(node, pred, out) {
     return out;
 }
 
+// ---- The scripts' text -------------------------------------------------------
+
+function source(name) {
+    return fs.readFileSync(path.join(JS_DIR, name), 'utf8');
+}
+
+/* A script's text without its module wrapper, so that everything it defines
+ * lands on the vm context, where a test can call it, read it and replace it.
+ * "use strict" is still the first statement, so the body runs as strictly as
+ * the shipped file does.  commonTests.js loads the files as shipped. */
+function body(name) {
+    var src = source(name);
+    var open = '\n(function () {\n', close = '\n}());\n';
+    var a = src.indexOf(open), b = src.lastIndexOf(close);
+    if (a < 0 || b < a || src.indexOf(open, a + 1) >= 0)
+        throw new Error(name + ': expected one module wrapper');
+    return src.slice(0, a) + '\n' + src.slice(a + open.length, b) + '\n';
+}
+
 // ---- Loader -----------------------------------------------------------------
 
 /* Options:
@@ -168,9 +187,11 @@ function load(options) {
         vm.runInContext(fs.readFileSync(samplesPath, 'utf8'), sandbox,
                         { filename: 'hgPangenomeSamples.js' });
 
+    // What every page script is written on, loaded before it as on the page.
+    vm.runInContext(source('hgPangenomeCommon.js'), sandbox, { filename: 'hgPangenomeCommon.js' });
+
     var clientScript = options.script || 'hgPangenome.js';
-    vm.runInContext(fs.readFileSync(path.join(JS_DIR, clientScript), 'utf8'),
-                    sandbox, { filename: clientScript });
+    vm.runInContext(source(clientScript), sandbox, { filename: clientScript });
 
     // The CGI emits window.pangenomeConfig in an inline script AFTER the
     // <script src> tags, so set it here, then fire DOMContentLoaded.
@@ -194,4 +215,4 @@ function load(options) {
     };
 }
 
-module.exports = { load: load, makeNode: makeNode, findAll: findAll };
+module.exports = { load: load, makeNode: makeNode, findAll: findAll, source: source, body: body };
