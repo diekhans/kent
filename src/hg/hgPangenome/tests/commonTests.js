@@ -11,9 +11,13 @@
 
 'use strict';
 
-var t = require('./testLib.js');
+var test = require('node:test');
+var check = require('./check.js');
 var vm = require('vm');
 var loader = require('./loadClient.js');
+
+test('What the page scripts share, and the scripts as shipped (js/hgPangenomeCommon.js)', async function (ctx) {
+var t = check.under(ctx);
 
 var calls = [];
 var page = loader.load({ fetch: function (url, opts) {
@@ -25,13 +29,13 @@ var C = page.window.pangenomeCommon;
 // ---- text ------------------------------------------------------------------------
 
 t.suite('text');
-t.test('markup characters are escaped, a missing value is empty', function () {
+await t.test('markup characters are escaped, a missing value is empty', function () {
     t.eq(C.esc('<a href="x">\'&\'</a>'), '&lt;a href=&quot;x&quot;&gt;&#39;&amp;&#39;&lt;/a&gt;', 'all five');
     t.eq(C.esc(null), '', 'null');
     t.eq(C.esc(undefined), '', 'undefined');
     t.eq(C.esc(0), '0', 'a number is kept');
 });
-t.test('thousands are separated, a missing number is empty', function () {
+await t.test('thousands are separated, a missing number is empty', function () {
     t.eq(C.commas(1234567), '1,234,567', 'millions');
     t.eq(C.commas(999), '999', 'no comma under a thousand');
     t.eq(C.commas(0), '0', 'zero is a number');
@@ -44,58 +48,58 @@ t.test('thousands are separated, a missing number is empty', function () {
 // ---- haplotypes --------------------------------------------------------------------
 
 t.suite('haplotype names');
-t.test('a haplotype is its sample and number, with or without a sequence, in any case', function () {
+await t.test('a haplotype is its sample and number, with or without a sequence, in any case', function () {
     t.eq(C.hapKey('CHM13#0#chr10'), 'chm13#0', 'with its sequence');
     t.eq(C.hapKey('HG00097#1'), 'hg00097#1', 'without');
     t.eq(C.hapKey('HG00097#1#CM094066.1#1407250'), 'hg00097#1', 'with a subpath offset');
     t.eq(C.hapKey(null), '', 'nothing');
 });
-t.test('a hub assembly is known by its plain name', function () {
+await t.test('a hub assembly is known by its plain name', function () {
     t.eq(C.bareDb('hub_25071_hs1'), 'hs1', 'curated hub');
     t.eq(C.bareDb('hub_146215_GCA_044165215.1'), 'GCA_044165215.1', 'GenArk');
     t.eq(C.bareDb('hg38'), 'hg38', 'a plain db is unchanged');
     t.eq(C.bareDb(null), '', 'nothing');
 });
-t.test('an assembly has the name it was published under, or none', function () {
+await t.test('an assembly has the name it was published under, or none', function () {
     t.contains(C.assemblyName('GCA_044165215.1'), 'HG00097', 'a GenArk assembly');
     t.isNull(C.assemblyName('mm39'), 'not in the table');
     t.isNull(C.assemblyName('toString'), 'a name Object.prototype has');
 });
 
 t.suite('the assembly a haplotype is served from');
-t.test('the generated HPRC table is loaded', function () {
+await t.test('the generated HPRC table is loaded', function () {
     var n = Object.keys(page.window.pangenomeAssemblies || {}).length;
     t.ok(n > 400, 'populated (' + n + ' haplotypes)');
 });
-t.test('sample haplotypes resolve to their GenArk assembly', function () {
+await t.test('sample haplotypes resolve to their GenArk assembly', function () {
     t.eq(C.assemblyFor('HG00097#1'), 'GCA_044165215.1', 'HG00097 hap1');
     t.eq(C.assemblyFor('HG00097#2'), 'GCA_044164745.1', 'HG00097 hap2');
     t.eq(C.assemblyFor('NA19338#1'), 'GCA_042035195.1', 'NA19338 hap1');
 });
-t.test('a name is matched on sample and haplotype, in any case, contig or not', function () {
+await t.test('a name is matched on sample and haplotype, in any case, contig or not', function () {
     t.eq(C.assemblyFor('hg00097#1'), 'GCA_044165215.1', 'lower case');
     t.eq(C.assemblyFor('HG00097#1#CM094066.1'), 'GCA_044165215.1', 'with its contig');
 });
-t.test('the two haplotypes of a sample are different assemblies', function () {
+await t.test('the two haplotypes of a sample are different assemblies', function () {
     t.notOk(C.assemblyFor('HG00408#1') === C.assemblyFor('HG00408#2'), 'pat and mat differ');
 });
-t.test('the references come from the same table', function () {
+await t.test('the references come from the same table', function () {
     t.eq(C.assemblyFor('CHM13#0'), 'hs1', 'CHM13');
     t.eq(C.assemblyFor('GRCh38#0'), 'hg38', 'GRCh38');
 });
-t.test('an assembly served only from a hub elsewhere is kept as its URL', function () {
+await t.test('an assembly served only from a hub elsewhere is kept as its URL', function () {
     var v = C.assemblyFor('HG002#1');
     t.contains(v, 'https://genome.ucsc.edu', 'absolute');
     t.contains(v, 'db=hub_', 'hub id db, which only resolves on that server');
 });
-t.test('an unknown haplotype has no assembly', function () {
+await t.test('an unknown haplotype has no assembly', function () {
     t.isNull(C.assemblyFor('NOSUCHSAMPLE#1'), 'unknown sample');
     t.isNull(C.assemblyFor('HG00097#9'), 'unknown haplotype of a known sample');
     t.isNull(C.assemblyFor('toString'), 'a name Object.prototype has');
 });
 
 t.suite('populations');
-t.test("a sample's population is the HPRC's own description", function () {
+await t.test("a sample's population is the HPRC's own description", function () {
     t.eq(JSON.stringify(C.population('HG00097#1')),
          JSON.stringify({ code: 'GBR', desc: 'British from England and Scotland' }), 'GBR');
     t.eq(C.population('hg00097#2').code, 'GBR', 'either phase, any case');
@@ -108,16 +112,16 @@ t.test("a sample's population is the HPRC's own description", function () {
 
 t.suite('formEncode - request body encoding');
 
-t.test('single and multiple pairs', function () {
+await t.test('single and multiple pairs', function () {
     t.eq(C.formEncode({ cmd: 'map' }), 'cmd=map', 'one pair');
     t.eq(C.formEncode({ cmd: 'poll', job_id: 'abc123' }), 'cmd=poll&job_id=abc123', 'two pairs');
 });
 
-t.test('JSON payloads are percent-encoded', function () {
+await t.test('JSON payloads are percent-encoded', function () {
     t.eq(C.formEncode({ payload: '{"a":1}' }), 'payload=%7B%22a%22%3A1%7D', 'json');
 });
 
-t.test('characters that would break the body are escaped', function () {
+await t.test('characters that would break the body are escaped', function () {
     t.eq(C.formEncode({ v: 'a&b' }), 'v=a%26b', 'ampersand');
     t.eq(C.formEncode({ v: 'a=b' }), 'v=a%3Db', 'equals');
     t.eq(C.formEncode({ v: 'a+b' }), 'v=a%2Bb', 'plus');
@@ -128,7 +132,7 @@ t.test('characters that would break the body are escaped', function () {
 // ---- elements ------------------------------------------------------------------------
 
 t.suite('elements');
-t.test('an element is built with its class, text, attributes and children', function () {
+await t.test('an element is built with its class, text, attributes and children', function () {
     var a = C.el('a', { class: 'gbPill', href: '/x', text: 'Open' });
     t.eq(a.tagName, 'A', 'tag');
     t.eq(a.className, 'gbPill', 'class');
@@ -144,7 +148,7 @@ t.test('an element is built with its class, text, attributes and children', func
 // ---- requests ------------------------------------------------------------------------
 
 t.suite('requests');
-t.test('a command is POSTed to this CGI as cmd and payload', function () {
+await t.test('a command is POSTed to this CGI as cmd and payload', function () {
     calls.length = 0;
     C.post('surject', { job_id: 'j1', name: 'a&b' });
     t.eq(calls[0].url, '/cgi-bin/hgPangenome', 'to the page\'s own address');
@@ -154,12 +158,12 @@ t.test('a command is POSTed to this CGI as cmd and payload', function () {
          'the payload as JSON, escaped');
     t.notOk(/hgsid/.test(calls[0].opts.body), 'no session unless one is given');
 });
-t.test('with the session when the command writes to it', function () {
+await t.test('with the session when the command writes to it', function () {
     calls.length = 0;
     C.post('refAnnot', {}, '123_abc');
     t.eq(calls[0].opts.body, 'cmd=refAnnot&payload=%7B%7D&hgsid=123_abc', 'hgsid last');
 });
-t.test('a query is a GET on the same address', function () {
+await t.test('a query is a GET on the same address', function () {
     calls.length = 0;
     C.get('cmd=poll&job_id=j1');
     t.eq(calls[0].url, '/cgi-bin/hgPangenome?cmd=poll&job_id=j1', 'address and query');
@@ -176,7 +180,7 @@ C.jsonOrBody(failed(502, 'x'.repeat(400))).catch(function (e) { bodyErr = e.mess
 C.jsonOrBody(failed(404, '')).catch(function (e) { emptyErr = e.message; });
 Promise.resolve(good).then(C.jsonOrBody).then(function (v) { bodyOk = v; });
 
-t.test('an answer is read as JSON; a failed request names its status', function () {
+await t.test('an answer is read as JSON; a failed request names its status', function () {
     t.deepEq(C.json(good), { a: 1 }, 'read');
     var msg = null;
     try { C.json(failed(502, 'Bad Gateway')); } catch (e) { msg = e.message; }
@@ -186,7 +190,7 @@ t.test('an answer is read as JSON; a failed request names its status', function 
 // ---- the reader's files and choices -------------------------------------------------
 
 t.suite('rows per page');
-t.test('the last choice is kept, and anything else is 50', function () {
+await t.test('the last choice is kept, and anything else is 50', function () {
     var store = {};
     t.eq(C.pageLen(), 50, 'no storage at all');
     page.window.localStorage = { getItem: function (k) { return store[k] === undefined ? null : store[k]; },
@@ -207,7 +211,7 @@ t.test('the last choice is kept, and anything else is 50', function () {
 });
 
 t.suite('saving a file');
-t.test('the text is offered under the given name', function () {
+await t.test('the text is offered under the given name', function () {
     var made = null, revoked = null;
     page.sandbox.URL = { createObjectURL: function (b) { made = b; return 'blob:1'; },
                          revokeObjectURL: function (u) { revoked = u; } };
@@ -267,7 +271,7 @@ function browser() {
 }
 
 t.suite('the scripts as shipped');
-t.test('each adds its own name to the page and nothing else', function () {
+await t.test('each adds its own name to the page and nothing else', function () {
     var b = browser();
     t.deepEq(b.add('hgPangenomeCommon.js'), ['pangenomeCommon'], 'the shared helpers');
     t.deepEq(b.add('hgPangenomeAssemblies.js'), ['pangenomeAssemblies', 'pangenomeAssemblyNames'],
@@ -278,7 +282,7 @@ t.test('each adds its own name to the page and nothing else', function () {
     t.deepEq(b.add('hgPangenomeConvert.js'), [], 'PanLift');
     t.deepEq(b.add('hgPangenome.js'), [], 'the search form');
 });
-t.test('the plot is reached through its one object', function () {
+await t.test('the plot is reached through its one object', function () {
     var b = browser();
     b.add('hgPangenomeCommon.js');
     b.add('hgPangenomePclai.js');
@@ -289,7 +293,7 @@ t.test('the plot is reached through its one object', function () {
     t.eq(plot.isPicked('HG00099#2'), false, 'one that was not');
     t.eq(plot.isPicked('toString'), false, 'a name every object has');
 });
-t.test('the results page starts and asks for its job', function () {
+await t.test('the results page starts and asks for its job', function () {
     var b = browser();
     b.nodes.pgrResults = loader.makeNode('div');
     b.ctx.pangenomeJobId = 'job1';
@@ -301,12 +305,11 @@ t.test('the results page starts and asks for its job', function () {
     t.eq(b.asked[0].url, '/cgi-bin/hgPangenome?cmd=poll&job_id=job1', 'for the job the page names');
 });
 
-setTimeout(function () {
-    t.suite('a request that failed');
-    t.test('the page that shows what the server said gets the start of it', function () {
-        t.eq(bodyErr, 'HTTP 502: ' + 'x'.repeat(300), 'the status and 300 characters');
-        t.eq(emptyErr, 'HTTP 404', 'the status alone when the server said nothing');
-        t.deepEq(bodyOk, { a: 1 }, 'an answer is read as JSON');
-    });
-    process.exit(t.report());
-}, 20);
+await check.wait(20);
+t.suite('a request that failed');
+await t.test('the page that shows what the server said gets the start of it', function () {
+    t.eq(bodyErr, 'HTTP 502: ' + 'x'.repeat(300), 'the status and 300 characters');
+    t.eq(emptyErr, 'HTTP 404', 'the status alone when the server said nothing');
+    t.deepEq(bodyOk, { a: 1 }, 'an answer is read as JSON');
+});
+});

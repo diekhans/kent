@@ -10,8 +10,12 @@
 
 'use strict';
 
-var t = require('./testLib.js');
+var test = require('node:test');
+var check = require('./check.js');
 var loader = require('./loadClient.js');
+
+test("PanView's form: reading and checking what is typed (js/hgPangenome.js)", async function (ctx) {
+var t = check.under(ctx);
 
 // One shared client instance for the stateless tests.  Tests that mutate client
 // config (readConfig) load their own fresh instance to avoid cross-talk.
@@ -20,7 +24,7 @@ var pg = client.api;
 
 // Sanity: the test hook is present and exports what we expect.
 t.suite('test harness');
-t.test('client loads and exports its pure helpers', function () {
+await t.test('client loads and exports its pure helpers', function () {
     ['parseInput', 'validate', 'readConfig'].forEach(function (name) {
         t.eq(typeof pg[name], 'function', 'exports ' + name);
     });
@@ -30,13 +34,13 @@ t.test('client loads and exports its pure helpers', function () {
 
 t.suite('parseInput - plain one-per-line input');
 
-t.test('empty and missing input yield nothing', function () {
+await t.test('empty and missing input yield nothing', function () {
     t.deepEq(pg.parseInput(''), { sequences: [], errors: [] }, 'empty string');
     t.deepEq(pg.parseInput(null), { sequences: [], errors: [] }, 'null');
     t.deepEq(pg.parseInput(undefined), { sequences: [], errors: [] }, 'undefined');
 });
 
-t.test('one sequence per line, with line numbers', function () {
+await t.test('one sequence per line, with line numbers', function () {
     var r = pg.parseInput('ACGT\nTTTT');
     t.deepEq(r.sequences, [
         { name: '', sequence: 'ACGT', line: 1 },
@@ -45,32 +49,32 @@ t.test('one sequence per line, with line numbers', function () {
     t.eq(r.errors.length, 0, 'no errors');
 });
 
-t.test('blank lines are skipped but do not shift line numbers', function () {
+await t.test('blank lines are skipped but do not shift line numbers', function () {
     var r = pg.parseInput('ACGT\n\n\nTTTT');
     t.eq(r.sequences.length, 2, 'count');
     t.eq(r.sequences[0].line, 1, 'first line no');
     t.eq(r.sequences[1].line, 4, 'second line no (after 2 blanks)');
 });
 
-t.test('surrounding and internal whitespace is stripped', function () {
+await t.test('surrounding and internal whitespace is stripped', function () {
     var r = pg.parseInput('   AC GT\t\tAAAA   ');
     t.eq(r.sequences.length, 1, 'count');
     t.eq(r.sequences[0].sequence, 'ACGTAAAA', 'whitespace removed');
 });
 
-t.test('CRLF and bare-CR line endings are normalized', function () {
+await t.test('CRLF and bare-CR line endings are normalized', function () {
     t.eq(pg.parseInput('ACGT\r\nTTTT\r\n').sequences.length, 2, 'CRLF');
     t.eq(pg.parseInput('ACGT\rTTTT').sequences.length, 2, 'bare CR');
 });
 
 t.suite('parseInput - FASTA input');
 
-t.test('single FASTA record', function () {
+await t.test('single FASTA record', function () {
     var r = pg.parseInput('>read1\nACGT');
     t.deepEq(r.sequences, [{ name: 'read1', sequence: 'ACGT', line: 1 }], 'record');
 });
 
-t.test('multiple records with wrapped sequence lines are concatenated', function () {
+await t.test('multiple records with wrapped sequence lines are concatenated', function () {
     var r = pg.parseInput('>r1\nACGT\nTTTT\n>r2\nGGGG');
     t.deepEq(r.sequences, [
         { name: 'r1', sequence: 'ACGTTTTT', line: 1 },
@@ -78,35 +82,35 @@ t.test('multiple records with wrapped sequence lines are concatenated', function
     ], 'two records, first wrapped');
 });
 
-t.test('header name is the first whitespace-delimited token', function () {
+await t.test('header name is the first whitespace-delimited token', function () {
     var r = pg.parseInput('>read1 length=150 some description\nACGT');
     t.eq(r.sequences[0].name, 'read1', 'description dropped');
 });
 
-t.test('bare ">" header leaves the name empty (validate will autogenerate)', function () {
+await t.test('bare ">" header leaves the name empty (validate will autogenerate)', function () {
     var r = pg.parseInput('>\nACGT');
     t.eq(r.sequences[0].name, '', 'empty name');
     t.eq(r.sequences[0].sequence, 'ACGT', 'sequence still parsed');
 });
 
-t.test('a record with no sequence lines is kept (so validate can flag it)', function () {
+await t.test('a record with no sequence lines is kept (so validate can flag it)', function () {
     var r = pg.parseInput('>r1\n>r2\nACGT');
     t.eq(r.sequences.length, 2, 'both records kept');
     t.eq(r.sequences[0].sequence, '', 'r1 empty');
     t.eq(r.sequences[1].sequence, 'ACGT', 'r2 has sequence');
 });
 
-t.test('trailing newline does not create a phantom record', function () {
+await t.test('trailing newline does not create a phantom record', function () {
     t.eq(pg.parseInput('>r1\nACGT\n').sequences.length, 1, 'count');
 });
 
-t.test('indented header lines are still headers', function () {
+await t.test('indented header lines are still headers', function () {
     var r = pg.parseInput('   >r1\nACGT');
     t.eq(r.sequences.length, 1, 'count');
     t.eq(r.sequences[0].name, 'r1', 'name parsed from indented header');
 });
 
-t.test('sequence data before the first header is reported with its line number', function () {
+await t.test('sequence data before the first header is reported with its line number', function () {
     var r = pg.parseInput('ACGT\n>r1\nTTTT');
     t.eq(r.errors.length, 1, 'one error');
     t.eq(r.errors[0].line, 1, 'error line');
@@ -114,7 +118,7 @@ t.test('sequence data before the first header is reported with its line number',
     t.deepEq(r.sequences, [{ name: 'r1', sequence: 'TTTT', line: 2 }], 'valid record still parsed');
 });
 
-t.test('FASTA mode is chosen if any line has a header, even late in the input', function () {
+await t.test('FASTA mode is chosen if any line has a header, even late in the input', function () {
     var r = pg.parseInput('ACGT\nTTTT\n>r1\nGGGG');
     t.eq(r.sequences.length, 1, 'only the FASTA record is a sequence');
     t.eq(r.errors.length, 2, 'both pre-header lines flagged');
@@ -131,19 +135,19 @@ function parsed(seqs) {
 
 t.suite('validate - naming');
 
-t.test('unnamed sequences get seq_1, seq_2 ...', function () {
+await t.test('unnamed sequences get seq_1, seq_2 ...', function () {
     var p = parsed([{ sequence: 'ACGT' }, { sequence: 'TTTT' }]);
     t.ok(pg.validate(p), 'valid');
     t.deepEq([p.sequences[0].name, p.sequences[1].name], ['seq_1', 'seq_2'], 'names');
 });
 
-t.test('explicit names are preserved', function () {
+await t.test('explicit names are preserved', function () {
     var p = parsed([{ name: 'myRead', sequence: 'ACGT' }]);
     t.ok(pg.validate(p), 'valid');
     t.eq(p.sequences[0].name, 'myRead', 'name kept');
 });
 
-t.test('duplicate names are made unique', function () {
+await t.test('duplicate names are made unique', function () {
     var p = parsed([{ name: 'dup', sequence: 'ACGT' },
                     { name: 'dup', sequence: 'ACGT' },
                     { name: 'dup', sequence: 'ACGT' }]);
@@ -152,7 +156,7 @@ t.test('duplicate names are made unique', function () {
              ['dup', 'dup_2', 'dup_3'], 'uniquified');
 });
 
-t.test('a name colliding with an autogenerated one is still made unique', function () {
+await t.test('a name colliding with an autogenerated one is still made unique', function () {
     var p = parsed([{ name: 'seq_1', sequence: 'ACGT' }, { sequence: 'TTTT' }]);
     t.ok(pg.validate(p), 'valid');
     var names = p.sequences.map(function (s) { return s.name; });
@@ -160,7 +164,7 @@ t.test('a name colliding with an autogenerated one is still made unique', functi
     t.notOk(names[1] === names[0], 'autogenerated name did not collide: got ' + names[1]);
 });
 
-t.test('names that collide with Object.prototype members are handled', function () {
+await t.test('names that collide with Object.prototype members are handled', function () {
     // "constructor"/"toString" are truthy on a plain {} via the prototype chain,
     // so a naive seen-map would rename them spuriously.
     var p = parsed([{ name: 'constructor', sequence: 'ACGT' },
@@ -170,7 +174,7 @@ t.test('names that collide with Object.prototype members are handled', function 
     t.eq(p.sequences[1].name, 'toString', 'toString not renamed');
 });
 
-t.test('duplicate "__proto__" names are still deduplicated', function () {
+await t.test('duplicate "__proto__" names are still deduplicated', function () {
     // "__proto__" is the nastiest key: on a plain {} the assignment is ignored,
     // so the name is never recorded as seen and dedup silently breaks.
     var p = parsed([{ name: '__proto__', sequence: 'ACGT' },
@@ -182,48 +186,48 @@ t.test('duplicate "__proto__" names are still deduplicated', function () {
 
 t.suite('validate - sequence content');
 
-t.test('lowercase input is accepted and upper-cased', function () {
+await t.test('lowercase input is accepted and upper-cased', function () {
     var p = parsed([{ sequence: 'acgtn' }]);
     t.ok(pg.validate(p), 'valid');
     t.eq(p.sequences[0].sequence, 'ACGTN', 'upper-cased');
 });
 
-t.test('N is allowed', function () {
+await t.test('N is allowed', function () {
     t.ok(pg.validate(parsed([{ sequence: 'ACGTNNNNACGT' }])), 'valid');
 });
 
-t.test('embedded whitespace is stripped before validation', function () {
+await t.test('embedded whitespace is stripped before validation', function () {
     var p = parsed([{ sequence: 'ACGT ACGT' }]);
     t.ok(pg.validate(p), 'valid');
     t.eq(p.sequences[0].sequence, 'ACGTACGT', 'stripped');
 });
 
-t.test('empty sequence is rejected with the sequence name', function () {
+await t.test('empty sequence is rejected with the sequence name', function () {
     var p = parsed([{ name: 'r1', sequence: '' }]);
     t.notOk(pg.validate(p), 'invalid');
     t.eq(p.errors.length, 1, 'one error');
     t.contains(p.errors[0].message, "'r1' is empty", 'message');
 });
 
-t.test('invalid character is rejected, naming the character', function () {
+await t.test('invalid character is rejected, naming the character', function () {
     var p = parsed([{ name: 'r1', sequence: 'ACGTX' }]);
     t.notOk(pg.validate(p), 'invalid');
     t.contains(p.errors[0].message, "invalid character 'X'", 'message');
 });
 
-t.test('RNA (U) is rejected', function () {
+await t.test('RNA (U) is rejected', function () {
     var p = parsed([{ sequence: 'ACGU' }]);
     t.notOk(pg.validate(p), 'invalid');
     t.contains(p.errors[0].message, "invalid character 'U'", 'message');
 });
 
-t.test('digits and punctuation are rejected', function () {
+await t.test('digits and punctuation are rejected', function () {
     t.notOk(pg.validate(parsed([{ sequence: 'ACGT1' }])), 'digit');
     t.notOk(pg.validate(parsed([{ sequence: 'ACGT-' }])), 'dash');
     t.notOk(pg.validate(parsed([{ sequence: 'ACGT*' }])), 'star');
 });
 
-t.test('each bad sequence produces its own error, with its line number', function () {
+await t.test('each bad sequence produces its own error, with its line number', function () {
     var p = parsed([{ name: 'good', sequence: 'ACGT', line: 1 },
                     { name: 'bad1', sequence: 'ACGTX', line: 2 },
                     { name: 'bad2', sequence: '', line: 3 }]);
@@ -235,7 +239,7 @@ t.test('each bad sequence produces its own error, with its line number', functio
 
 t.suite('validate - counts');
 
-t.test('zero sequences is an error', function () {
+await t.test('zero sequences is an error', function () {
     var p = parsed([]);
     t.notOk(pg.validate(p), 'invalid');
     t.contains(p.errors[0].message, 'no sequences found', 'message');
@@ -247,17 +251,17 @@ function nSeqs(n) {
     return parsed(a);
 }
 
-t.test('exactly 10 sequences is allowed (boundary): the default limit', function () {
+await t.test('exactly 10 sequences is allowed (boundary): the default limit', function () {
     t.ok(pg.validate(nSeqs(10)), '10 accepted');
 });
 
-t.test('11 sequences is rejected with the limit in the message', function () {
+await t.test('11 sequences is rejected with the limit in the message', function () {
     var p = nSeqs(11);
     t.notOk(pg.validate(p), 'invalid');
     t.contains(p.errors[p.errors.length - 1].message, 'too many sequences: 11 (limit is 10)', 'message');
 });
 
-t.test('the cap honors a configured maxSequences', function () {
+await t.test('the cap honors a configured maxSequences', function () {
     // Fresh client so readConfig() does not leak into other tests.
     var c = loader.load();
     c.window.pangenomeConfig = { maxSequences: 2 };
@@ -270,7 +274,7 @@ t.test('the cap honors a configured maxSequences', function () {
 
 t.suite('validate - the size of the whole request');
 
-t.test('sequences that fit one by one may still be too long together', function () {
+await t.test('sequences that fit one by one may still be too long together', function () {
     var c = loader.load();
     c.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 3000 };
     var seq = new Array(1001).join('ACGT').slice(0, 1000);
@@ -282,7 +286,7 @@ t.test('sequences that fit one by one may still be too long together', function 
     t.contains(over.errors[0].message, 'limit is 1,900', 'and the room there is, less the wrapping');
 });
 
-t.test('with the default limits, ten sequences of full length fit', function () {
+await t.test('with the default limits, ten sequences of full length fit', function () {
     // pangenome.maxSequences 10 x maxSeqLen 100,000 inside PG_MAX_REQUEST_BYTES 1,040,000
     var c = loader.load();
     c.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 1040000 };
@@ -296,10 +300,9 @@ t.test('with the default limits, ten sequences of full length fit', function () 
         'and the request really is under the limit');
 });
 
-t.test('where the server has not said, nothing is assumed', function () {
+await t.test('where the server has not said, nothing is assumed', function () {
     var c = loader.load();
     var p = c.api.parseInput('>a\nACGT');
     t.ok(c.api.validate(p), 'no form data, no total check');
 });
-
-process.exit(t.report());
+});

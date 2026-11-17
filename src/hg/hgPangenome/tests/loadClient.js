@@ -7,7 +7,7 @@
  * exactly what pure-function unit tests want.  Layer 3 (rendering) tests pass
  * ids:[...] to get a working element tree.
  *
- * No npm packages: plain node vm + a hand-rolled DOM stub.
+ * No npm packages: node's vm module and a small stand-in for the DOM.
  */
 
 'use strict';
@@ -141,11 +141,19 @@ function load(options) {
         return true;
     };
 
+    // A page's timers run as usual but do not keep the test process alive: a
+    // form left polling would otherwise never let its test file end.
+    var pageTimeout = function (fn, ms) {
+        var timer = setTimeout(fn, ms);
+        timer.unref();
+        return timer;
+    };
+
     var sandbox = {
         document: document,
         console: console,
         Promise: Promise,
-        setTimeout: setTimeout,
+        setTimeout: pageTimeout,
         clearTimeout: clearTimeout,
         JSON: JSON,
         Math: Math,
@@ -165,7 +173,7 @@ function load(options) {
         location: Object.assign(
             Object.create({ toString: function () { return this.href || this.pathname; } }),
             { pathname: '/cgi-bin/hgPangenome', href: '' }),
-        setTimeout: setTimeout,
+        setTimeout: pageTimeout,
         clearTimeout: clearTimeout,
         URL: { createObjectURL: function () { return 'blob:test'; }, revokeObjectURL: function () {} }
     };

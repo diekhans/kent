@@ -10,9 +10,13 @@
 
 'use strict';
 
-var t = require('./testLib.js');
+var test = require('node:test');
+var check = require('./check.js');
 var vm = require('vm');
 var loader = require('./loadClient.js');
+
+test('The ancestry plot (js/hgPangenomePclai.js)', async function (ctx) {
+var t = check.under(ctx);
 
 // The plot's file is loaded without its module wrapper (loadClient.js body()),
 // so its functions land on the vm context.  Every element asked for exists,
@@ -104,11 +108,10 @@ var first = spots(3, 'OLD'), second = spots(3, 'NEW');
 P4.pgpInit(first, { fresh: true });
 P4.pgpOpen(first);
 // The request goes out a tick after the plot is opened.
-setTimeout(function () {
-    P4.pgpInit(second, { fresh: true });
-    late.resolve({ ok: true, json: function () {
-        return Promise.resolve({ status: 'ok', points: pointsFor(first), asked: 3, found: 3, panel: PANEL }); } });
-}, 5);
+await check.wait(5);
+P4.pgpInit(second, { fresh: true });
+late.resolve({ ok: true, json: function () {
+    return Promise.resolve({ status: 'ok', points: pointsFor(first), asked: 3, found: 3, panel: PANEL }); } });
 
 // And one that comes in time, which is drawn.
 var P5 = loadPlot(function (url, opts) {
@@ -127,75 +130,73 @@ var s6 = spots(3);
 P6.pgpInit(s6, { fresh: true });
 P6.pgpOpen(s6);
 
-setTimeout(function () {
-    t.suite('reading the points in batches');
-    t.test('a later batch that fails is counted, and the rest is kept', function () {
-        t.deepEq(sent1, [100, 100, 50], 'three requests for 250 regions');
-        t.ok(got1 && got1.status === 'ok', 'there is a plot');
-        if (!got1) { return; }
-        t.eq(got1.points.length, 150, 'with the points that were read');
-        t.eq(got1.failed, 100, 'and the number that were not');
-        t.ok(got1.panel, 'the reference panel is taken from the first answer that has it');
-    });
-    t.test('so is one that never arrives', function () {
-        t.eq(err2, null, 'the plot is not given up');
-        t.ok(got2, 'answered');
-        if (!got2) { return; }
-        t.eq(got2.points.length, 100, 'the first batch stands');
-        t.eq(got2.failed, 50, 'the second is counted as missing');
-    });
-    t.test('when the first fails there is no plot, and nothing more is asked', function () {
-        t.deepEq(sent3, [100], 'one request');
-        t.eq(got3 && got3.status, 'error', 'and its error is the answer');
-    });
-    t.test('the plot says how many it is missing', function () {
-        var x = loadPlot();
-        x.pgpInit(spots(3), { legend: { many: 'regions' }, fresh: true });
-        x.pgpData = { status: 'ok', failed: 100 };
-        t.contains(x.pgpControlsHtml(150, 150, 0), '100 regions could not be read', 'beside its controls');
-        x.pgpData = { status: 'ok' };
-        t.notOk(/could not be read/.test(x.pgpControlsHtml(150, 150, 0)), 'and nothing when all were');
-    });
+await check.wait(40);
+t.suite('reading the points in batches');
+await t.test('a later batch that fails is counted, and the rest is kept', function () {
+    t.deepEq(sent1, [100, 100, 50], 'three requests for 250 regions');
+    t.ok(got1 && got1.status === 'ok', 'there is a plot');
+    if (!got1) { return; }
+    t.eq(got1.points.length, 150, 'with the points that were read');
+    t.eq(got1.failed, 100, 'and the number that were not');
+    t.ok(got1.panel, 'the reference panel is taken from the first answer that has it');
+});
+await t.test('so is one that never arrives', function () {
+    t.eq(err2, null, 'the plot is not given up');
+    t.ok(got2, 'answered');
+    if (!got2) { return; }
+    t.eq(got2.points.length, 100, 'the first batch stands');
+    t.eq(got2.failed, 50, 'the second is counted as missing');
+});
+await t.test('when the first fails there is no plot, and nothing more is asked', function () {
+    t.deepEq(sent3, [100], 'one request');
+    t.eq(got3 && got3.status, 'error', 'and its error is the answer');
+});
+await t.test('the plot says how many it is missing', function () {
+    var x = loadPlot();
+    x.pgpInit(spots(3), { legend: { many: 'regions' }, fresh: true });
+    x.pgpData = { status: 'ok', failed: 100 };
+    t.contains(x.pgpControlsHtml(150, 150, 0), '100 regions could not be read', 'beside its controls');
+    x.pgpData = { status: 'ok' };
+    t.notOk(/could not be read/.test(x.pgpControlsHtml(150, 150, 0)), 'and nothing when all were');
+});
 
-    t.suite('a new set of regions');
-    t.test('nothing opened or read for the last one is kept', function () {
-        var x = loadPlot();
-        x.pgpInit(spots(3), { fresh: true, picked: ['S0#1'] });
-        x.pgpSelected = 'a1';
-        x.pgpSelGroup = ['a1', 'a2'];
-        x.pgpWindows.a1 = [{ x: 1, y: 1 }];
-        x.pgpPicked['S2#1'] = true;
-        x.pgpInit(spots(3, 'T'), { fresh: true, picked: ['T0#1'] });
-        t.eq(x.pgpSelected, null, 'no detail open');
-        t.eq(x.pgpSelGroup, null, 'no group open');
-        t.eq(x.pgpWindows.a1, undefined, 'the windows read for the old a1 are gone');
-        t.deepEq(Object.keys(x.pgpPicked), ['T0#1'], 'only the new source is ringed');
-    });
-    t.test('more rows of the same table keep what the reader chose', function () {
-        // The results page calls again as its table gains rows.
-        var x = loadPlot();
-        x.pgpInit(spots(3));
-        x.pgpSelected = 'a1';
-        x.pgpPicked['S2#1'] = true;
-        x.pgpInit(spots(5));
-        t.eq(x.pgpSelected, 'a1', 'the open detail');
-        t.ok(x.pgpPicked['S2#1'], 'and the ticked row');
-    });
-    t.test('an answer for the old regions is dropped', function () {
-        t.eq(P4.pgpData, null, 'not taken as the new regions\' points');
-        t.notOk(/OLD/.test(P4.node('pgrPclaiPlot').innerHTML), 'and not drawn');
-    });
-    t.test('an answer in time is drawn', function () {
-        t.ok(P5.pgpData && P5.pgpData.points.length === 3, 'kept');
-        t.contains(P5.node('pgrPclaiPlot').innerHTML, '<svg', 'and drawn');
-    });
+t.suite('a new set of regions');
+await t.test('nothing opened or read for the last one is kept', function () {
+    var x = loadPlot();
+    x.pgpInit(spots(3), { fresh: true, picked: ['S0#1'] });
+    x.pgpSelected = 'a1';
+    x.pgpSelGroup = ['a1', 'a2'];
+    x.pgpWindows.a1 = [{ x: 1, y: 1 }];
+    x.pgpPicked['S2#1'] = true;
+    x.pgpInit(spots(3, 'T'), { fresh: true, picked: ['T0#1'] });
+    t.eq(x.pgpSelected, null, 'no detail open');
+    t.eq(x.pgpSelGroup, null, 'no group open');
+    t.eq(x.pgpWindows.a1, undefined, 'the windows read for the old a1 are gone');
+    t.deepEq(Object.keys(x.pgpPicked), ['T0#1'], 'only the new source is ringed');
+});
+await t.test('more rows of the same table keep what the reader chose', function () {
+    // The results page calls again as its table gains rows.
+    var x = loadPlot();
+    x.pgpInit(spots(3));
+    x.pgpSelected = 'a1';
+    x.pgpPicked['S2#1'] = true;
+    x.pgpInit(spots(5));
+    t.eq(x.pgpSelected, 'a1', 'the open detail');
+    t.ok(x.pgpPicked['S2#1'], 'and the ticked row');
+});
+await t.test('an answer for the old regions is dropped', function () {
+    t.eq(P4.pgpData, null, 'not taken as the new regions\' points');
+    t.notOk(/OLD/.test(P4.node('pgrPclaiPlot').innerHTML), 'and not drawn');
+});
+await t.test('an answer in time is drawn', function () {
+    t.ok(P5.pgpData && P5.pgpData.points.length === 3, 'kept');
+    t.contains(P5.node('pgrPclaiPlot').innerHTML, '<svg', 'and drawn');
+});
 
-    t.suite('no reference panel');
-    t.test('the plot says so instead of waiting for ever', function () {
-        var html = P6.node('pgrPclaiPlot').innerHTML;
-        t.notOk(/Reading ancestry coordinates/.test(html), 'not still reading');
-        t.contains(html, 'no pcLAI reference panel', 'the reason');
-    });
-
-    process.exit(t.report());
-}, 40);
+t.suite('no reference panel');
+await t.test('the plot says so instead of waiting for ever', function () {
+    var html = P6.node('pgrPclaiPlot').innerHTML;
+    t.notOk(/Reading ancestry coordinates/.test(html), 'not still reading');
+    t.contains(html, 'no pcLAI reference panel', 'the reason');
+});
+});

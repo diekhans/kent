@@ -16,8 +16,8 @@ database, taken from your hg.conf, and each request starts a session row
 there, so they are not in the default run.
 
 A layer that cannot run - no node, no CGI built - is reported as NOT RUN and
-the suite result is INCOMPLETE, not PASS.  A JS test file that stops before
-printing its count is a failure.  "make help" lists the targets.
+the suite result is INCOMPLETE, not PASS.  A file that ends without a verdict
+is a failure.  "make help" lists the targets.
 
 Run one file, or one class of the CGI tests:
 
@@ -25,18 +25,28 @@ Run one file, or one class of the CGI tests:
     python3 cgiTests.py InputLimits    # needs the CGI: "make compile" in ..
 
 
-Why node and not the js/test JsTestDriver setup
------------------------------------------------
-src/hg/js/test/ holds a JsTestDriver (2011) harness that needs java plus a
-captured browser.  These tests are plain node with a hand-rolled assert runner
-and DOM stub: no npm packages, no java, no browser, milliseconds to run, easy to
-put in CI.  No new project dependencies are introduced.
+What runs the tests
+-------------------
+The JavaScript files run on node's own test runner (node:test) and the CGI
+tests on python's (unittest): what comes with node and python3, no npm
+packages and nothing to install.  src/hg/js/test/ holds a JsTestDriver (2011)
+harness that needs java plus a captured browser; these need neither, and run
+in a few seconds.
+
+A JavaScript file is one top-level test, and each check in it is a subtest run
+where it is written: many look at a page that the lines between them have just
+changed.  node counts the file's own test too, so a file of 36 checks reports
+37.  Where a page has to settle - a request answered, a timer - the file waits
+with "await check.wait(ms)".  A page's own timers do not keep the test process
+alive (loadClient.js), so a form left polling does not stop its file ending.
 
 
 Files
 -----
-testLib.js      Tiny table-driven test runner + assertions (suite/test/eq/
-                deepEq/ok/isNull/contains, exit code for CI).
+check.js        What the JavaScript files share on top of node:test: a
+                file's checks as subtests (t.suite, t.test), assertions that
+                say what they expected and got (eq/deepEq/ok/notOk/isNull/
+                contains), and wait().
 loadClient.js   Loads js/hgPangenome.js (or another page's script) into a node vm with a
                 minimal window/document stub, and returns the client's test
                 exports.  With no page elements present the client's init()
