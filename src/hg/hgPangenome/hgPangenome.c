@@ -740,14 +740,18 @@ struct pgCommand
 #define PG_HALF_WEIGHT 0.5
 
 static struct pgCommand commands[] = {
-    /* forwarded to the graph server (proxy.c) */
+    /* forwarded to the graph server (proxy.c).  cmd=surjectAll is the heaviest
+     * of them, and the results page sends one for each hit as it opens - up to
+     * thirty for a full job - so it carries half the weight: a reader can
+     * reload a large results page several times over without being slowed,
+     * and a loop of them is still stopped. */
     {"map",             doMap,             PG_FULL_WEIGHT, FALSE, FALSE},
     {"poll",            doPoll,            0,              FALSE, FALSE},
     {"haplotypes",      doHaplotypes,      0,              FALSE, FALSE},
     {"liftoverTargets", doLiftoverTargets, PG_FULL_WEIGHT, FALSE, FALSE},
     {"liftoverAll",     doLiftoverAll,     PG_FULL_WEIGHT, FALSE, FALSE},
     {"surject",         doSurject,         PG_FULL_WEIGHT, FALSE, FALSE},
-    {"surjectAll",      doSurjectAll,      0,              FALSE, FALSE},
+    {"surjectAll",      doSurjectAll,      PG_HALF_WEIGHT, FALSE, FALSE},
     /* answered from files on this server, without the cart: the pages ask for
      * these whenever what they show changes.  cmd=locus is asked once for each
      * page of the results table and reads gene files for up to 200 rows, so it

@@ -556,6 +556,12 @@ check_contains     "bottleneck failure detail is written to the error log" "$log
 out=$(cgi_post_cmd "$TMP/bot.conf" locus '{"items":[]}')
 check_contains "cmd=locus consults the bottleneck server too" "$out" "rate limiter unavailable"
 
+# The batch surjection is the heaviest request there is, so it is limited too.
+: > "$REC"
+out=$(cgi_post_cmd "$TMP/bot.conf" surjectAll '{"job_id":"job1","name":"r1"}')
+check_contains "cmd=surjectAll consults the bottleneck server" "$out" "rate limiter unavailable"
+check_eq       "... and is not forwarded when the check cannot be made" "$(mock_count)" "0"
+
 : > "$REC"
 out=$(cgi_get "$TMP/bot.conf" "cmd=poll&job_id=job1")
 check_not_contains "cmd=poll does not consult the bottleneck server" "$out" "bottleneck"
