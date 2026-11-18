@@ -253,7 +253,7 @@ function pgcPageTable(table, order) {
 }
 
 // Offer to carry the source's own gene tracks over to this target.  The chain
-// is built from the blocks we already have, so this costs the mapping server
+// is built from the blocks we already have, so this costs the graph server
 // nothing further.
 // Both sides are assemblies this server opens, so QuickLift can draw one's
 // tracks on the other.
@@ -287,10 +287,10 @@ function armAnnotationLink(a, iv, link) {
         var was = a.textContent;
         a.textContent = was + " — preparing…";
         // The interval and the target, not the blocks.  The server fetches its
-        // own - it was already doing so for the padding - and posting ours put
-        // an unbounded array in the request body: a conversion over a big or
-        // repeat-dense region went past the 1 MB cap cheapcgi.c enforces, which
-        // aborts with an HTML page and surfaced here as
+        // own, as it does for the padding anyway.  Posting ours would put an
+        // unbounded array in the request body: a conversion over a big or
+        // repeat-dense region goes past the 1 MB cap cheapcgi.c enforces, which
+        // aborts with an HTML page and would surface here as
         // "Unexpected token '<' ... is not valid JSON".
         var payload = {
             srcDb: pg.assemblyFor(allSrcHap),
@@ -333,7 +333,7 @@ function hideTargetTracks() {
 //
 // The chain the first request builds reaches a little either side of the
 // converted interval - enough to pan a few window-widths, not enough to roam.
-// Widening it costs the mapping server about a second per megabase, which is
+// Widening it costs the graph server about a second per megabase, which is
 // not worth charging to every conversion, so it is asked for here instead:
 // once, at the moment the user actually follows the link.
 //
@@ -1217,7 +1217,7 @@ var sourceIsExample = false;   // the position on screen is ours, not the user's
 
 // The graph's path names are case-sensitive ("CHM13#0", not "chm13#0"), but our
 // generated assembly table is keyed lower-case.  Map back to the graph's own
-// spelling before building a source path, or the middleware finds no paths.
+// spelling before building a source path, or the graph server finds no paths.
 function canonicalHap(hap) {
     if (!hap) return hap;
     if (!hapExactByLower) {
@@ -1694,12 +1694,12 @@ function notInPangenome(db) {
 // its own assembly.
 // Fill in what is missing, and only what is missing.
 //
-// These are two independent questions and were being answered as one: an
-// assembly the page did not recognise replaced the position too, so a request
-// for chr10 came back converted from the example region on chr9.  A position
-// the user gave us is never overwritten - if we cannot use it we say so, and
-// the caller declines to convert rather than quietly answering about somewhere
-// else.
+// These are two independent questions and are answered apart: an assembly
+// the page does not recognise must not replace the position too, or a request
+// for chr10 would come back converted from the example region on chr9.  A
+// position the user gave us is never overwritten - if we cannot use it we say
+// so, and the caller declines to convert rather than answering about
+// somewhere else.
 //
 // A position on an assembly the pangenome does not have is left as it is, with
 // its assembly: read on the default assembly it would name another place, and
@@ -1748,10 +1748,9 @@ function describeSource(fallback) {
     var assembly = pg.assemblyFor(hap);
     var parts = [];
     if (assembly && !/^https?:/.test(assembly)) parts.push("assembly " + assembly);
-    // The caveat about the contig belonging to this haplotype has gone with the
-    // text box it was advice for.  The position is inherited now, and when it
-    // does not fit the source, contigProblem() says so in those terms at the
-    // moment it matters.
+    // Nothing here about the contig belonging to this haplotype: the position
+    // is inherited, and when it does not fit the source, contigProblem() says
+    // so in those terms at the moment it matters.
     if (fallbackWhy && fallback.tookPosition)
         parts.push("shown as a starting example because " + fallbackWhy);
     else if (fallbackWhy)
@@ -1861,8 +1860,7 @@ function nativeContig(contig) {
 }
 
 // Advisory check: is this contig one of the source's sequences?  Either
-// spelling counts - rejecting the browser's own name for it was the bug this
-// guards against.
+// spelling counts: the browser's own name for a sequence is not an error.
 function contigProblem(contig) {
     if (!contigsForSource) return null;                 // unknown; let the server judge
     if (contigsForSource.indexOf(nativeContig(contig)) >= 0) return null;
@@ -2020,7 +2018,7 @@ function initForm() {
     $("pgcFilter").addEventListener("input", function () {
         fillTargets($("pgcFilter").value);
     });
-    // No listener on the source: it is not a control any more.
+    // No listener on the source: it is stated, not chosen.
     $("pgcTargets").addEventListener("change", function () {
         fillTargets($("pgcFilter").value);      // refresh the "N selected" line
     });

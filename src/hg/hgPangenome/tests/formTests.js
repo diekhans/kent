@@ -6,7 +6,7 @@
  * results themselves are drawn by another page and are tested in
  * resultsTests.js.
  *
- * Deterministic: responses are fixtures, and no middleware or browser is
+ * Deterministic: responses are fixtures, and no graph server or browser is
  * involved.
  *
  * Run:  node formTests.js
@@ -161,7 +161,7 @@ var jobFailed = start({ submit: QUEUED,
                         poll: [{ job_id: 'j1', status: 'error', error: 'engine exploded' }] });
 var blip = start({ submit: QUEUED, poll: ['fail', 'fail', DONE] });
 var lost = start({ submit: QUEUED, poll: ['fail'] });
-// what the CGI answers while the mapping server is restarting: an error, but
+// what the CGI answers while the graph server is restarting: an error, but
 // not the job's own
 var restart = { status: 'error', error: 'the mapping service is unavailable (HTTP 503)' };
 var served = start({ submit: QUEUED, poll: [restart, restart, DONE] });
@@ -251,7 +251,7 @@ await t.test('contact lost for good is reported, and the polling stops', functio
 });
 
 await t.test('an error from the CGI while polling is a failed try, not a failed job', function () {
-    // One 503 while the mapping server restarted used to lose the job.
+    // One 503 while the graph server restarts must not lose the job.
     t.contains(String(served.window.location), 'page=results', 'the job was followed to its end');
     t.notOk(/Job failed/.test(served.el.pgStatus.textContent), 'and never called failed');
 });

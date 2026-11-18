@@ -96,7 +96,7 @@ static boolean pgWritePsl(char *path, boolean append, char *qName, int qSize, ch
                           long matches, long mismatches, int *retTEnd, char **retError)
 /* One PSL line for the alignment.  M/=/X advance both sides, I the query, D/N
  * the target, and S/H the query without aligning it - the same expansion a
- * CIGAR gets in bamToPsl().  matches and mismatches are the mapping server's
+ * CIGAR gets in bamToPsl().  matches and mismatches are the graph server's
  * counts, or -1.
  *
  * The CIGAR comes from the page, so it is checked here as input: every
@@ -105,7 +105,7 @@ static boolean pgWritePsl(char *path, boolean append, char *qName, int qSize, ch
  *
  * Expanding the CIGAR is ours; the record itself is kent's.  We fill in a
  * struct psl and let pslTabOut() write it, rather than printing twenty-one
- * tab-separated fields in an order we had to get right by hand. */
+ * tab-separated fields in the right order by hand. */
 {
 static char msg[256];
 long q = 0, t = tStart, aligned = 0;
@@ -194,7 +194,7 @@ if (bad != NULL)
 
 struct psl psl;
 ZeroVar(&psl);
-/* The mapping server's own counts where it gave them and they add up to the
+/* The graph server's own counts where it gave them and they add up to the
  * aligned length; otherwise every aligned base is called a match.  Either way
  * the per-base mismatch colouring is done by hgTracks itself, from the FASTA
  * against the assembly; these are the numbers on the details page. */
@@ -255,8 +255,8 @@ static char *pgBigPslTrack(char *pslFile, char *faFile, char *chromSizes, char *
  * pslToBigPsl puts the query sequence in the file, so the track needs no
  * FASTA beside it and nothing in the cart: it is an ordinary custom track,
  * which a change of assembly does not throw away and a saved session keeps.
- * The track this replaced was the pair hgBlat's classic results use, a PSL
- * and a FASTA named in the cart's "ss", which the browser drops whenever the
+ * The other way to draw it, the pair hgBlat's classic results use - a PSL and
+ * a FASTA named in the cart's "ss" - is dropped by the browser whenever the
  * assembly changes. */
 {
 static char msg[256];

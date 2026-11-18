@@ -2,8 +2,9 @@
  *
  * Maps a pangenome haplotype (PanSN "SAMPLE#PHASE", lower-cased) to the UCSC
  * assembly it can be browsed in: a GenArk accession for HPRC sample
- * haplotypes, or a plain db for the references.  Used by hgPangenome.js to
- * link a surjection to the Genome Browser for any haplotype.
+ * haplotypes, or a plain db for the references.  Read through
+ * hgPangenomeCommon.js (assemblyFor) by the results page and by PanLift, to
+ * link a place on any haplotype to the Genome Browser.
  *
  * Source: ucsc_browser_hprc_r2_v1.0.index.csv
  *   sha256 efa250ce8ffe1e0774d856e8f62db8b2027fa006d840e058562f11afb43c209e

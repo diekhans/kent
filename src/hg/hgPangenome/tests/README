@@ -1,9 +1,9 @@
 hgPangenome test suite
 ======================
 
-Tests for PanView, the pangenome mapping tool: the browser client (js/hgPangenome.js)
-and the CGI (hgPangenome.c and the files beside it).  Layered so that everything except the
-end-to-end layer runs with no middleware and no browser.
+Tests for PanView and PanLift: the page scripts (js/hgPangenome*.js) and the
+CGI (hgPangenome.c and the files beside it).  Nothing here needs a browser or
+the real graph server.
 
 Run it:
 
@@ -72,8 +72,8 @@ plotTests.js    The ancestry plot both tools share (js/hgPangenomePclai.js):
                 what it keeps between one set of regions and the next, how it
                 reads its points in batches, what it says when it cannot draw.
 mockMiddleware.py
-                Stand-in middleware for Layer 2: configurable status/body/delay,
-                and records every request (method, path, headers, body) as JSON
+                Stand-in graph server for Layer 2: configurable status, body
+                and delay; records every request (method, path, headers, body) as JSON
                 lines so tests can assert what the CGI actually sent upstream.
                 --body-file serves a body too long for a command line.
 cgiTests.py     LAYER 2: the CGI, run as a real CGI against the mock.
@@ -81,17 +81,21 @@ runTests.sh     Runs the layers and prints one result line for each.
 makefile        Standard kent entry point: make test / testWithDb /
                 updateAssemblies / help.
 
-The haplotype -> assembly table
--------------------------------
-js/hgPangenomeAssemblies.js is generated from the HPRC browser index CSV, which
-is committed at hgPangenome/ucsc_browser_hprc_r2_v1.0.index.csv - so generating
-it needs no network access and is reproducible.  The generated file records the
-CSV's name, sha256 and upstream URL.  Regenerate with:
+The two generated tables
+------------------------
+js/hgPangenomeAssemblies.js, haplotype -> assembly, is generated from the HPRC
+browser index CSV, which is committed at
+hgPangenome/ucsc_browser_hprc_r2_v1.0.index.csv - so generating it needs no
+network access and is reproducible.  The generated file records the CSV's
+name, sha256 and upstream URL.  Regenerate with:
 
     make updateAssemblies        # runs makeAssemblyMap.py, then the tests
 
 For a new HPRC release, add its index CSV beside the script and point
 DEFAULT_SRC (or the command line) at it.
+
+js/hgPangenomeSamples.js, sample -> population, is generated the same way by
+../makeSampleMap.py from ../hprc_release2_sample_metadata.csv.
 
 
 What Layer 2 covers
@@ -118,7 +122,7 @@ request shaping  forwarded once, as POST, to /api/v1/map, with
                  Content-Type: application/json, payload byte-for-byte
                  identical, Accept and User-Agent set; poll forwarded as GET to
                  /api/v1/map/<job_id>; trailing slash in apiBase normalized;
-                 middleware answer passed through.
+                 graph server answer passed through.
 auth             configured token sent as X-Pangenome-Token on both map and
                  poll; no header at all when unconfigured.
 job_id guard     rejects "../../etc/passwd", "a/b", "a?x=1", "a&b", "a;b",
@@ -127,11 +131,12 @@ job_id guard     rejects "../../etc/passwd", "a/b", "a?x=1", "a&b", "a;b",
                  [A-Za-z0-9._-] charset.
 error mapping    400/401/403/429/500/503 surfaced as an error envelope naming
                  the status; non-JSON 200 passed through; unreachable
-                 middleware reported clearly; a slow middleware times out
+                 graph server reported clearly; a slow graph server times out
                  instead of hanging; missing apiBase reported on map and poll.
-bot delay        with the bottleneck server pointed at a dead port, cmd=map
-                 consults it (fails closed) while cmd=poll does not and still
-                 works - i.e. submissions are rate-limited, polling is exempt.
+rate limit       with the bottleneck server pointed at a dead port, cmd=map,
+                 cmd=locus and cmd=surjectAll consult it (and fail closed,
+                 in JSON) while cmd=poll does not and still works - work is
+                 rate limited, polling is exempt.
 commands        every command the page scripts send is one the CGI knows;
                  an unknown cmd is not forwarded and is answered with a JSON
                  error that names it.
@@ -141,7 +146,7 @@ CGI's ../trash is there too and nothing is left in the source tree.
 
 Isolation: the test hg.conf files are standalone (they do NOT include the site
 hg.conf), so Layer 2 never touches the shared bottleneck server, MySQL, or the
-real middleware.  The exception is its last section, the commands that run
+real graph server.  The exception is its last section, the commands that run
 inside the cart, which is only run by "make testWithDb".  The CGI is $PG_CGI,
 else ../hgPangenome as "make compile" leaves it; an installed CGI is never
 used, and with neither the layer is NOT RUN.
@@ -221,9 +226,9 @@ The results are drawn by the results page; its coordinate arithmetic, cells
 and download are tested as functions in resultsTests.js.
 
 
-Still to come (see the layered plan)
-------------------------------------
-Layer 4  Ground-truth round-trips against the live middleware: cut reads from
+Not covered yet
+---------------
+Layer 4  Ground-truth round-trips against the live graph server: cut reads from
          known reference coordinates, assert haplotypes, surjected position and
          the browser link land exactly where they should (off-by-one probe).
 Layer 5  Negative/security: direct POST bypass, malformed responses, stuck

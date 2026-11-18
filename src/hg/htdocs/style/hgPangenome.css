@@ -345,9 +345,8 @@
 .pgcToggle input { vertical-align: middle; margin-right: 0.3em; }
 .pgcToggle.pgcBusy { opacity: 0.6; cursor: progress; }
 
-/* The line under the picker says how many assemblies there are and why.  It
- * used to sit above the list and reserve two lines so the list did not move;
- * below the picker, nothing moves when it grows. */
+/* The line under the picker says how many assemblies there are and why.
+ * Below the picker, nothing moves when it grows. */
 #pgcTargetCount { line-height: 1.3; }
 
 /* The conversion form's label column is pinned.  With automatic layout the

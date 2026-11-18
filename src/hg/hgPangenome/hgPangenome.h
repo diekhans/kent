@@ -146,13 +146,13 @@ boolean pgValidJobId(char *s);
 boolean pgValidHapName(char *s);
 /* A haplotype as the graph names it, SAMPLE#PHASE ("HG00097#1"), or one of its
  * sequences, SAMPLE#PHASE#CONTIG.  Nothing else is passed on as a target: the
- * limits on a request count its targets, and a word that the mapping server
+ * limits on a request count its targets, and a word that the graph server
  * reads as "all of them" would be counted as one. */
 
 /* ---- proxy.c - the graph server ---- */
 
 struct pgResp
-/* Result of one middleware request. */
+/* Result of one graph server request. */
     {
     long code;                  /* HTTP status, 0 if the request never completed */
     struct dyString *body;      /* response body (always non-NULL) */
@@ -162,7 +162,7 @@ struct pgResp
     };
 
 struct pgResp pgHttp(char *url, char *postJson, int timeoutSecs);
-/* Make one request to the middleware.  GET when postJson is NULL, otherwise
+/* Make one request to the graph server.  GET when postJson is NULL, otherwise
  * POST postJson as application/json.  The token, where hg.conf has one, is
  * sent as the X-Pangenome-Token header.  Caller frees resp.body / resp.errMsg. */
 
@@ -209,14 +209,13 @@ void pgForgetStaleHubs(char *keepHubFile, boolean missingOnly);
 /* Disconnect pangenome quickLift hubs this cart is still holding.
  *
  * Two callers, two meanings.  Building a new lift passes the hub it is about to
- * use and missingOnly=FALSE: everything else goes, which is how a cart built
- * before the name was reused stops carrying a dozen of them.  A page load
- * passes missingOnly=TRUE, which drops only hubs whose file is gone - trash is
- * swept in about an hour, and the cart entry outlives it, so hgTracks goes on
- * trying to open a dead path and draws a red "Couldn't open ..." group on every
- * page until something takes the entry away.  Nothing did, because this only
- * ran when a new lift was built - the one moment a user is not looking at the
- * error. */
+ * use and missingOnly=FALSE: everything else goes, so a cart holds one of
+ * these hubs at a time.  A page load passes missingOnly=TRUE, which drops only
+ * hubs whose file is gone - trash is swept in about an hour, and the cart
+ * entry outlives it, so hgTracks goes on trying to open a dead path and draws
+ * a red "Couldn't open ..." group on every page until something takes the
+ * entry away.  That is done at a page load because the reader is here then;
+ * building a new lift is the one moment they are not looking at the error. */
 
 char *pgAttachAssembly(char *db);
 /* Make sure this assembly is usable in this request, and return the name the
@@ -236,7 +235,7 @@ void doContigs(void);
  * labels them the UCSC way (chrUn_JBIREP010000009v1), because these assembly
  * hubs set "chromAuthority ucsc".  A user who copies a position out of the
  * browser therefore hands us a name the graph has never heard of, and the page
- * used to reject it as not being a sequence of the assembly at all.
+ * has to take either.
  *
  * Both names come from the assembly's own chromAlias bigBed.  Note this reads
  * the file directly rather than going through chromAliasSetup(): that resolves

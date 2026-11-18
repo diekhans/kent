@@ -2,7 +2,7 @@
  *
  * Pure-function unit tests for js/hgPangenome.js, the PanView search form:
  * input parsing, validation and form encoding.  No network, no real DOM, no
- * middleware.  (The coordinate arithmetic of the results page is tested in
+ * graph server.  (The coordinate arithmetic of the results page is tested in
  * resultsTests.js, beside the functions that do it.)
  *
  * Run:  node unitTests.js        (exit 0 = all passed)

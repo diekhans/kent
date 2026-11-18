@@ -254,7 +254,7 @@ return TRUE;
 boolean pgValidHapName(char *s)
 /* A haplotype as the graph names it, SAMPLE#PHASE ("HG00097#1"), or one of its
  * sequences, SAMPLE#PHASE#CONTIG.  Nothing else is passed on as a target: the
- * limits on a request count its targets, and a word that the mapping server
+ * limits on a request count its targets, and a word that the graph server
  * reads as "all of them" would be counted as one. */
 {
 if (isEmpty(s) || strlen(s) > 200)
@@ -280,7 +280,7 @@ static void injectConfig()
  * hgPangenome.js reads this on DOMContentLoaded, which fires after inline
  * scripts have run, so ordering relative to the external <script src> is safe. */
 {
-/* Note: the middleware base URL is deliberately NOT sent to the browser; the
+/* Note: the graph server base URL is deliberately NOT sent to the browser; the
  * browser only ever talks to this CGI (same origin). */
 jsInlineF("window.pangenomeConfig = {\n"
           "  pollIntervalMs: %d,\n"
@@ -365,7 +365,7 @@ static void drawConvertPage()
  * Genomes".  The source assembly and position are inherited from the cart, so
  * arriving from a track view pre-fills them with whatever the user was looking
  * at - but both stay editable.  Destination haplotypes come from the live graph
- * (cmd=haplotypes) and the translation itself is done by the middleware
+ * (cmd=haplotypes) and the translation itself is done by the graph server
  * (cmd=liftoverAll); js/hgPangenomeConvert.js drives both. */
 {
 /* Whatever the user was last viewing, if anything. */
@@ -417,9 +417,8 @@ printf("<td>\n");
 printf("<div class='pgcFind'>");
 printf("<input type='search' id='pgcFilter' size='30' "
        "placeholder='Search haplotypes or populations'>\n");
-/* One checkbox rather than two buttons that swapped places.  The pair looked
- * like two separate actions and gave no sign of which state the list was in;
- * a checkbox says both what it does and whether it is on. */
+/* A checkbox, not a pair of buttons: it says both what it does and whether it
+ * is on. */
 printf("<label for='pgcReachableOnly' class='pgcToggle' title='Ask the graph "
        "which assemblies this region exists on, and list only those'>"
        "<input type='checkbox' id='pgcReachableOnly'> "
@@ -445,9 +444,8 @@ printf("</td></tr>\n");
 if (quickLiftEnabled(cart))
     {
     boolean on = PG_QUICKLIFT_DEFAULT;
-    /* Worded as hgConvert words it.  The explanation that used to sit under
-     * these two is in their tooltips, where it is available without taking up
-     * the form. */
+    /* Worded as hgConvert words it.  What each does is in its tooltip, where
+     * it is available without taking up the form. */
     printf("<tr><td><b>Annotations</b></td>\n");
     printf("<td><label for='pgcQuickLift' title='Display tracks from the "
            "source assembly mapped onto the target assembly'>"
@@ -533,12 +531,11 @@ printf("<div id='pgrResults' class='gbApp'></div>\n");
 injectConfig();
 /* The job id comes straight from the URL, so it is checked before it goes
  * anywhere, and an id that is not one becomes empty: the page then says no
- * job was named.  It used to be echoed into a single-quoted literal through
- * jsonStringEscape, which escapes double quotes but not single ones, so a
- * quote in job_id ended the string and the rest ran as script - inside this
- * page's own nonced block, where the CSP cannot stop it.  It is now also a
- * double-quoted literal, which is what jsonStringEscape is for, so either
- * fix alone would hold. */
+ * job was named.  It is written as a double-quoted literal, which is what
+ * jsonStringEscape is for: that escapes double quotes and not single ones, so
+ * in a single-quoted literal a quote in job_id would end the string and the
+ * rest would run as script - inside this page's own nonced block, where the
+ * CSP cannot stop it.  Either safeguard alone would hold. */
 char *jobId = cgiUsualString("job_id", "");
 if (!pgValidJobId(jobId))
     jobId = "";
@@ -587,8 +584,8 @@ jsInlineF("var pangenomeResultsPage = %s;\n", jw->dy->string);
 jsonWriteFree(&jw);
 
 /* How many haplotypes the batch surjection places.  Everything else in the
- * table comes free with the mapping; these come in one request, so this can
- * be far larger than it was when each position cost a request of its own. */
+ * table comes free with the mapping; these come in one request, however many
+ * are asked for. */
 jsInlineF("var pangenomeSurjectTop = %d;\n", PG_RESULTS_SURJECT_TOP);
 jsInlineF("var pangenomeSurjectMax = %d;\n", PG_MAX_SURJECT_TARGETS);
 /* Place every haplotype of every hit as soon as the first table is up,
@@ -596,11 +593,11 @@ jsInlineF("var pangenomeSurjectMax = %d;\n", PG_MAX_SURJECT_TARGETS);
  * call per hit, one at a time per page view. */
 jsInlineF("var pangenomePlaceAllAtLoad = %s;\n",
           PG_RESULTS_PLACE_ALL_AT_LOAD ? "true" : "false");
-/* Coverage floor for the batch surjection.  Left at zero: the service
- * returns its targets best coverage first and stops at max_targets, so the
- * floor only decides what is eligible, and a default of 50 quietly threw
- * away every partial match - a read whose best other haplotype covers 42%
- * came back with one row. */
+/* Coverage floor for the batch surjection.  Zero: the service returns its
+ * targets best coverage first and stops at max_targets, so the floor only
+ * decides what is eligible, and a floor of 50 would throw away every partial
+ * match - a read whose best other haplotype covers 42% would come back with
+ * one row. */
 jsInlineF("var pangenomeMinCoverage = %d;\n", PG_RESULTS_MIN_COVERAGE);
 /* What the table shows by default, which the reader can lower to the floor
  * above or raise: a loose cut that keeps pieces of pseudogenes and other

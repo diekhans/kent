@@ -44,7 +44,7 @@ DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def db_from_browser_url(url):
-    """Turn the table's browser URL into what hgPangenome.js should link to.
+    """Turn the table's browser URL into what the pages should link to.
 
     Two kinds of value come back:
       * a bare assembly id, which is portable across UCSC browser servers, so
@@ -131,8 +131,9 @@ def main():
     lines.append(' *')
     lines.append(' * Maps a pangenome haplotype (PanSN "SAMPLE#PHASE", lower-cased) to the UCSC')
     lines.append(' * assembly it can be browsed in: a GenArk accession for HPRC sample')
-    lines.append(' * haplotypes, or a plain db for the references.  Used by hgPangenome.js to')
-    lines.append(' * link a surjection to the Genome Browser for any haplotype.')
+    lines.append(' * haplotypes, or a plain db for the references.  Read through')
+    lines.append(' * hgPangenomeCommon.js (assemblyFor) by the results page and by PanLift, to')
+    lines.append(' * link a place on any haplotype to the Genome Browser.')
     lines.append(' *')
     lines.append(' * Source: %s' % os.path.basename(args.src))
     lines.append(' *   sha256 %s' % src_sha)

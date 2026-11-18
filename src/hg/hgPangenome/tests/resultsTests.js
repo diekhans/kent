@@ -97,7 +97,7 @@ await t.test('the bar shows where on the query it aligned, the figure how much',
     t.contains(h, 'Bases 251-750 of your 1,000 bp', 'tooltip is 1-based');
 });
 await t.test('a quarter aligned is a quarter of the bar, not all of it', function () {
-    // What the mapping server sends for four copies of a 20 kb sequence: the
+    // What the graph server sends for four copies of a 20 kb sequence: the
     // query extent it reports runs to the end of the clipped part.
     var h = R.pgrCoverageCell(row({ queryLength: 80000, cigar: '20000M60000S', qStart: 0,
                                     qEnd: 80000, coverage: 24.97 }));

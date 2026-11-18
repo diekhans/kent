@@ -41,7 +41,7 @@ var POLL_MAX_MS = 30 * 60 * 1000;   // a job not done by then is given up on
 // ---- Transport --------------------------------------------------------------
 //
 // The browser talks only to this CGI, which forwards each request to the
-// mapping server and returns its JSON.
+// graph server and returns its JSON.
 
 function submitJob(payload) {
     return pg.post("map", payload).then(pg.jsonOrBody);
@@ -237,7 +237,8 @@ function run() {
 
     submitJob(lastPayload).then(function (resp) {
         if (seq !== runSeq) return;
-        // The proxy returns {status:"error",error} when it cannot reach the middleware.
+        // The CGI answers {status:"error",error} when it cannot reach the graph
+        // server.
         if (resp && resp.status === "error") throw new Error(resp.error || "server error");
         if (!resp || !resp.job_id) throw new Error("no job id in response");
         pollJob(resp.job_id, total);
@@ -249,11 +250,11 @@ function run() {
 
 // Is this answer to a poll the end of the job, or only of this try?
 //
-// A job the mapping server gave up on comes back as the job itself, with its
+// A job the graph server gave up on comes back as the job itself, with its
 // id and status "error".  Everything else the CGI reports the same way - the
 // server was restarting, the proxy timed out - is a failed try, and the job
-// may be perfectly well.  One of those used to lose the job.  The exception is
-// a job the server no longer has, which no number of tries will bring back.
+// may be perfectly well, so it is asked about again.  The exception is a job
+// the server does not have, which no number of tries will bring back.
 function pollEndsJob(job) {
     if (!job || job.status !== "error") return false;
     if (job.job_id) return true;
@@ -298,7 +299,7 @@ function pollJob(jobId, total) {
                 // page's state, so the results URL survives a reload and can be
                 // passed to someone else.
                 busyNow("Opening the results\u2026");
-                // A demo link's choice of annotations goes along with it.
+                // A choice of annotations named in the link goes along with it.
                 var refAnnot = /[?&]refAnnot=([^&]*)/.exec(window.location.search);
                 window.location = window.location.pathname + "?page=results" +
                     "&job_id=" + encodeURIComponent(jobId) +
@@ -351,9 +352,8 @@ function onClear() {
 // search form from hgBlatFormData, and in the same design: the shared house
 // style from gbModern.css (.gbSection bars, .gbPill buttons, .gbCard sidebar,
 // the busy overlay) and this tool's own layout from hgPangenome.css.  The
-// controls keep the ids the rest of this file has always used - pgSeq, pgFile,
-// pgSubmit, pgClear - so nothing below had to change to work
-// with them, and a page with no form data is left exactly as it was.
+// controls have the ids the rest of this file reads - pgSeq, pgFile, pgSubmit,
+// pgClear - and a page with no form data is left alone.
 
 // The Genome Browser's standard info icon, as hgBlat.js copies it from
 // printInfoIconSvg() in hg/lib/hui.c, so these icons are the same ones as on
@@ -404,7 +404,7 @@ function formBusyMarkup() {
 
 // The overlay mirrors the in-page status rather than replacing it: #pgStatus
 // still carries the progress and every error, so a page without the form - and
-// the tests - see exactly what they always did.
+// the tests - can read both there.
 function busyOn(text) {
     var bg = $("pgBusyBg");
     if (!bg) return;

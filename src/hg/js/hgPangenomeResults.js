@@ -2,7 +2,8 @@
  *
  * Reached as hgPangenome?page=results&job_id=<id>.  The page carries nothing
  * but the job id, so everything here is fetched from that: the mapping is read
- * back with cmd=poll, and each carrier haplotype is placed with cmd=surject.
+ * back with cmd=poll, the haplotypes that carry a hit are placed a batch at a
+ * time with cmd=surjectAll, and one outside the batch with cmd=surject.
  * Reloading works, and the URL can be handed to someone else for as long as
  * the job is still cached upstream.
  *
@@ -33,8 +34,8 @@ var pgrRows = [];
 // The page's two globals are written by inline <script> blocks that the CGI
 // flushes at cartWebEnd(), which is after this file's own <script src> tag.  So
 // they do not exist while this file is being evaluated - read them when they
-// are needed, never at load time.  (Reading pangenomeJobId up here is what made
-// every results link say "No job was named in this link".)
+// are needed, never at load time.  (Read up here, pangenomeJobId is undefined,
+// and every results link says "No job was named in this link".)
 function pgrCfg() {
     return (typeof pangenomeConfig === "object" && pangenomeConfig) || {};
 }
@@ -320,11 +321,9 @@ function pgrPool(thunks, width) {
 // One row per record that surject_all returned, for one placement of one
 // query sequence.
 //
-// The rows used to be built from the mapping's graded haplotype list and then
-// filtered - an identity floor, a minimum row count - because placing a row
-// cost a request and only a handful could be afforded.  The batch call removed
-// that constraint: it selects the best max_targets by coverage itself and
-// returns each one fully described, so the table is simply what it gave back.
+// The batch call selects the best max_targets by coverage itself and returns
+// each one fully described, so the table is simply what it gave back: no
+// identity floor and no minimum row count are applied here.
 function pgrRowsFromBatch(res, aln, index, placements, batch) {
     var carriers = Object.create(null);
     ((aln.haplotypes && aln.haplotypes.names) || []).forEach(function (n) {
@@ -381,9 +380,9 @@ function pgrRowsFromMapping(res, aln, index, placements) {
 // here is derived.  "identity" is the surjected alignment's, as a fraction;
 // "graph_identity" is the figure the mapping already reported for the
 // haplotype's walk through the graph; "coverage" is a percentage and is the
-// same number the mapping's list gave.  An earlier version computed coverage
-// itself, from aligned bases over query length - a different quantity, which
-// made the column mean two things depending on whether the row was placed.
+// same number the mapping's list gave.  It is not worked out here from aligned
+// bases over query length: that is a different quantity, and the column would
+// mean two things depending on whether the row was placed.
 function pgrApplyRecord(row, rec) {
     if (rec.coverage != null) { row.coverage = rec.coverage; }
     if (rec.graph_identity != null) { row.listIdentity = rec.graph_identity; }
@@ -496,7 +495,7 @@ function pgrUnplacedText(r) {
 
 function pgrPositionCell(r) {
     if (r.contig == null) {
-        // The mapping server's own reason, where it gave one, on hover.
+        // The graph server's own reason, where it gave one, on hover.
         return '<span class="pgrUnplaced"' +
                (r.placeDetail ? ' title="' + pg.esc(r.placeDetail) + '"' : "") + ">" +
                pgrUnplacedText(r) + "</span>";
@@ -646,7 +645,7 @@ function pgrOtherHits(row) {
 
 // Before a haplotype is opened, a position for it at every hit, so that the
 // browser's track shows the sequence everywhere it aligned on that haplotype.
-// The mapping server may not have listed the haplotype at another hit; each
+// The graph server may not have listed the haplotype at another hit; each
 // missing one is one surjection, and a place where it has no path stays
 // missing.
 function pgrHapEverywhere(row) {
@@ -964,7 +963,7 @@ function pgrPendingRows(res, aln, index, placed) {
 var pgrFull = {};           // hits whose every haplotype has been placed
 
 // Is this one of a sequence's places in the graph?  For a sequence it could
-// not place the mapping server still answers "mapped", with one alignment
+// not place the graph server still answers "mapped", with one alignment
 // that is none: its path is "*", it has no score, no haplotype carries it and
 // there is no position.  That is not a hit, and a sequence with nothing else
 // was not found.

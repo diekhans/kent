@@ -1,8 +1,8 @@
 /* hgPangenomePclai.js - where a mapping's hits sit in ancestry space.
  *
  * Optional.  The whole feature is behind pangenome.resultsPclai in hg.conf; with
- * it off the server never emits the config and nothing here runs, so the results
- * page is exactly as it was.
+ * it off the server never emits the config and nothing here runs, so the pages
+ * have no plot and no sign of one.
  *
  * pcLAI (Geleta et al. 2026, doi:10.64898/2026.03.23.713813) gives every window
  * of every HPRC haplotype a coordinate in a reference PCA space rather than an

@@ -16,7 +16,7 @@
 #include <curl/curl.h>
 #include "hgPangenome.h"
 
-/* ---- Middleware HTTP client (the "ask the other server" layer) ----
+/* ---- Graph server HTTP client (the "ask the other server" layer) ----
  * Uses libcurl, which is already a project dependency (see lib/curlWrap.c and
  * the -lcurl on our link line); no new library is introduced. */
 
@@ -102,7 +102,7 @@ if (pgSlotFd >= 0)
 }
 
 struct pgResp pgHttp(char *url, char *postJson, int timeoutSecs)
-/* Make one request to the middleware.  GET when postJson is NULL, otherwise
+/* Make one request to the graph server.  GET when postJson is NULL, otherwise
  * POST postJson as application/json.  The token, where hg.conf has one, is
  * sent as the X-Pangenome-Token header.  Caller frees resp.body / resp.errMsg. */
 {
@@ -219,7 +219,7 @@ static char *pgValidatePayload(char *payload, int maxSeqs, int maxSeqLen,
  * bypassable by POSTing straight here).  Parse the map payload and verify the
  * sequence count, per-sequence length and ACGTN charset.  Returns NULL if OK,
  * otherwise a human-readable reason.  Never aborts: malformed JSON is caught
- * and reported as an error.  This is a cheap first pass; the middleware
+ * and reported as an error.  This is a cheap first pass; the graph server
  * validates authoritatively too. */
 {
 static char msg[256];
@@ -317,7 +317,7 @@ static char *pgValidateLiftover(char *payload, long maxSpan)
  * anything is sent on:
  *   src   - full 3-field PanSN contig path (coordinates live on a contig)
  *   start - 0-based, end - exclusive, start < end
- *   span  - within the middleware's cap
+ *   span  - within the graph server's cap
  * Returns NULL if OK, otherwise a human-readable reason.  Never aborts. */
 {
 static char msg[256];
@@ -637,8 +637,8 @@ if (!pgExpired(&r))
 void doSurjectAll()
 /* cmd=surjectAll: place the read on every haplotype that carries it, in one
  * call.  The service does a single anchor pass and then surjects in parallel,
- * so this costs about what one surjection used to - where asking one at a time
- * cost one request per row. */
+ * so this costs about what one surjection does - where asking one at a time
+ * costs one request per row. */
 {
 char *url = pgUrl("/api/v1/surject_all");
 char *payload = (url == NULL) ? NULL : pgPayload();

@@ -43,7 +43,7 @@
  *
  * That matters here because QuickLift is chain-backed, and chains between two
  * HPRC samples essentially do not exist - which is exactly the gap the graph
- * fills.  The mapping server's "blocks" mode reports runs of 1:1
+ * fills.  The graph server's "blocks" mode reports runs of 1:1
  * correspondence, and the gap between two blocks is precisely a chain's dt/dq,
  * so quickLift ends up classifying them the same way it would a real
  * alignment.
@@ -232,7 +232,7 @@ return 0;
 
 static struct pgBlock *pgParseBlocks(struct jsonElement *root, long qSize,
                                      char **retError)
-/* Turn the middleware's "blocks" array into chain-space blocks. */
+/* Turn the graph server's "blocks" array into chain-space blocks. */
 {
 /* A chain is built in memory, one node per block, so an unbounded array is an
  * unbounded allocation.  The cap is far above anything a legal request
@@ -373,9 +373,8 @@ static boolean pgWriteChainBeds(struct pgBlock *blocks, char *qName, long qSize,
  * both sides to advance monotonically within a chain.  Turning the resulting
  * chains into bigChain/bigLink rows is kent's, via chainToBigChainList() - it
  * does the field mapping and sorts both lists by target position, which is what
- * bedToBigBed needs.  We used to hand-format those twelve and five columns, and
- * a copy of a format nobody told us had changed is exactly the kind of thing
- * that rots quietly. */
+ * bedToBigBed needs.  So the twelve and five columns are not formatted by
+ * hand here: a copy of a format goes stale the day the format changes. */
 {
 struct chain *chainList = NULL;
 int chainId = 0;
@@ -559,14 +558,13 @@ void pgForgetStaleHubs(char *keepHubFile, boolean missingOnly)
 /* Disconnect pangenome quickLift hubs this cart is still holding.
  *
  * Two callers, two meanings.  Building a new lift passes the hub it is about to
- * use and missingOnly=FALSE: everything else goes, which is how a cart built
- * before the name was reused stops carrying a dozen of them.  A page load
- * passes missingOnly=TRUE, which drops only hubs whose file is gone - trash is
- * swept in about an hour, and the cart entry outlives it, so hgTracks goes on
- * trying to open a dead path and draws a red "Couldn't open ..." group on every
- * page until something takes the entry away.  Nothing did, because this only
- * ran when a new lift was built - the one moment a user is not looking at the
- * error. */
+ * use and missingOnly=FALSE: everything else goes, so a cart holds one of
+ * these hubs at a time.  A page load passes missingOnly=TRUE, which drops only
+ * hubs whose file is gone - trash is swept in about an hour, and the cart
+ * entry outlives it, so hgTracks goes on trying to open a dead path and draws
+ * a red "Couldn't open ..." group on every page until something takes the
+ * entry away.  That is done at a page load because the reader is here then;
+ * building a new lift is the one moment they are not looking at the error. */
 {
 struct sqlConnection *conn = hConnectCentral();
 struct slPair *var, *vars = cartVarsWithPrefix(cart, hgHubConnectHubVarPrefix);
@@ -672,10 +670,10 @@ static char *pgBuildSourceHub(char *db, struct trackDb **retBadList)
  * is the hub hgConvert's quickLift has attached to this user's browser.  It
  * also merges: a stanza already in the file stays.  Both are right for
  * hgConvert and wrong for us.  PanLift wants only what is showing now, and
- * has no business changing a hub that another tool attached - least of all
- * emptying it first, which is what this code used to do.  So the cart
- * variable is taken away for the length of the call, which makes trackHubBuild
- * start a new file, and is put back afterwards exactly as it was. */
+ * has no business changing a hub that another tool attached, least of all
+ * emptying it.  So the cart variable is taken away for the length of the
+ * call, which makes trackHubBuild start a new file, and is put back
+ * afterwards exactly as it was. */
 {
 char var[PATH_LEN];
 safef(var, sizeof(var), "hubQuickLift-%s", db);
@@ -709,9 +707,9 @@ static char *pgNameFromHub(char *hubPath, char *file)
  * The two are usually in one directory, and then it is the base name.  But the
  * hub file is kept from one conversion to the next (pgHubName) and trash is
  * filed by day, so a hub made yesterday gets today's chain, which is in the
- * directory beside its own: "../<day>/<name>".  Named by base name alone, as
- * it used to be, that chain was looked for in yesterday's directory, and the
- * lifted tracks stopped drawing after midnight. */
+ * directory beside its own: "../<day>/<name>".  Named by base name alone,
+ * that chain would be looked for in yesterday's directory, and the lifted
+ * tracks would stop drawing after midnight. */
 {
 char hubDir[PATH_LEN], fileDir[PATH_LEN], name[FILENAME_LEN], ext[FILEEXT_LEN];
 splitPath(hubPath, hubDir, NULL, NULL);
@@ -742,10 +740,9 @@ static char *pgWriteQuickLiftHub(char *srcDb, char *srcHap, char *tgtDb, char *c
  * Which tracks come across, and what each stanza says, is trackHubBuild()'s
  * answer rather than ours.  That is the same function quickLift calls from
  * hgConvert, so whatever the browser decides to carry, we carry, and a change
- * to how it decides reaches these tools without anyone editing this file.  We
- * used to work it out ourselves, in about four hundred lines, and every one of
- * the four bugs that came out of that was a rule about track visibility the
- * browser already knew.
+ * to how it decides reaches these tools without anyone editing this file.
+ * Working it out here would be a second copy of the browser's rules on track
+ * visibility, to be kept in step with the first.
  *
  * What is left here is the one part trackHubBuild cannot do for us.  hgConvert
  * registers its chain in hgcentral and lets hubConnect rename the hub's genome
@@ -970,7 +967,7 @@ pgDbBorrowed = FALSE;
  * drawing and the rest is simply empty - so this is really about how far the
  * user can pan before the tracks go blank.
  *
- * Two sizes, because the cost is real: the mapping service takes about a second
+ * Two sizes, because the cost is real: the graph server takes about a second
  * per megabase and serves one request at a time, so a wide chain bought up
  * front would be charged to every conversion, including the many that are never
  * panned.  The near pad is what the first request pays for; the wide pad is
@@ -1009,7 +1006,7 @@ return pad;
 
 static struct jsonElement *pgFetchBlocks(char *srcPath, char *tgt, long start,
                                          long end, char **retError)
-/* Ask the mapping service for the block-level translation of one interval, and
+/* Ask the graph server for the block-level translation of one interval, and
  * return its parsed response - the same shape the page posts to us, so the
  * caller can hand it straight to pgParseBlocks. */
 {
@@ -1068,7 +1065,7 @@ static boolean pgLiftInterval(char *srcPath, char *tgt, long start, long end,
                               char **retPath, long *retStart, long *retEnd,
                               char **retError)
 /* Where one interval lands on another haplotype: the largest of the intervals
- * the mapping service translates it to, as a full contig path ("GRCh38#0#chr1")
+ * the graph server translates it to, as a full contig path ("GRCh38#0#chr1")
  * and absolute coordinates on it.  A region that splits - across an inversion,
  * say - lands in several pieces; the largest is where its annotations are. */
 {
@@ -1173,7 +1170,7 @@ void doContigs()
  * labels them the UCSC way (chrUn_JBIREP010000009v1), because these assembly
  * hubs set "chromAuthority ucsc".  A user who copies a position out of the
  * browser therefore hands us a name the graph has never heard of, and the page
- * used to reject it as not being a sequence of the assembly at all.
+ * has to take either.
  *
  * Both names come from the assembly's own chromAlias bigBed.  Note this reads
  * the file directly rather than going through chromAliasSetup(): that resolves
@@ -1353,14 +1350,14 @@ if (qSize == 0)
 /* Fetch the blocks this chain is built from, widened beyond the interval that
  * was converted so the tracks survive a pan.
  *
- * The page used to post its own blocks and we only fetched the flanks.  That
- * put an unbounded array in the request body, and a conversion over a big or
- * repeat-dense region produced one past the 1 MB cap cheapcgi.c enforces
+ * They are fetched here rather than posted by the page.  Posted, they are an
+ * unbounded array in the request body, and a conversion over a big or
+ * repeat-dense region makes one past the 1 MB cap cheapcgi.c enforces
  * (CGI_INPUT_SIZE_LIMIT_DEFAULT) - which aborts with an HTML error page before
- * any of our code runs, so the page saw "<!DOCTYPE" where it wanted JSON.
- * Since we were already making this call for the padding, fetching all of it
- * costs nothing extra and keeps the request small.  Blocks in the payload are
- * still honoured if present, as a fallback when the fetch fails. */
+ * any of our code runs, so the page would see "<!DOCTYPE" where it wants JSON.
+ * The call is made for the padding anyway, so fetching all of it costs
+ * nothing extra and keeps the request small.  Blocks in the payload are
+ * honoured if present, as a fallback when the fetch fails. */
 char *fetchErr = NULL;
 if (!isEmpty(tgtHap) && srcStart >= 0 && srcEnd > srcStart)
     {
@@ -1381,11 +1378,11 @@ if (!isEmpty(tgtHap) && srcStart >= 0 && srcEnd > srcStart)
         }
     }
 
-/* The page no longer posts its blocks, so a failed fetch leaves nothing to
+/* The page does not post its blocks, so a failed fetch leaves nothing to
  * parse and pgParseBlocks would report "no 'blocks' array in the request" -
  * true, but it describes our own request rather than what went wrong.  Say why
- * the fetch failed instead.  A payload that does carry blocks is still
- * honoured, which is what the mock tests rely on. */
+ * the fetch failed instead.  A payload that does carry blocks is honoured,
+ * which is what the tests rely on. */
 if (fetchErr != NULL && jsonFindNamedField(root, "", "blocks") == NULL)
     {
     pgRestoreDb(savedDb);
@@ -1556,9 +1553,9 @@ dyStringPrintf(url, "hgTracks?db=%s&position=%s&%s=1",
  * on the target's page.  Writing the cart variable here is not enough to
  * guarantee it:  the name we put in quickLiftDb is the decorated hub_<id>_<db>
  * form, and hgTracks can only resolve that when the hub is loaded in the
- * process doing the drawing.  Where it was not, hNibForChrom fell through to
+ * process doing the drawing.  Where it is not, hNibForChrom falls through to
  * /gbdb/<decorated name>/<decorated name>.2bit, which does not exist, and the
- * page came up with no tracks at all and "Can't open ... .2bit to read".
+ * page comes up with no tracks at all and "Can't open ... .2bit to read".
  * Naming it in the link is how the lifted hub itself is attached, and it
  * leaves nothing to chance. */
 if (srcHubId != 0)

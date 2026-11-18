@@ -582,8 +582,8 @@ class Commands(CgiTest):
         self.eq("unknown cmd is not forwarded upstream", MOCK.count(), 0)
         self.has("unknown cmd is answered in JSON, as every command is", out, "Content-Type: application/json")
         self.has("... with an error that names it", out, "\"error\":\"unknown command 'bogus'\"")
-        # The plain block-by-block command is not offered any more: PanLift asks
-        # for the summary, and a chain's blocks are fetched by the server itself.
+        # There is no plain block-by-block command: PanLift asks for the
+        # summary, and a chain's blocks are fetched by the server itself.
         post(self.conf, "liftover",
              '{"src":"HG00097#1#CM094066.1","start":19113,"end":19137,"tgt":"HG01234#2","blocks":true}')
         self.eq("cmd=liftover is gone: nothing is sent to the mapping server", MOCK.count(), 0)
@@ -825,10 +825,10 @@ class CartCommands(CgiTest):
                  "no sequence sizes available")
 
         # The page does not post its blocks - the server fetches them - so a
-        # failed fetch must say why.  Reporting "no 'blocks' array in the
-        # request" described our own request and hid the upstream reason (a 503
-        # while the service was restarting looked identical to a region that
-        # cannot be lifted).
+        # failed fetch must say why.  "no 'blocks' array in the request" would
+        # describe our own request and hide the upstream reason: a 503 while
+        # the service restarts would read the same as a region that cannot be
+        # lifted.
         out = post(self.cart_conf("cartDead.conf", api=free_port()), "quickLift", QL_FETCH % "CHM13#0")
         self.has("quickLift: a failed block fetch says the server was not reached", out,
                  "could not reach the mapping server")
@@ -957,7 +957,7 @@ class CartCommands(CgiTest):
         self.need("bedToBigBed")
         # hubQuickLift-<db> names the hub hgConvert's quickLift attached for
         # this user.  We ask the same library for the source's stanzas, and
-        # used to empty that file first.
+        # must not empty or change that file on the way.
         theirs = "../trash/quickLift/hub_theirs.txt"
         before = "hub quickLiftHubhg38\n\ngenome hg38\n\ntrack liftedEarlier\nshortLabel lifted earlier\n\n"
         with open(os.path.join(self.box, theirs), "w") as fh:

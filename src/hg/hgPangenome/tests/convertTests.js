@@ -4,7 +4,7 @@
  * Covers position parsing, the assembly <-> haplotype lookups, the request the
  * page sends, and how 0..N translated intervals are rendered - including the
  * empty case, per-piece strand, and links into the target haplotype's own
- * assembly.  Deterministic: canned middleware responses, no network.
+ * assembly.  Deterministic: canned graph server responses, no network.
  *
  * Run:  node convertTests.js
  */
@@ -741,9 +741,10 @@ var nonPangenome = startPage({ db: 'mm39', position: '' });
 var noContext = startPage({ db: '', position: '' });
 var noPosition = startPage({ db: 'GCA_044165215.1', position: '' });
 // An assembly served through a hub reaches the cart decorated: hs1 is
-// "hub_25071_hs1" from the curated hub.  The regression this guards: the page
-// did not recognise the decorated name, decided nothing usable was carried
-// over, and replaced the position the user asked about with its own example.
+// "hub_25071_hs1" from the curated hub.  What this guards against: a page
+// that does not recognise the decorated name decides nothing usable was
+// carried over, and replaces the position the user asked about with its own
+// example.
 var hubDecorated = startPage({ db: 'hub_25071_hs1',
                                position: 'chr10:42477211-42540362' });
 // HG01234#2 rather than a name the stub graph does not list: the point is the
@@ -876,9 +877,8 @@ await t.test('the haplotype is carried in a hidden field, not a picker', functio
 });
 
 await t.test('the note names the assembly and nothing else', function () {
-    // The caveat about contigs went with the text box it was advice for;
-    // a position that does not fit the source is caught by contigProblem()
-    // at the moment it matters.
+    // Nothing about contigs: a position that does not fit the source is
+    // caught by contigProblem() at the moment it matters.
     t.contains(page.el.pgcSrcNote.textContent, 'GCA_044165215.1', 'assembly named');
     t.notOk(/must be one of/.test(page.el.pgcSrcNote.textContent), 'no caveat');
 });
@@ -978,10 +978,9 @@ t.notOk(/Could not carry/.test(padNoBeacon.el.pgcStatus.textContent),
 
 t.suite('checking the inherited position');
 
-// The position is not typed any more, but it is still inherited, and an
-// inherited one can be stale - the browser's spelling of a contig, or a
-// position left over from another assembly.  So the source's sequence list
-// is still fetched, and still used to judge it.
+// The position is inherited, not typed, and an inherited one can be stale -
+// the browser's spelling of a contig, or a position left over from another
+// assembly.  So the source's sequence list is fetched and used to judge it.
 await t.test('the source sequences are loaded for checking', function () {
     t.ok(page.api.contigsForSource(), 'list fetched');
     t.deepEq(page.api.contigsForSource().slice(0, 2),
@@ -1009,9 +1008,9 @@ await t.test('a near match is suggested rather than just rejected', function () 
 });
 
 await t.test("the browser's own name for a sequence is accepted", function () {
-    // The bug this fixes: a position copied out of hgTracks names the
-    // sequence chrUn_JBIREP010000009v1, which the graph has never heard of,
-    // and the page rejected it as not being a sequence of the assembly.
+    // A position copied out of hgTracks names the sequence
+    // chrUn_JBIREP010000009v1, which the graph has never heard of.  It is
+    // still a sequence of the assembly.
     t.isNull(page.api.contigProblem('chrUn_JBIREP010000009v1'),
              'no complaint about the browser spelling');
     t.isNull(page.api.contigProblem('chr1'), 'nor a plain chromosome name');
@@ -1403,8 +1402,8 @@ await t.test('the value submitted is the bare name, not the label', function () 
 });
 
 // ---- no caveat on a wide region ----
-// A wide region loses nothing a tiled one finds (tested
-// against the service, 2026-11-02), so it is not flagged.
+// A wide region loses nothing a tiled one finds (measured against the
+// service), so it is not flagged.
 var wide = startPage({ liftover: summ([
     ['CHM13#0', [piece('chr10', 10, 500010, '+', 0, 500000)], 500000]]) });
 await check.wait(60);
