@@ -61,7 +61,10 @@ if (errCatchStart(errCatch))
                 struct jsonElement *el = ref->val;
                 char *name = jsonOptionalStringField(el, "name", "query");
                 char *seq = jsonOptionalStringField(el, "sequence", NULL);
-                if (!isEmpty(seq))
+                /* cmd=map has already refused a name that is not plain.  Tested
+                 * again where it matters: a line break in one would write a
+                 * record the user never sent. */
+                if (!isEmpty(seq) && pgPlainName(name))
                     fprintf(f, ">%s\n%s\n", name, seq);
                 }
             carefulClose(&f);
@@ -487,6 +490,10 @@ if (sizes == NULL)
 int tSize = hashIntValDefault(sizes, contig, 0);
 if (tSize == 0)
     { emitJsonError("%s is not a sequence of %s", contig, db); return; }
+/* Before the start is narrowed to an int: one past what an int holds would
+ * turn into a start that looks fine. */
+if (startEl->val.jeNumber < 0 || startEl->val.jeNumber >= tSize)
+    { emitJsonError("the alignment starts outside %.100s", contig); return; }
 /* The assembly's own sequence name - the accession on a GenArk assembly.  The
  * chrN alias is only what gets displayed, so the track and the position both
  * use the name we were given. */

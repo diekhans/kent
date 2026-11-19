@@ -288,7 +288,12 @@ for (ref = jsonListVal(blocksEl, "blocks"); ref != NULL; ref = ref->next)
         b->qStart = sStart;
         b->qEnd = sEnd;
         }
-    if (b->tEnd <= b->tStart || b->qEnd <= b->qStart || b->qStart < 0)
+    /* Every side of it: a negative target start becomes a huge unsigned one in
+     * the bigChain row, and a source end past the sequence makes a chain that
+     * QuickLift reads DNA beyond the end of the 2bit for.  The target's far
+     * end is tested in pgWriteChainBeds(), where its size is known. */
+    if (b->tEnd <= b->tStart || b->qEnd <= b->qStart || b->qStart < 0 ||
+        b->tStart < 0 || b->qEnd > qSize)
         {
         *retError = "a block has an empty or out-of-range coordinate span";
         return NULL;
@@ -396,6 +401,15 @@ while (b != NULL)
         {
         b = next;                               /* not a sequence we can draw on */
         continue;
+        }
+    /* A run moves forward, so its last block ends furthest along.  Said here:
+     * bedToBigBed would refuse the row too, but as "exit 255". */
+    if (runEnd->tEnd > tSize)
+        {
+        static char why[256];
+        safef(why, sizeof(why), "a block ends past the end of %.100s", runStart->contig);
+        *retError = why;
+        return FALSE;
         }
 
     struct chain *chain;
@@ -1310,6 +1324,14 @@ if (srcContig == NULL)
     emitJsonError("'src' must be a full contig path, e.g. HG00097#1#CM094066.1");
     return;
     }
+/* Both are sent to the graph server as they are when the blocks are fetched,
+ * so both are held to the shape a haplotype name has, as proxy.c holds the
+ * requests it forwards: a "*" there would ask for every haplotype at once. */
+if (!pgValidHapName(srcPath) || (!isEmpty(tgtHap) && !pgValidHapName(tgtHap)))
+    {
+    emitJsonError("'src' and 'tgt' must name a haplotype, such as HG00097#1");
+    return;
+    }
 
 /* The source's trackDb is reached through the cart's "db", so borrow it for
  * the source assembly and put it back before returning.  It is not already the
@@ -1674,7 +1696,10 @@ if (refPair == NULL)
     emitJsonError("annotations cannot be brought from '%s'", ref ? ref : "");
     return;
     }
-if (!pgValidDb(db) || isEmpty(path) || pgContigOf(path) == NULL || isEmpty(position))
+/* The path is sent to the graph server, and its haplotype is the target of
+ * the conversion made below, so it has to be a haplotype's name and no more. */
+if (!pgValidDb(db) || isEmpty(path) || pgContigOf(path) == NULL || !pgValidHapName(path) ||
+    isEmpty(position))
     {
     emitJsonError("missing or malformed assembly, sequence or position");
     return;

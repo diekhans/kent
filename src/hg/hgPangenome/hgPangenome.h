@@ -133,11 +133,16 @@ void emitJsonError(char *fmt, ...);
 
 boolean pgValidDb(char *db);
 /* Assembly names reach us from the page and end up in file paths and cart
- * variables, so keep them to the shape a db name actually has. */
+ * variables, so keep them to the shape a db name actually has: letters, digits
+ * and . _ - only, beginning with a letter or a digit. */
 
 boolean pgSafeToken(char *tok);
 /* A sample name, a phase or a sequence name on its way into a file path.
  * The same shape pgValidDb insists on, named for the wider use. */
+
+boolean pgPlainName(char *name);
+/* TRUE for a sequence name with no blank and no control character in it, which
+ * is what one must be to sit on a FASTA header line. */
 
 boolean pgValidJobId(char *s);
 /* Job ids go into a URL path, so restrict to a safe charset to avoid any

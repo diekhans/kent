@@ -14,6 +14,7 @@
 #include "genark.h"
 #include "bigBed.h"
 #include <ctype.h>
+#include <limits.h>
 #include "hgPangenome.h"
 
 /* ---- pcLAI: where each haplotype sits in ancestry space ------------------
@@ -362,8 +363,11 @@ if (errCatchStart(errCatch))
             if (pgSafeToken(db) && pgSafeToken(contig) && sEl != NULL && eEl != NULL &&
                 sEl->type == jsonNumber && eEl->type == jsonNumber &&
                 sEl->val.jeNumber >= 0 && eEl->val.jeNumber > sEl->val.jeNumber &&
-                eEl->val.jeNumber - sEl->val.jeNumber <= maxSpan)
+                eEl->val.jeNumber - sEl->val.jeNumber <= maxSpan &&
+                eEl->val.jeNumber <= INT_MAX)
                 {
+                /* Held to what an int holds first: a start of 4294967296 is a
+                 * short interval by the tests above, and 0 once it is narrowed. */
                 int start = sEl->val.jeNumber, end = eEl->val.jeNumber;
                 struct hashEl *conn = hashLookup(connByDb, db);
                 if (conn == NULL)
@@ -508,10 +512,13 @@ if (errCatchStart(errCatch))
                 sEl->type != jsonNumber || eEl->type != jsonNumber)
                 continue;
             asked++;
+            /* Tested as the numbers they came as.  Narrowed to an int first, one
+             * past what an int holds turns into a value that passes. */
+            if (sEl->val.jeNumber < 0 || eEl->val.jeNumber <= sEl->val.jeNumber ||
+                eEl->val.jeNumber > INT_MAX)
+                continue;
             int start = (int)sEl->val.jeNumber;
             int end = (int)eEl->val.jeNumber;
-            if (start < 0 || end <= start)
-                continue;
             char chrom[PATH_LEN];
             if (!pgPclaiChrom(hap, contig, chrom, sizeof(chrom)))
                 continue;

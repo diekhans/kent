@@ -173,6 +173,20 @@ pgFreeSlot();
 return r;
 }
 
+static boolean pgNumberOf(struct jsonElement *el, double *retVal)
+/* The value of a number in a request, whichever way it was written.  The JSON
+ * parser files 4 and 4.0 as different types, and a limit that looked at one of
+ * them only would let the other through. */
+{
+if (el->type == jsonNumber)
+    *retVal = (double)el->val.jeNumber;
+else if (el->type == jsonDouble)
+    *retVal = el->val.jeDouble;
+else
+    return FALSE;
+return TRUE;
+}
+
 static char *pgValidateSurjectAll(char *payload, int maxTargets)
 /* The batch surjection: one call places the read on every haplotype that
  * carries it.  Check the job id's charset and hold max_targets to what this
@@ -193,16 +207,17 @@ if (errCatchStart(errCatch))
         result = "missing 'name'";
     else
         {
+        double n = 0;
         struct jsonElement *el = jsonFindNamedField(root, "", "max_targets");
-        if (el != NULL && el->type == jsonNumber && el->val.jeNumber > maxTargets)
+        if (el != NULL && !pgNumberOf(el, &n))
+            result = "max_targets must be a number";
+        else if (el != NULL && n > maxTargets)
             {
-            safef(msg, sizeof(msg), "too many targets: %d (limit is %d)",
-                  (int)el->val.jeNumber, maxTargets);
+            safef(msg, sizeof(msg), "too many targets: %.0f (limit is %d)", n, maxTargets);
             result = msg;
             }
         el = jsonFindNamedField(root, "", "min_coverage");
-        if (result == NULL && el != NULL && el->type == jsonNumber &&
-            (el->val.jeNumber < 0 || el->val.jeNumber > 100))
+        if (result == NULL && el != NULL && (!pgNumberOf(el, &n) || n < 0 || n > 100))
             result = "min_coverage must be between 0 and 100";
         }
     }
@@ -217,7 +232,8 @@ static char *pgValidatePayload(char *payload, int maxSeqs, int maxSeqLen,
                                int maxMultimaps)
 /* Server-side enforcement of the input caps (the browser's checks are
  * bypassable by POSTing straight here).  Parse the map payload and verify the
- * sequence count, per-sequence length and ACGTN charset.  Returns NULL if OK,
+ * sequence count, per-sequence length and ACGTN charset, and that each name
+ * can sit on a FASTA header line.  Returns NULL if OK,
  * otherwise a human-readable reason.  Never aborts: malformed JSON is caught
  * and reported as an error.  This is a cheap first pass; the graph server
  * validates authoritatively too. */
@@ -234,12 +250,14 @@ if (errCatchStart(errCatch))
     struct jsonElement *mmEl = jsonFindNamedField(root, "", "options");
     if (mmEl != NULL)
         mmEl = jsonFindNamedField(mmEl, "", "max_multimaps");
-    if (mmEl != NULL && mmEl->type == jsonNumber &&
-        mmEl->val.jeNumber > maxMultimaps)
+    double multimaps = 0;
+    if (mmEl != NULL && !pgNumberOf(mmEl, &multimaps))
+        result = "max_multimaps must be a number";
+    else if (mmEl != NULL && multimaps > maxMultimaps)
         {
         safef(msg, sizeof(msg),
-              "too many alignments per sequence: %d (limit is %d)",
-              (int)mmEl->val.jeNumber, maxMultimaps);
+              "too many alignments per sequence: %.0f (limit is %d)",
+              multimaps, maxMultimaps);
         result = msg;
         }
     else if (seqsEl == NULL)
@@ -264,6 +282,8 @@ if (errCatchStart(errCatch))
                 char *seq = jsonOptionalStringField(seqObj, "sequence", NULL);
                 if (seq == NULL)
                     { result = "a sequence entry has no 'sequence'"; break; }
+                if (!pgPlainName(jsonOptionalStringField(seqObj, "name", "")))
+                    { result = "a sequence name has a blank or a line break in it"; break; }
                 int n = strlen(seq);
                 if (n == 0)
                     { result = "a sequence is empty"; break; }

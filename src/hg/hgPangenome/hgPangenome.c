@@ -220,6 +220,10 @@ boolean pgValidDb(char *db)
 {
 if (isEmpty(db) || strlen(db) > 128)
     return FALSE;
+/* Begins with a letter or a digit, which is what keeps "." and ".." out: both
+ * pass the character test below and both mean something in a path. */
+if (!isalnum((unsigned char)db[0]))
+    return FALSE;
 char *p;
 for (p = db; *p != '\0'; ++p)
     if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '.' || *p == '-'))
@@ -232,6 +236,19 @@ boolean pgSafeToken(char *tok)
  * The same shape pgValidDb insists on, named for the wider use. */
 {
 return pgValidDb(tok);
+}
+
+boolean pgPlainName(char *name)
+/* TRUE for a sequence name with no blank and no control character in it.  The
+ * page sends the first word of a FASTA header, so a name of its own never has
+ * either.  One posted straight here could, and a line break in a name starts a
+ * second record in the FASTA a job's sequences are kept in. */
+{
+char *p;
+for (p = name; *p != '\0'; ++p)
+    if (isspace((unsigned char)*p) || iscntrl((unsigned char)*p))
+        return FALSE;
+return TRUE;
 }
 
 boolean pgValidJobId(char *s)
@@ -626,6 +643,17 @@ jsIncludeFile("hgPangenomeResults.js", NULL);
 cartWebEnd();
 }
 
+static long pgPageCoord(char *var)
+/* A coordinate from a page's own link, or -1 if it is missing or not a whole
+ * number.  Read as text: cgiOptionalInt() aborts on anything else, and by then
+ * the top of the page is out, so the reader would be left with half a page. */
+{
+char *s = cgiOptionalString(var);
+if (isEmpty(s) || strlen(s) > 10 || !isAllDigits(s))
+    return -1;
+return atol(s);
+}
+
 static void pageLiftAll()
 /* page=liftAll: one PanLift region on every haplotype in the graph: how it
  * carries over, and the table.  Named entirely by the link - the source path
@@ -652,8 +680,8 @@ for (c = src; srcOk && *c != '\0'; ++c)
     if (!(isalnum((unsigned char)*c) || strchr("#._-", *c)))
         srcOk = FALSE;
 jsonWriteString(jw, "src", srcOk ? src : "");
-jsonWriteNumber(jw, "start", cgiOptionalInt("start", -1));
-jsonWriteNumber(jw, "end", cgiOptionalInt("end", -1));
+jsonWriteNumber(jw, "start", pgPageCoord("start"));
+jsonWriteNumber(jw, "end", pgPageCoord("end"));
 jsonWriteStringf(jw, "panLiftUrl", "hgPangenome?page=convert&%s=%s",
                  cartSessionVarName(), cartSessionId(cart));
 pgJsonBackLink(jw);

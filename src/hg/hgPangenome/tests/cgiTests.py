@@ -348,6 +348,14 @@ class InputLimits(CgiTest):
                  post(self.conf, "map", '{"sequences":[{"name":"r"}],"options":{}}'), "no 'sequence'")
         self.has("empty sequence string rejected",
                  post(self.conf, "map", '{"sequences":[{"name":"r","sequence":""}],"options":{}}'), "empty")
+        # a name is one word: a line break in one would start a second record
+        # in the FASTA the job's sequences are kept in
+        MOCK.clear()
+        for what, name in [("a line break", "q1\\n>q2\\nAAAAAAAA"), ("a blank", "a b"), ("a tab", "a\\tb")]:
+            out = post(self.conf, "map", '{"sequences":[{"name":"%s","sequence":"ACGT"}],"options":{}}' % name)
+            self.has("sequence name with %s in it rejected" % what, out,
+                     "a sequence name has a blank or a line break in it")
+        self.eq("... and none of them forwarded", MOCK.count(), 0)
 
     def test_alignments_per_sequence(self):
         out = post(self.conf, "map", '{"sequences":[{"name":"a","sequence":"ACGT"}],"options":{"max_multimaps":4}}')
@@ -355,6 +363,18 @@ class InputLimits(CgiTest):
         self.eq("and not forwarded", MOCK.count(), 0)
         post(self.conf, "map", '{"sequences":[{"name":"a","sequence":"ACGT"}],"options":{"max_multimaps":3}}')
         self.eq("exactly the ceiling accepted (boundary)", MOCK.count(), 1)
+        # the JSON parser files 4 and 4.0 as different types; the ceiling is for both
+        MOCK.clear()
+        one = '{"sequences":[{"name":"a","sequence":"ACGT"}],"options":{"max_multimaps":%s}}'
+        self.has("more than the ceiling, written with a decimal point, rejected",
+                 post(self.conf, "map", one % "1000.0"), "too many alignments per sequence: 1000 (limit is 3)")
+        self.has("... and written with an exponent", post(self.conf, "map", one % "1e3"),
+                 "too many alignments per sequence")
+        self.has("a ceiling that is not a number rejected", post(self.conf, "map", one % '"9"'),
+                 "max_multimaps must be a number")
+        self.eq("none of them forwarded", MOCK.count(), 0)
+        post(self.conf, "map", one % "3.0")
+        self.eq("the ceiling itself, with a decimal point, accepted", MOCK.count(), 1)
 
 
 # ================================================= what is sent to the graph server
@@ -693,6 +713,23 @@ class Liftover(CgiTest):
         post(self.conf, "surject", '{"tgt":"CHM13#0","job_id":"job1","name":"r1"}')
         self.eq("surject: a haplotype name accepted", MOCK.count(), 1)
 
+    def test_the_batch_surjection(self):
+        # its two numbers are held to their limits however they are written
+        ask = '{"job_id":"job1","name":"r1","max_targets":%s,"min_coverage":%s}'
+        top = limit("PG_MAX_SURJECT_TARGETS")
+        over = "too many targets: %d (limit is %d)" % (top + 1, top)
+        self.has("surjectAll: more targets than the limit refused",
+                 post(self.conf, "surjectAll", ask % (top + 1, 50)), over)
+        self.has("... and when written with a decimal point",
+                 post(self.conf, "surjectAll", ask % ("%d.0" % (top + 1), 50)), over)
+        self.has("surjectAll: a number of targets that is not a number refused",
+                 post(self.conf, "surjectAll", ask % ('"all"', 50)), "max_targets must be a number")
+        self.has("surjectAll: a coverage floor over 100 refused",
+                 post(self.conf, "surjectAll", ask % (10, "150.5")), "min_coverage must be between 0 and 100")
+        self.eq("... and none of them forwarded", MOCK.count(), 0)
+        post(self.conf, "surjectAll", ask % (top, "2.5"))
+        self.eq("surjectAll: the limit itself, and a floor with a fraction, accepted", MOCK.count(), 1)
+
     def test_which_haplotypes_a_region_reaches(self):
         targets_ok = '{"src":"HG00097#1#CM094066.1","start":19113,"end":19137}'
         out = post(self.conf, "liftoverTargets", targets_ok)
@@ -876,6 +913,15 @@ class CartCommands(CgiTest):
         reject("refAnnot", "refAnnot: a hit already on the reference is not translated",
                '{"db":"hg38","path":"GRCh38#0#chr1","start":1,"end":2,"position":"chr1:1-2","ref":"GRCh38#0"}',
                "this hit is already on GRCh38")
+        # what is sent on to the graph server as a target is a haplotype's name
+        # and nothing else: "*" there would ask for every haplotype at once
+        reject("quickLift", 'a target of "*" refused',
+               '{"srcDb":"hs1","tgtDb":"GCA_044165735.1","src":"HG00097#1#CM094066.1","position":"c:1-2","tgt":"*"}',
+               "must name a haplotype")
+        reject("refAnnot", 'refAnnot: a path of "*#*#chr1" refused', hap % ("*#*#chr1", 1, 2),
+               "missing or malformed assembly")
+        reject("quickLift", 'an assembly named ".." refused',
+               '{"srcDb":"..","tgtDb":"hs1","src":"a#1#c","position":"c:1-2"}', "missing or malformed source")
 
     # ---- the sequence track (cmd=alignTrack) ----
 
@@ -946,6 +992,11 @@ class CartCommands(CgiTest):
         out = self.in_box("cmd=alignTrack&payload=" + enc(
             '{"db":"hg38","contig":"chr1","name":"q","sequence":"%s","start":999999999,"cigar":"40M"}' % seq40))
         self.has("alignTrack: a start past the end of the sequence refused", out, "starts outside chr1")
+        out = self.in_box("cmd=alignTrack&payload=" + enc(
+            '{"db":"hg38","contig":"chr1","name":"q","sequence":"%s","start":%d,"cigar":"40M"}'
+            % (seq40, 11000 + 2 ** 32)))
+        self.has("alignTrack: a start too big for an int is refused, not wrapped round", out,
+                 "starts outside chr1")
         self.eq("... and a refused request leaves no file behind", left_over(), 0)
 
     # ---- files these commands write, and what they must leave alone ----
@@ -1028,6 +1079,12 @@ class CartCommands(CgiTest):
                  chains_of(blk(11000, 11000, 20000, 20100)), "empty or out-of-range")
         self.has("chain: a block off the end of the source sequence is refused",
                  chains_of(blk(-5, 100, 20000, 20105)), "empty or out-of-range")
+        self.has("chain: a block that starts before the target sequence is refused",
+                 chains_of(blk(11000, 11100, -5000, -4900)), "empty or out-of-range")
+        self.has("chain: a block past the end of the source sequence is refused",
+                 chains_of(blk(q1 - 50, q1 + 50, 20000, 20100)), "empty or out-of-range")
+        self.has("chain: a block past the end of the target sequence is said plainly",
+                 chains_of(blk(11000, 11100, q1 - 50, q1 + 50)), "a block ends past the end of chr1")
         self.has("chain: no blocks at all is said plainly", chains_of(), "returned no blocks")
 
     def test_a_hub_from_another_day(self):
@@ -1100,6 +1157,11 @@ class CartCommands(CgiTest):
         at = '"db":"GCA_042077495.1","contig":"CM089723.1","start":135714502'
         out = post(self.q, "locus", '{"items":[{%s,"end":135738459},{%s,"end":140714502}]}' % (at, at))
         self.has("locus: a hit is named, an interval of 5 Mb is not", out, '"loci":["exon LCT-MCM6",null]')
+        far = 2 ** 32
+        out = post(self.q, "locus", '{"items":[{"db":"GCA_042077495.1","contig":"CM089723.1","start":%d,"end":%d}]}'
+                   % (135714502 + far, 135738459 + far))
+        self.has("locus: coordinates too big for an int are not wrapped round onto a gene", out,
+                 '"loci":[null]')
 
     # ---- the pages ----
 
@@ -1134,6 +1196,12 @@ class CartCommands(CgiTest):
                 "hgPangenomeCommon.js hgPangenomeResults.js")
         self.eq("search form: the shared script, then the page's", ends(self.in_box("db=hg38")),
                 "hgPangenomeCommon.js hgPangenome.js")
+        # a link whose start is not a number: the page is drawn whole, and says
+        # no region was named, as it does for a source it cannot read
+        out = self.in_box("page=liftAll&src=" + enc("GRCh38#0#chr1") + "&start=abc&end=200")
+        self.has("all-haplotypes page: a start that is not a number is read as none", out,
+                 '"start": -1, "end": 200')
+        self.lacks("... and the page does not stop half way to say so", out, "Expecting")
 
 
 if os.environ.get("PG_DB_TESTS") != "1":
