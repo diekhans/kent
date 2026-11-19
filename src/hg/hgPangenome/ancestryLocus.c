@@ -46,6 +46,7 @@
  * here.  That is why this returns a point per haplotype and not a mixture. */
 
 #define PCLAI_CONTRIB "contrib/hprc2annot"
+#define PCLAI_PANEL_MAX (4 * 1024 * 1024)   /* the published panel is 94 kb */
 
 static char *pgPclaiDir(char *acc)
 /* The contrib directory holding one assembly's pcLAI, or NULL.
@@ -247,6 +248,9 @@ for (codingOnly = TRUE; ; codingOnly = FALSE)
     {
     for (iv = list; iv != NULL; iv = iv->next)
         {
+        /* A file built as plain BED3 has no fields here at all. */
+        if (iv->rest == NULL)
+            continue;
         char *row[20];
         char *rest = lmCloneString(lm, iv->rest);
         int n = chopByChar(rest, '\t', row, ArraySize(row));
@@ -297,6 +301,8 @@ for (reach = 100000; reach <= 10000000 && (left == NULL || right == NULL); reach
                                                       end + reach, 0, lm);
     for (iv = near; iv != NULL; iv = iv->next)
         {
+        if (iv->rest == NULL)
+            continue;
         char *row[20];
         char *rest = lmCloneString(lm, iv->rest);
         if (chopByChar(rest, '\t', row, ArraySize(row)) < 17 ||
@@ -318,12 +324,38 @@ dyStringPrintf(dy, "intergenic %s%s%s", left ? left : "", (left && right) ? "-" 
 return dyStringCannibalize(&dy);
 }
 
+struct pgLocusDb
+/* The database connection doLocus keeps, and the assembly it is on. */
+    {
+    struct sqlConnection *conn;
+    char *db;
+    };
+
+static struct sqlConnection *pgLocusConn(struct pgLocusDb *at, char *db)
+/* The connection, moved to db when it is on another assembly.
+ *
+ * One is kept, not one per assembly: the library's cache holds 16, a page of
+ * hits can name 200 assemblies, and asking for a 17th ends the request.  A
+ * connection handed back is the one given out next, so moving costs a change
+ * of database on the same link to the server and no new login. */
+{
+if (at->conn == NULL || differentString(at->db, db))
+    {
+    hFreeConn(&at->conn);
+    freez(&at->db);
+    at->conn = hAllocConn(db);
+    at->db = cloneString(db);
+    }
+return at->conn;
+}
+
 void doLocus()
 /* The locus words for each interval in the payload, in order:
  *   {"items":[{"db":"GCA_...","contig":"CM094060.1","start":0,"end":10}, ...]}
  * answers {"status":"ok","loci":["exon ATAD3B", null, ...]}, null where there
- * is nothing to say - a hub assembly, or no genes near enough.  Files and
- * connections are opened once per assembly in the request. */
+ * is nothing to say - a hub assembly, or no genes near enough.  A gene file is
+ * opened once per assembly in the request; the database is read over one
+ * connection, moved from assembly to assembly. */
 {
 char *payload = cgiOptionalString("payload");
 if (isEmpty(payload))
@@ -338,7 +370,11 @@ double maxSpan = (double)LOCUS_SPAN_PER_SEQ * pgMaxSeqLen();
 struct dyString *out = dyStringNew(4096);
 dyStringAppend(out, "{\"status\":\"ok\",\"loci\":[");
 char *parseError = NULL;
-struct hash *bbiByDb = hashNew(6), *connByDb = hashNew(4);
+/* nativeByDb: 1 for an assembly in our database with the locusName table, 0
+ * for any other, so that each is asked about once. */
+struct hash *bbiByDb = hashNew(6), *nativeByDb = hashNew(6);
+struct pgLocusDb *at;
+AllocVar(at);
 struct lm *lm = lmInit(0);
 struct errCatch *errCatch = errCatchNew();
 if (errCatchStart(errCatch))
@@ -369,21 +405,15 @@ if (errCatchStart(errCatch))
                 /* Held to what an int holds first: a start of 4294967296 is a
                  * short interval by the tests above, and 0 once it is narrowed. */
                 int start = sEl->val.jeNumber, end = eEl->val.jeNumber;
-                struct hashEl *conn = hashLookup(connByDb, db);
-                if (conn == NULL)
+                int native = hashIntValDefault(nativeByDb, db, -1);
+                if (native < 0)
                     {
-                    /* A connection only to a native assembly with the table. */
-                    struct sqlConnection *c = NULL;
-                    if (!startsWith("GCA_", db) && !startsWith("GCF_", db) && hDbExists(db))
-                        {
-                        c = hAllocConn(db);
-                        if (!sqlTableExists(c, "locusName"))
-                            hFreeConn(&c);
-                        }
-                    conn = hashAdd(connByDb, db, c);
+                    native = !startsWith("GCA_", db) && !startsWith("GCF_", db) &&
+                             hDbExists(db) && sqlTableExists(pgLocusConn(at, db), "locusName");
+                    hashAddInt(nativeByDb, db, native);
                     }
-                if (conn->val != NULL)
-                    locus = hLocusName(conn->val, contig, start, end);
+                if (native)
+                    locus = hLocusName(pgLocusConn(at, db), contig, start, end);
                 else
                     {
                     struct hashEl *hel = hashLookup(bbiByDb, db);
@@ -418,14 +448,9 @@ for (hel = helList; hel != NULL; hel = hel->next)
         bigBedFileClose(&bbi);
         }
 hashElFreeList(&helList);
-helList = hashElListHash(connByDb);
-for (hel = helList; hel != NULL; hel = hel->next)
-    if (hel->val != NULL)
-        {
-        struct sqlConnection *conn = hel->val;
-        hFreeConn(&conn);
-        }
-hashElFreeList(&helList);
+hFreeConn(&at->conn);
+freez(&at->db);
+freez(&at);
 lmCleanup(&lm);
 if (parseError != NULL)
     emitJsonError("%s", parseError);
@@ -435,6 +460,38 @@ else
     emitJson(out->string);
     }
 dyStringFree(&out);
+}
+
+static char *pgPclaiPanel(char *path)
+/* The reference panel file's text, or NULL when there is no file, it is far
+ * bigger than a panel is, or it does not read as an object with a "points"
+ * list.
+ *
+ * The text goes into the answer as it is.  A file caught half written during
+ * a data push would make the whole answer unreadable; left out, the page says
+ * that there is no panel. */
+{
+if (isEmpty(path) || !fileExists(path) || fileSize(path) > PCLAI_PANEL_MAX)
+    return NULL;
+char *text = NULL;
+size_t size = 0;
+readInGulp(path, &text, &size);
+boolean ok = FALSE;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    struct jsonElement *root = jsonParse(text);
+    struct jsonElement *points = (root->type == jsonObject) ?
+                                 jsonFindNamedField(root, "", "points") : NULL;
+    ok = (points != NULL && points->type == jsonList);
+    }
+errCatchEnd(errCatch);
+if (errCatch->gotError)
+    ok = FALSE;
+errCatchFree(&errCatch);
+if (!ok)
+    freez(&text);
+return text;
 }
 
 static boolean pgPclaiChrom(char *hap, char *contig, char *buf, int bufSize)
@@ -578,10 +635,7 @@ else if (panelDir != NULL)
     safef(panelPath, sizeof(panelPath), "%s/pclaiRefPanel.json", panelDir);
 else
     panelPath[0] = '\0';
-char *panel = NULL;
-size_t panelSize = 0;
-if (panelPath[0] != '\0' && fileExists(panelPath))
-    readInGulp(panelPath, &panel, &panelSize);
+char *panel = pgPclaiPanel(panelPath);
 if (panel != NULL)
     {
     dyStringAppend(out, ",\"panel\":");

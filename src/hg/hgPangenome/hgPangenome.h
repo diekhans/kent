@@ -302,8 +302,9 @@ void doLocus(void);
 /* The locus words for each interval in the payload, in order:
  *   {"items":[{"db":"GCA_...","contig":"CM094060.1","start":0,"end":10}, ...]}
  * answers {"status":"ok","loci":["exon ATAD3B", null, ...]}, null where there
- * is nothing to say - a hub assembly, or no genes near enough.  Files and
- * connections are opened once per assembly in the request. */
+ * is nothing to say - a hub assembly, or no genes near enough.  A gene file is
+ * opened once per assembly in the request; the database is read over one
+ * connection, moved from assembly to assembly. */
 
 void doPclai(void);
 /* Ancestry coordinates for a list of haplotypes, each read at its own

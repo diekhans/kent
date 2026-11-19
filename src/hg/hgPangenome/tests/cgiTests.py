@@ -166,10 +166,11 @@ def new_box(name):
 PLAIN = new_box("plain")
 
 
-def run_cgi(cf, method, body="", qs="", box=None, split=False, program=None):
+def run_cgi(cf, method, body="", qs="", box=None, split=False, program=None, more_env=None):
     """Run the CGI as the web server would.  Returns what the browser gets with
     what the error log gets after it; with split, the two apart."""
     env = {"HGDB_CONF": cf, "REMOTE_ADDR": "127.0.0.1", "REQUEST_METHOD": method}
+    env.update(more_env or {})
     if box is not None:
         # what makes the library keep its trash files in ../trash, as under the web server
         env["SERVER_SOFTWARE"] = "Apache"
@@ -623,6 +624,26 @@ class Commands(CgiTest):
         known = set(re.findall(r'^    \{"([A-Za-z]+)"', table, re.M))
         self.eq("the scripts send exactly the commands in the table", sorted(sent), sorted(known))
         self.has("... and the table was read: it has cmd=map", " ".join(sorted(known)), "map")
+
+    def test_the_ancestry_reference_panel(self):
+        # The panel file goes into the answer as it is, so it is read as JSON
+        # first.  One caught half written is left out: the answer stays
+        # readable, and the page says that there is no panel.
+        def answer(name, text):
+            path = os.path.join(TMP, name)
+            with open(path, "w") as fh:
+                fh.write(text)
+            out = post(mock_conf(name + ".conf", "pangenome.pclaiRefPanel=" + path), "pclai", '{"spots":[]}')
+            return json.loads(out[out.index("{"):])
+        none = {"status": "ok", "points": [], "asked": 0, "found": 0}
+        good = '{"points":[[0.1,0.2,"AFR"]],"labels":{"AFR":"African"}}'
+        self.eq("pclai: a whole panel file goes into the answer", answer("panel.json", good),
+                dict(none, panel=json.loads(good)))
+        self.eq("pclai: a panel file cut off half way is left out", answer("cut.json", good[:25]), none)
+        self.eq("pclai: so is one that is not an object with a list of points",
+                answer("other.json", '{"points":3}'), none)
+        self.eq("pclai: and one far bigger than a panel is",
+                answer("big.json", '{"points":[' + "0," * (2200 * 1024) + '0]}'), none)
 
 
 # ================================================================ where a region lands
@@ -1162,6 +1183,31 @@ class CartCommands(CgiTest):
                    % (135714502 + far, 135738459 + far))
         self.has("locus: coordinates too big for an int are not wrapped round onto a gene", out,
                  '"loci":[null]')
+
+    def test_locus_reads_the_database_over_one_connection(self):
+        # One connection, moved from assembly to assembly.  The library keeps
+        # at most 16 and a page of hits can name 200 assemblies, so one each
+        # would end the request.  Counted in the library's own trace.  An
+        # assembly this server does not have costs no connection, which leaves
+        # the counts equal there too.
+        dbs = "hg38 hg19 hs1 mm10 mm9 dm6 ce11 sacCer3 rn5 danRer7 ce10".split()
+        first = {"dm6": "chr2L", "ce11": "chrI", "ce10": "chrI", "sacCer3": "chrI"}
+
+        def ask(names):
+            items = [{"db": db, "contig": first.get(db, "chr1"),
+                      "start": 50000 if db == "sacCer3" else 1000000,
+                      "end": 50100 if db == "sacCer3" else 1000100} for db in names]
+            out, err = post(self.q, "locus", json.dumps({"items": items}), split=True,
+                            more_env={"JKSQL_TRACE": "on"})
+            return (json.loads(out[out.index("{"):])["loci"],
+                    sum(1 for line in err.splitlines() if line.split()[:1] == ["SQL_CONNECT"]))
+        one, for_one = ask(dbs[:1])
+        each, for_each = ask(dbs)
+        twice, for_twice = ask(dbs + dbs)
+        self._check("locus: the trace was read, there are connections to count", for_one > 0, "none counted")
+        self.eq("locus: eleven assemblies open as many connections as one does", for_each, for_one)
+        self.eq("... and so do the eleven asked for twice over", for_twice, for_one)
+        self.eq("... each still answered in its place", (each[:1], twice), (one, each + each))
 
     # ---- the pages ----
 
