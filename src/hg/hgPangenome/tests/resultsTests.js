@@ -848,4 +848,165 @@ await t.test('but it is not remembered: the copy kept for the tab has them waiti
     t.notOk(failSaved.rows[0].placeFailed, 'not failed');
     t.notOk(failSaved.full && failSaved.full[F.pgrPlaceKey('q1', 0)], 'and the hit is not marked done');
 });
+
+t.suite('opening a row');
+// The page with the requests an opening makes held back: each one waits in
+// "arms" until the test answers it.
+function actPage() {
+    var arms = [], fails = [], tabs = [];
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrHapEverywhere = function () { return Promise.resolve(); };
+    x.pgrAnnotFor = function () { return null; };
+    x.pgrArm = function (r) {
+        return new Promise(function (resolve, reject) { arms.push({ row: r, resolve: resolve, reject: reject }); });
+    };
+    x.pgrFail = function (m) { fails.push(m); };
+    x.window.open = function () { var tab = { location: null, close: function () { tab.closed = true; } }; tabs.push(tab); return tab; };
+    return { x: x, arms: arms, fails: fails, tabs: tabs };
+}
+await t.test('a second click on a link that is opening is left alone', async function () {
+    var p = actPage(), link = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row(), 'browser', link);
+    t.eq(link.innerHTML, 'opening&#8230;', 'the link says it is opening');
+    p.x.pgrAct(row(), 'browser', link);
+    await check.wait(2);
+    t.eq(p.arms.length, 1, 'asked for once');
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    t.eq(link.innerHTML, 'CM1.1:1-9', 'after a failure the link has its own words back');
+    t.eq(p.fails.length, 1, 'and the failure is said once');
+    p.x.pgrAct(row(), 'browser', link);
+    await check.wait(2);
+    t.eq(p.arms.length, 2, 'and it can be clicked again');
+});
+await t.test('the page goes where the reader clicked last, whichever answer is first', async function () {
+    var p = actPage(), a = { innerHTML: 'A' }, b = { innerHTML: 'B' };
+    p.x.pgrAct(row(), 'browser', a);
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'browser', b);
+    await check.wait(2);
+    p.arms[1].resolve({ url: 'hgTracks?second' });
+    await check.wait(2);
+    t.eq(String(p.x.window.location), 'hgTracks?second', 'the second click is followed');
+    p.arms[0].resolve({ url: 'hgTracks?first' });
+    await check.wait(2);
+    t.eq(String(p.x.window.location), 'hgTracks?second', 'the answer to the first is not');
+    t.eq(a.innerHTML, 'A', 'and its link has its words back');
+});
+await t.test('a failure of the click before is not reported over the one that took its place', async function () {
+    var p = actPage();
+    p.x.pgrAct(row(), 'browser', { innerHTML: 'A' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'details', { innerHTML: 'B' });
+    await check.wait(2);
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    t.eq(p.fails.length, 0, 'nothing said');
+});
+await t.test('a new tab is its own opening: it takes nothing over and is not taken over', async function () {
+    var p = actPage();
+    p.x.pgrAct(row(), 'browser', { innerHTML: 'A' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'newtab', { innerHTML: 'tab' });
+    await check.wait(2);
+    p.arms[1].resolve({ url: 'hgTracks?tab' });
+    p.arms[0].resolve({ url: 'hgTracks?page' });
+    await check.wait(2);
+    t.eq(p.tabs[0].location, 'hgTracks?tab', 'the tab opens its own');
+    t.eq(String(p.x.window.location), 'hgTracks?page', 'and the page still goes where it was sent');
+});
+
+t.suite('the link that opens a row without its annotations');
+await t.test('opens the row it was offered for after the table is renumbered', function () {
+    var nodes = {}, results = loader.makeNode('div');
+    results.insertBefore = function (n) { this._kids.unshift(n); nodes.pgrErr = n; };
+    nodes.pgrResults = results;
+    var x = loadResults({ pangenomePclai: false, document: {
+        readyState: 'complete', addEventListener: function () {},
+        getElementById: function (id) { return nodes[id] || null; },
+        createElement: loader.makeNode,
+        createTextNode: function (s) { var n = loader.makeNode(); n._text = String(s); return n; } } });
+    x.pgrRows = [row({ rank: 0, hap: 'HG00097#2' }), row({ rank: 1, hap: 'HG01234#1' }), row({ rank: 2, hap: 'HG02000#1' })];
+    x.pgrFail('Could not bring GRCh38 annotations onto HG01234#1.', x.pgrRows[1]);
+    var link = loader.findAll(nodes.pgrErr, function (n) { return n.tagName === 'A'; })[0];
+    t.eq(link.getAttribute('data-act'), 'plain', 'the link is there');
+    t.eq(x.pgrLinkRow(link).hap, 'HG01234#1', 'it is for the row that failed');
+    // More rows placed: the same rows, in another order, numbered again.
+    x.pgrRows = [row({ rank: 0, hap: 'HG00001#1' }), row({ rank: 1, hap: 'HG00002#1' }),
+                 row({ rank: 2, hap: 'HG00097#2' }), row({ rank: 3, hap: 'HG01234#1' })];
+    t.eq(x.pgrLinkRow(link).hap, 'HG01234#1', 'still that row, not the one that has its number now');
+    x.pgrRows = x.pgrRows.slice(0, 3);
+    t.eq(x.pgrLinkRow(link), undefined, 'a row that is gone opens nothing');
+    var cell = loader.makeNode('a');
+    cell.setAttribute('data-act', 'browser');
+    cell.setAttribute('data-rank', 2);
+    t.eq(x.pgrLinkRow(cell).hap, 'HG00097#2', 'a link in the table goes by its number, as before');
+});
+
+t.suite('copying the query sequence');
+function copyPage(clipboard, exec, library) {
+    var said = [];
+    var extra = { pangenomePclai: false, navigator: clipboard ? { clipboard: clipboard } : {} };
+    if (library) { extra.copyButtonSaysCopied = function (b) { said.push(b); b.innerHTML = 'Copied'; }; }
+    var x = loadResults(extra);
+    x.document.execCommand = function () { if (exec === 'throws') { throw new Error('no'); } return exec; };
+    return { x: x, said: said };
+}
+await t.test('the button says Copied only when the text reached the clipboard', async function () {
+    var wrote = [];
+    var ok = copyPage({ writeText: function (s) { wrote.push(s); return Promise.resolve(); } }, false);
+    t.eq(await ok.x.pgrCopy('>q1\nACGT'), true, 'written');
+    t.eq(wrote[0], '>q1\nACGT', 'the text itself');
+    var refused = copyPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, false);
+    t.eq(await refused.x.pgrCopy('ACGT'), false, 'refused by the browser, and the older way fails too');
+    var older = copyPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, true);
+    t.eq(await older.x.pgrCopy('ACGT'), true, 'refused, but the older way of copying worked');
+    t.eq(await copyPage(null, true).x.pgrCopy('ACGT'), true, 'a browser with only the older way');
+    t.eq(await copyPage(null, 'throws').x.pgrCopy('ACGT'), false, 'which can fail as well');
+    var button = { textContent: 'Copy to Clipboard' };
+    ok.x.pgrCopySays(button, true);
+    t.eq(button.textContent, 'Copied', 'said');
+    ok.x.pgrCopySays(button, false);
+    t.eq(button.textContent, 'Not copied', 'and said when it did not');
+});
+await t.test('with the Genome Browser\'s helper (utils.js) on the page, the label comes back by itself', function () {
+    var lib = copyPage(null, true, true), button = { innerHTML: 'Copy to Clipboard' };
+    lib.x.pgrCopySays(button, true);
+    t.eq(lib.said.length, 1, 'the helper is used');
+    t.eq(button.innerHTML, 'Copied', 'Copied');
+    lib.x.pgrCopySays(button, false);
+    t.eq(lib.said.length, 2, 'for a failure too, so that the label is put back');
+    t.eq(button.innerHTML, 'Not copied', 'with the failure said');
+});
+
+t.suite('the download and the page look up loci in turn');
+await t.test('a download during the page\'s own lookup waits for it and asks only for the rest', async function () {
+    var posts = [];
+    var x = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+        var items = JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1])).items;
+        return new Promise(function (resolve) {
+            posts.push({ n: items.length, answer: function () {
+                resolve({ ok: true, json: function () {
+                    return Promise.resolve({ loci: items.map(function () { return 'exon G'; }) }); } });
+            } });
+        });
+    } });
+    x.pgrCacheWrite = function () {};
+    x.pgrRows = [row({ rank: 0 }), row({ rank: 1, hap: 'HG01234#1' }), row({ rank: 2, hap: 'HG02000#1' })];
+    var shown = x.pgrRows.slice(0, 2);
+    var table = function (rows) { return { data: function () { return { toArray: function () { return rows; } }; },
+                                           invalidate: function () {} }; };
+    x.pgrDt = { rows: function (sel) { return table(sel && sel.page ? shown : x.pgrRows); }, draw: function () {} };
+    x.pgrFillLoci(x.pgrDt);                 // the page asks for the two rows it shows
+    var done = false;
+    x.pgrLociForExport().then(function () { done = true; });
+    await check.wait(2);
+    t.eq(posts.length, 1, 'one request out, not two at once');
+    t.eq(posts[0].n, 2, 'the page\'s');
+    posts[0].answer();
+    await check.wait(2);
+    t.eq(posts.length, 2, 'then the download\'s');
+    t.eq(posts[1].n, 1, 'for the one row the page did not ask about');
+    posts[1].answer();
+    await check.wait(2);
+    t.ok(done, 'and the download goes on');
+    t.eq(x.pgrRows.filter(function (r) { return r.locus === 'exon G'; }).length, 3, 'with every locus');
+});
 });

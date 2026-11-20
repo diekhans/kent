@@ -135,7 +135,12 @@ function showError(message, retry) {
     ]);
     if (retry) {
         var b = el("button", { type: "button", class: "pgDlBtn", text: "Retry" });
-        b.addEventListener("click", retry);
+        // Once: the second click of a double click would ask a second time.
+        b.addEventListener("click", function () {
+            if (b.disabled) return;
+            b.disabled = true;
+            retry();
+        });
         box.appendChild(b);
     }
     showStatus(box);
@@ -1212,6 +1217,7 @@ var reachableScored = false;   // true when the server ranked them
 // region changes, because then it is an answer to a different question.
 var reachableCache = null;
 var reachableCacheScored = false;
+var reachSeq = 0;              // the question whose answer the filter waits for: see askReachable()
 var autoRan = false;           // the hand-off from hgConvert converts once
 var sourceIsExample = false;   // the position on screen is ours, not the user's
 
@@ -1534,6 +1540,11 @@ function showReachable() {
 function askReachable() {
     var src = buildSource();
     if (src.error) { showError(src.error); untick(); return; }
+    // Clear, or asking again, moves on from this question.  Its answer is
+    // then kept for the next time the box is ticked and changes nothing on
+    // the page: applied, it would filter the list under a box that says it
+    // is not filtered.
+    var seq = ++reachSeq;
     setToggleBusy(true);
     showBusy("Asking which assemblies contain " +
              fmtPos(src.contig, src.start, src.end) + "…");
@@ -1559,19 +1570,21 @@ function askReachable() {
             // the server ranked them.  Accept both.  Compare case-insensitively:
             // this list and the haplotype list are produced separately, so do
             // not assume they agree on spelling.
-            reachable = Object.create(null);
-            reachableScored = false;
+            var found = Object.create(null), scored = false;
             ((resp && resp.haplotypes) || []).forEach(function (h) {
                 if (h && typeof h === "object") {
-                    reachable[String(h.haplotype).toLowerCase()] =
+                    found[String(h.haplotype).toLowerCase()] =
                         typeof h.coverage === "number" ? h.coverage : null;
-                    if (typeof h.coverage === "number") reachableScored = true;
+                    if (typeof h.coverage === "number") scored = true;
                 } else {
-                    reachable[String(h).toLowerCase()] = null;
+                    found[String(h).toLowerCase()] = null;
                 }
             });
-            reachableCache = reachable;
-            reachableCacheScored = reachableScored;
+            reachableCache = found;
+            reachableCacheScored = scored;
+            if (seq !== reachSeq) return;
+            reachable = found;
+            reachableScored = scored;
             setToggleBusy(false);
             fillTargets($("pgcFilter").value);
             if (Object.keys(reachable).length === 0)
@@ -1580,6 +1593,7 @@ function askReachable() {
                 hideStatus();
         })
         .catch(function (err) {
+            if (seq !== reachSeq) return;
             setToggleBusy(false);
             untick();
             // Retry asks again; going through the toggle would not, the box
@@ -1980,6 +1994,8 @@ function onClear() {
     popFilter = null;
     reachable = null;
     reachableScored = false;
+    reachSeq++;                 // nor is an answer still out to filter the cleared list
+    setToggleBusy(false);
     if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = false; }
     targetOptions($("pgcTargets")).forEach(function (o) { o.selected = false; });
     fillTargets("");

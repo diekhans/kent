@@ -96,6 +96,8 @@ function validate(parsed) {
     // "constructor" or "toString" as already-seen and rename them spuriously.
     var seen = Object.create(null);
     var auto = 0;
+    var fd = window.hgPangenomeFormData;
+    var maxLen = (fd && fd.maxSeqLen) || 0;     // the server's limit, where the page was told it
     parsed.sequences.forEach(function (s) {
         // name
         if (!s.name) s.name = "seq_" + (++auto);
@@ -114,6 +116,12 @@ function validate(parsed) {
                     line: s.line,
                     message: "sequence '" + s.name + "' has an invalid character '" +
                              bad[0] + "' (only A, C, G, T, N allowed)"
+                });
+            else if (maxLen && s.sequence.length > maxLen)
+                parsed.errors.push({
+                    line: s.line,
+                    message: "sequence '" + s.name + "' is " + pg.commas(s.sequence.length) +
+                             " bp (limit is " + pg.commas(maxLen) + " bp)"
                 });
         }
     });
@@ -166,6 +174,7 @@ function showValidationErrors(errors) {
 
 function showFatal(message, retryFn) {
     busyOff();
+    submitOff(false);
     var box = el("div", { class: "pgErrBox" });
     box.appendChild(el("span", { class: "pgErrText", text: message }));
     if (retryFn) {
@@ -193,6 +202,13 @@ var lastPayload = null;
 var pollTimer = null;
 var runSeq = 0;             // the search the page is waiting for: see pollJob()
 
+// Submit is off while a search is out.  The scrim that covers the form comes
+// up after a pause, and a double click is quicker than it: without this the
+// second click sent a second job.
+function submitOff(off) {
+    if ($("pgSubmit")) $("pgSubmit").disabled = !!off;
+}
+
 function collectOptions() {
     var opts = {
         // Not a choice on the form: every job asks for as many as the install
@@ -214,6 +230,7 @@ function collectOptions() {
 }
 
 function onSubmit() {
+    if ($("pgSubmit") && $("pgSubmit").disabled) return;       // Ctrl-Enter comes here too
     if (pollTimer) { window.clearTimeout(pollTimer); pollTimer = null; }
     var parsed = parseInput($("pgSeq").value);
     if (!validate(parsed)) { showValidationErrors(parsed.errors); return; }
@@ -230,9 +247,9 @@ function onSubmit() {
 
 function run() {
     var total = lastPayload.sequences.length;
+    submitOff(true);
     showProgress(0, total);
-    // A second Submit while this one is out starts its own search; the answer
-    // to this one is then not followed up.
+    // Clear lets go of this search; the answer to it is then not followed up.
     var seq = ++runSeq;
 
     submitJob(lastPayload).then(function (resp) {
@@ -343,6 +360,7 @@ function onClear() {
     // A search still running is let go: nothing is waiting for it any more.
     runSeq++;
     if (pollTimer) { window.clearTimeout(pollTimer); pollTimer = null; }
+    submitOff(false);
     hideStatus();
 }
 
@@ -589,8 +607,9 @@ function formBuild() {
     });
 
     // Back from the results page: a browser that restores this page from its
-    // back/forward cache restores the overlay with it, still spinning.
-    window.addEventListener("pageshow", busyOff);
+    // back/forward cache restores the overlay with it, still spinning, and
+    // Submit still off.
+    window.addEventListener("pageshow", function () { busyOff(); submitOff(false); });
 
     formCount();
     if (typeof window.convertTitleTagsToMouseovers === "function")

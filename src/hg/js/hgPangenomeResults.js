@@ -22,6 +22,7 @@
 /* global window, document, jQuery, pangenomeJobId, pangenomeConfig, pangenomePclai */
 /* global pangenomeSurjectTop, pangenomeSurjectMax, pangenomePlaceAllAtLoad */
 /* global pangenomeMinCoverage, pangenomeShowCoverage, pangenomeResultsPage */
+/* global navigator, copyButtonSaysCopied */
 
 (function () {
 'use strict';
@@ -791,6 +792,11 @@ function pgrAnnotControl() {
            '<span class="v"><select id="pgrAnnotRef">' + opts.join("") + "</select></span></div>";
 }
 
+// The opening this page is waiting on to follow.  A click on another link
+// takes over, and the answer to the one before is then not followed: the page
+// can only go to one place, and it goes where the reader clicked last.
+var pgrActSeq = 0;
+
 function pgrAct(row, what, link) {
     // "plain" is the browser link again, without the annotations - offered
     // when bringing them failed.
@@ -802,11 +808,20 @@ function pgrAct(row, what, link) {
     // restoring it through textContent would write back the plain words and
     // take the icon with it - the row then no longer lines up with the others.
     var busy = !!link && what !== "newtab";
+    // A link already waiting is left to it.  A second click would take
+    // "opening..." for the link's own words and put that back in their place.
+    if (busy && link.pgrOpening) { return; }
     var was = busy ? link.innerHTML : null;
-    if (busy) { link.innerHTML = "opening&#8230;"; }
+    if (busy) { link.pgrOpening = true; link.innerHTML = "opening&#8230;"; }
     // A new tab has to be opened in the click itself or the popup blocker takes
     // it, so it is opened now and pointed at the answer when it arrives.
     var tab = (what === "newtab") ? window.open("", "_blank") : null;
+    var mine = tab ? 0 : ++pgrActSeq;
+    // The link gets its words back; true if this opening is still the one to follow.
+    var settle = function () {
+        if (busy) { link.innerHTML = was; link.pgrOpening = false; }
+        return !!tab || mine === pgrActSeq;
+    };
     var ready = (what === "details") ? Promise.resolve() : pgrHapEverywhere(row);
     ready.then(function () { return pgrArm(row, what !== "details"); }).then(function (resp) {
         if (what === "details") { return resp.details; }
@@ -821,11 +836,12 @@ function pgrAct(row, what, link) {
                 throw err;
             });
     }).then(function (url) {
-        if (busy) { link.innerHTML = was; }
+        if (!settle()) { return; }
         if (tab) { tab.location = url; } else { window.location = url; }
     }).catch(function (err) {
-        if (busy) { link.innerHTML = was; }
+        var current = settle();
         if (tab) { tab.close(); }
+        if (!current) { return; }
         if (err.annot) {
             pgrFail("Could not bring " + err.annot.label + " annotations onto " + row.hap +
                     ": " + err.message + ".", row);
@@ -1158,9 +1174,7 @@ function pgrRefresh() {
     var top0 = table.getBoundingClientRect().top;
     var sel = pgrSelKey;
     if (sel) {
-        var again = pgrRows.filter(function (r) {
-            return r.query === sel.query && r.placement === sel.placement && pg.hapKey(r.hap) === sel.hap;
-        })[0];
+        var again = pgrRowOf(sel);
         pgrSelRank = again ? again.rank : null;
         if (!again) { pgrSelKey = null; }
     }
@@ -1209,9 +1223,7 @@ function pgrRedrawKeep() {
         pgrDt.page(st.page).draw(false);
     }
     if (sel && pgrDt) {
-        var again = pgrRows.filter(function (r) {
-            return r.query === sel.query && r.placement === sel.placement && pg.hapKey(r.hap) === sel.hap;
-        })[0];
+        var again = pgrRowOf(sel);
         if (again) { pgrSelect(pgrDt, again.rank); }
     }
 }
@@ -1416,6 +1428,11 @@ function pgrPage() {
 
 // A problem with one action - an alignment that would not open, say - goes in a
 // line at the top of the results card, where it is seen without hiding them.
+// With plainRow the line ends in a link that opens that row without the
+// annotations.  The row is remembered by what it is: the line stays while the
+// table is renumbered under it, and a number would open another haplotype.
+var pgrFailKey = null;
+
 function pgrFail(msg, plainRow) {
     var slot = document.getElementById("pgrErr");
     if (!slot) {
@@ -1426,16 +1443,23 @@ function pgrFail(msg, plainRow) {
     }
     slot.className = "pgrErr";
     slot.textContent = msg;
+    pgrFailKey = plainRow ? pgrKeyOf(plainRow) : null;
     if (plainRow) {
         // Inside #pgrResults, so the page's one click handler opens it.
         var a = document.createElement("a");
         a.href = "#";
-        a.setAttribute("data-rank", plainRow.rank);
         a.setAttribute("data-act", "plain");
         a.textContent = "Open it without them";
         slot.appendChild(document.createTextNode(" "));
         slot.appendChild(a);
     }
+}
+
+// The row a link on the page is for: a link in the table carries its row's
+// number, which is redrawn with the table; the link above is found by its key.
+function pgrLinkRow(a) {
+    if (a.getAttribute("data-act") === "plain") { return pgrRowOf(pgrFailKey); }
+    return pgrRows[parseInt(a.getAttribute("data-rank"), 10)];
 }
 
 // ---- summary strip, detail panel, downloads --------------------------------
@@ -1567,6 +1591,28 @@ function pgrRowsToTsv(rows) {
     return lines.join("\n") + "\n";
 }
 
+// Put text on the clipboard; resolves true if it got there.  The browser
+// refuses when the page is not the one in front, and says so only here.
+function pgrCopy(text) {
+    var old = function () {
+        try { return !!document.execCommand("copy"); } catch (e) { return false; }
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+        return navigator.clipboard.writeText(text).then(function () { return true; }, old);
+    }
+    return Promise.resolve(old());
+}
+
+// The button says how the copy went, and gets its own words back after.
+function pgrCopySays(button, ok) {
+    if (typeof copyButtonSaysCopied === "function") {
+        copyButtonSaysCopied(button);       // utils.js: "Copied", and the label back in 3 s
+        if (!ok) { button.innerHTML = "Not copied"; }
+    } else {
+        button.textContent = ok ? "Copied" : "Not copied";
+    }
+}
+
 function pgrShowSeq() {
     var box = document.getElementById("pgrSeqBox");
     if (box.style.display === "flex") { box.style.display = "none"; return; }
@@ -1580,10 +1626,11 @@ function pgrShowSeq() {
     var ta = document.getElementById("pgrSeqText");
     ta.value = fasta;
     document.getElementById("pgrSeqCopy").onclick = function () {
+        var button = this;
+        // Selected first: it is what the older way of copying copies, and what
+        // is left for Ctrl+C if neither way works.
         ta.select();
-        if (navigator.clipboard) { navigator.clipboard.writeText(fasta); }
-        else { document.execCommand("copy"); }
-        this.textContent = "Copied";
+        pgrCopy(fasta).then(function (ok) { pgrCopySays(button, ok); });
     };
     document.getElementById("pgrSeqDl").onclick = function () {
         pg.saveFile(fasta, "pangenomeQuery.fa", "text/plain");
@@ -1596,11 +1643,23 @@ function pgrShowSeq() {
 var pgrSelRank = null;      // rank of the row shown in the detail panel
 var pgrSelKey = null;       // and which row that is, which survives renumbering
 
+// What a row is, whatever its number: rows are renumbered when more are placed.
+function pgrKeyOf(r) {
+    return { query: r.query, placement: r.placement, hap: pg.hapKey(r.hap) };
+}
+
+// The row that is, as it is numbered now; undefined if it is gone.
+function pgrRowOf(key) {
+    if (!key) { return undefined; }
+    return pgrRows.filter(function (r) {
+        return r.query === key.query && r.placement === key.placement && pg.hapKey(r.hap) === key.hap;
+    })[0];
+}
+
 function pgrSelect(dt, rank) {
     pgrSelRank = rank;
     var picked = pgrRows[rank];
-    pgrSelKey = picked ? { query: picked.query, placement: picked.placement,
-                           hap: pg.hapKey(picked.hap) } : null;
+    pgrSelKey = picked ? pgrKeyOf(picked) : null;
     jQuery("#pgrTable tbody tr").removeClass("pgrSel");
     dt.rows().every(function () {
         if (this.data().rank === rank) { jQuery(this.node()).addClass("pgrSel"); }
@@ -1675,6 +1734,9 @@ function pgrDraw(queries, allRows) {
     // was open, to open it again on the new rows.
     var oldPlot = document.getElementById("pgrPclaiPlot");
     var plotWasOpen = !!oldPlot && oldPlot.style.display !== "none";
+    // A pause still running would place the rows of the table that is about to
+    // go; the new table's first draw starts its own.
+    if (pgrFillTimer) { clearTimeout(pgrFillTimer); pgrFillTimer = null; }
     if (pgrDt) { pgrDt.destroy(); pgrDt = null; }
     pgrSelRank = null;
     pgrSelKey = null;
@@ -1857,11 +1919,11 @@ function pgrDraw(queries, allRows) {
             if (window.pangenomePlot) { window.pangenomePlot.togglePick(t.getAttribute("data-hap"), t.checked); }
             return;
         }
-        var a = t && t.closest ? t.closest("a[data-rank]") : null;
+        var a = t && t.closest ? t.closest("a[data-act]") : null;
         if (!a) { return; }
         ev.preventDefault();
-        var row = pgrRows[parseInt(a.getAttribute("data-rank"), 10)];
         var act = a.getAttribute("data-act");
+        var row = pgrLinkRow(a);
         if (!row) { return; }
         pgrAct(row, act, a);
     };
@@ -1953,6 +2015,7 @@ function pgrLocusCell(r) {
 }
 
 var pgrLocusBusy = false;
+var pgrLocusOut = null;     // the lookup that is out, for the download to wait on
 var pgrLocusOff = false;    // a lookup failed: do not keep asking on every draw
 
 var PGR_LOCUS_MAX = 200;    // rows a request; the server reads LOCUS_MAX_ITEMS
@@ -1972,7 +2035,7 @@ function pgrLocusAsk(want) {
     var payload = { items: want.map(function (r) {
         return { db: r.db, contig: r.contig, start: r.start, end: r.end };
     }) };
-    return pg.post("locus", payload).then(pg.json).then(function (resp) {
+    pgrLocusOut = pg.post("locus", payload).then(pg.json).then(function (resp) {
         if (!resp || !resp.loci) { throw new Error((resp && resp.error) || "no answer"); }
         want.forEach(function (r, i) { r.locus = resp.loci[i] || ""; });
         pgrLocusBusy = false;
@@ -1986,6 +2049,7 @@ function pgrLocusAsk(want) {
         want.forEach(function (r) { r.locusFailed = true; });
         throw err;
     });
+    return pgrLocusOut;
 }
 
 function pgrFillLoci(dt) {
@@ -2035,6 +2099,12 @@ function pgrCompleteForExport() {
 }
 
 function pgrLociForExport() {
+    if (pgrLocusBusy) {
+        // The page's own lookup is out: after it, not beside it.  It may have
+        // been for these very rows.
+        var after = function () { return pgrLociForExport(); };
+        return pgrLocusOut.then(after, after);
+    }
     if (pgrLocusOff) { return Promise.resolve(); }
     var want = pgrExportRows().filter(pgrWantsLocus).slice(0, PGR_LOCUS_MAX);
     if (!want.length) { return Promise.resolve(); }

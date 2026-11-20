@@ -199,4 +199,108 @@ await t.test('the plot says so instead of waiting for ever', function () {
     t.notOk(/Reading ancestry coordinates/.test(html), 'not still reading');
     t.contains(html, 'no pcLAI reference panel', 'the reason');
 });
+
+// A plot whose requests wait in "out" until the test answers them.
+function heldPlot() {
+    var out = [];
+    var x = loadPlot(function (url, opts) {
+        var list = asked(opts);
+        return new Promise(function (resolve, reject) {
+            out.push({ spots: list,
+                       ok: function () { resolve({ ok: true, json: function () { return Promise.resolve(
+                           { status: 'ok', points: pointsFor(list), asked: list.length, found: list.length, panel: PANEL }); } }); },
+                       fail: function () { reject(new Error('network')); } });
+        });
+    });
+    return { x: x, out: out, html: function () { return x.node('pgrPclaiPlot').innerHTML; } };
+}
+function haps(data) { return (data.points || []).map(function (p) { return p.hap; }).join(' '); }
+
+t.suite('the table drawn anew while the plot is being read');
+// The results page: the same plot, set up again with the rows of the new
+// table, and nothing to say that they are other rows.
+await t.test('the answer for the old rows is not taken for the new table\'s', async function () {
+    var p = heldPlot(), oldRows = spots(3, 'OLD'), newRows = spots(3, 'NEW');
+    p.x.pgpInit(oldRows);
+    p.x.pgpOpen(oldRows);
+    await check.wait(2);
+    p.x.pgpInit(newRows);
+    p.x.pgpOpen(newRows);
+    await check.wait(2);
+    t.eq(p.out.length, 2, 'each table asked for its own rows');
+    p.out[1].ok();
+    await check.wait(2);
+    t.contains(haps(p.x.pgpData), 'NEW0#1', 'the new rows are plotted');
+    p.out[0].ok();
+    await check.wait(2);
+    t.notOk(/OLD/.test(haps(p.x.pgpData)), 'and the old ones do not take their place');
+    t.eq(p.out.length, 2, 'nor is anything asked again to put that right');
+});
+await t.test('nor does its failure take the plot away', async function () {
+    var p = heldPlot(), oldRows = spots(3, 'OLD'), newRows = spots(3, 'NEW');
+    p.x.pgpInit(oldRows);
+    p.x.pgpOpen(oldRows);
+    await check.wait(2);
+    p.x.pgpInit(newRows);
+    p.x.pgpOpen(newRows);
+    await check.wait(2);
+    p.out[1].ok();
+    await check.wait(2);
+    p.out[0].fail();
+    await check.wait(2);
+    t.contains(p.html(), '<svg', 'the plot is still drawn');
+    t.notOk(/Could not load/.test(p.html()), 'with no error over it');
+});
+await t.test('more rows asked for before the table was drawn anew are not added to the new plot', async function () {
+    var p = heldPlot(), oldRows = spots(3, 'OLD');
+    p.x.pgpInit(oldRows);
+    p.x.pgpOpen(oldRows);
+    await check.wait(2);
+    p.out[0].ok();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(5, 'OLD'));
+    await check.wait(2);
+    t.eq(p.out.length, 2, 'the two new rows are asked about');
+    p.x.pgpInit(spots(3, 'NEW'));
+    p.out[1].ok();
+    await check.wait(2);
+    t.eq(p.x.pgpData, null, 'the new table\'s plot has nothing read yet');
+    t.eq(p.x.pgpSpots[0].hap, 'NEW0#1', 'and its own rows to read');
+});
+await t.test('a second click while it is being read does not ask a second time', async function () {
+    var p = heldPlot(), rows = spots(3);
+    p.x.pgpInit(rows);
+    p.x.pgpOpen(rows);
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    t.eq(p.out.length, 1, 'one request');
+    p.out[0].fail();
+    await check.wait(2);
+    t.contains(p.html(), 'Could not load the ancestry plot', 'a failure is said');
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    t.eq(p.out.length, 2, 'and opening it again asks again');
+});
+
+t.suite('more rows that could not be read');
+await t.test('the plot stays, in use, and says how many it is missing', async function () {
+    var p = heldPlot(), rows = spots(3);
+    p.x.pgpInit(rows, { legend: { many: 'haplotypes' } });
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    p.out[0].ok();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(5));
+    await check.wait(2);
+    p.out[1].fail();
+    await check.wait(2);
+    t.ok(p.x.pgpData, 'what was read is kept');
+    t.eq(p.x.pgpData.points.length, 3, 'its three points');
+    t.eq(p.x.pgpData.failed, 2, 'and the two that were not read are counted');
+    t.contains(p.html(), '<svg', 'the plot is drawn');
+    t.contains(p.html(), '2 haplotypes could not be read', 'and says so');
+    p.x.pgpUpdate(spots(5));
+    await check.wait(2);
+    t.eq(p.out.length, 2, 'they are not asked about again for the same table');
+});
 });

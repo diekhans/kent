@@ -1371,6 +1371,55 @@ await t.test('it asks again, and the answer narrows the picker', function () {
     t.eq(retryPage.el.pgcTargets.children.length, 1, 'and the list is narrowed');
 });
 
+// Retry clicked twice: the first answer is an error, the second is still out.
+var dbl = { asks: 0 };
+var dblPage = startPage({ respond: function (u, b) {
+    if (b.indexOf('cmd=liftoverTargets') < 0) return undefined;
+    dbl.asks++;
+    return dbl.asks === 1 ? { status: 'error', error: 'graph server busy' } : new Promise(function () {});
+} });
+// The reachability answer that comes after Clear.
+var lateReach = { asks: 0 };
+var slowReach = startPage({ respond: function (u, b) {
+    if (b.indexOf('cmd=liftoverTargets') < 0) return undefined;
+    lateReach.asks++;
+    return new Promise(function (resolve) { lateReach.resolve = resolve; });
+} });
+await check.wait(60);
+[dblPage, slowReach].forEach(function (c) {
+    c.el.pgcPos.value = 'CM094066.1:1-100';
+    c.shownAtFirst = c.el.pgcTargets.children.length;
+    c.el.pgcReachableOnly.checked = true;
+    c.el.pgcReachableOnly.dispatch('change');
+});
+await check.wait(30);
+var dblBtn = dblPage.findAll(dblPage.el.pgcStatus, function (n) {
+    return n.tagName === 'BUTTON' && n.textContent === 'Retry'; })[0];
+if (dblBtn) { dblBtn.dispatch('click'); dblBtn.dispatch('click'); }
+slowReach.el.pgcClear.dispatch('click');
+lateReach.resolve({ haplotypes: ['chm13#0'] });
+await check.wait(30);
+
+await t.test('a double click on Retry asks once more, not twice', function () {
+    t.ok(dblBtn, 'there is a Retry');
+    t.eq(dbl.asks, 2, 'the first question and one retry');
+});
+
+t.suite('a reachability answer that comes after Clear');
+await t.test('it does not narrow the list under a box that says it is whole', function () {
+    t.eq(lateReach.asks, 1, 'asked once');
+    t.eq(slowReach.el.pgcReachableOnly.checked, false, 'the box is unticked');
+    t.eq(slowReach.el.pgcReachableOnly.disabled, false, 'and can be ticked');
+    t.ok(slowReach.shownAtFirst > 1, 'the list had more than one haplotype');
+    t.eq(slowReach.el.pgcTargets.children.length, slowReach.shownAtFirst, 'and still has them all');
+});
+await t.test('it is kept: ticking the box then narrows the list without asking again', function () {
+    slowReach.el.pgcReachableOnly.checked = true;
+    slowReach.el.pgcReachableOnly.dispatch('change');
+    t.eq(lateReach.asks, 1, 'no second question');
+    t.eq(slowReach.el.pgcTargets.children.length, 1, 'the one haplotype that has the region');
+});
+
 t.suite('ranked destinations');
 
 await t.test('the request asks for scores and a floor', function () {

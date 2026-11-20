@@ -37,7 +37,8 @@ var pgpPicked = Object.create(null);   // haplotypes the user ticked
 var pgpSelected = null;     // the haplotype whose details are open, if any
 var pgpSelGroup = null;     // the haplotypes sharing the mark that was clicked
 var pgpWindows = Object.create(null);  // key -> its windows, or null while being read
-var pgpGen = 0;             // which set of regions this is; an answer for an older one is dropped
+var pgpGen = 0;             // which pgpInit() this is; an answer asked for under an older one is dropped
+var pgpOpening = -1;        // the pgpGen whose first read is out, so that it is not asked for twice
 
 // The hit index, shared by the hover readout and the click that opens details:
 // both ask the same question - which mark is under the cursor.
@@ -1021,8 +1022,11 @@ function pgpOpen(spots) {
     if (pgpData) { pgpDraw(); return; }
     host.innerHTML = "<p>Reading ancestry coordinates…</p>";
     var gen = pgpGen;
+    if (pgpOpening === gen) { return; }        // already being read: a second click on the button
+    pgpOpening = gen;
     pgpFetch(spots).then(function (resp) {
-        if (gen !== pgpGen) { return; }        // an answer for regions no longer shown
+        if (gen !== pgpGen) { return; }        // an answer for rows or regions no longer shown
+        pgpOpening = -1;
         if (!resp || resp.status === "error") {
             throw new Error((resp && resp.error) || "server error");
         }
@@ -1033,6 +1037,7 @@ function pgpOpen(spots) {
         if (pgpSpots !== spots) { pgpUpdate(pgpSpots); }
     }).catch(function (err) {
         if (gen !== pgpGen) { return; }
+        pgpOpening = -1;
         host.innerHTML = "<p>Could not load the ancestry plot: " +
                          pg.esc(err.message) + "</p>";
     });
@@ -1042,7 +1047,12 @@ function pgpOpen(spots) {
 // set up.  Only the spots not read yet are asked about, and an open plot keeps
 // its drawing until the answer is in, so the page around it does not move.
 function pgpUpdate(spots) {
+    // Told apart by when it was asked for, not by when its turn comes: the
+    // table can be drawn anew, with other rows, while this waits in the queue
+    // or for its answer, and the plot of the new table starts from nothing.
+    var gen = pgpGen;
     pgpUpdating = pgpUpdating.then(function () {
+        if (gen !== pgpGen) { return; }
         pgpSpots = spots;
         var old = pgpData;
         if (!old || !pgpDataSpots) { return; }     // not read yet: opening reads them all
@@ -1072,12 +1082,14 @@ function pgpUpdate(spots) {
         };
         if (!fresh.length) { done(null); return; }
         return pgpFetch(fresh).then(function (resp) {
-            if (!resp || resp.status !== "ok") { throw new Error("no answer"); }
-            done(resp);
-        }).catch(function () {
-            // Read afresh the next time the plot is opened.
-            pgpData = null;
-            pgpDataSpots = null;
+            return (resp && resp.status === "ok") ? resp : null;
+        }, function () {
+            return null;
+        }).then(function (resp) {
+            if (gen !== pgpGen) { return; }
+            // Not read: the plot stays as it is and stays in use, and says how
+            // many it is missing, as it does for a batch that failed.
+            done(resp || { failed: fresh.length });
         });
     });
     return pgpUpdating;
@@ -1093,13 +1105,14 @@ function pgpUpdate(spots) {
 function pgpInit(spots, opts) {
     if (!spots || !spots.length) { return false; }
     // Called again when the table gains placements; what was read for the
-    // old rows does not cover the new ones.
+    // old rows does not cover the new ones, and what is still being read for
+    // them is not waited for.
     pgpData = null;
     pgpDataSpots = null;
+    pgpGen++;
     if (opts && opts.fresh) {
         // PanLift draws each conversion with the same ids, so what was open
         // for one would show on another's haplotype.
-        pgpGen++;
         pgpWindows = Object.create(null);
         pgpSelected = null;
         pgpSelGroup = null;

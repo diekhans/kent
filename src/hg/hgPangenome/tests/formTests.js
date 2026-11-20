@@ -147,6 +147,17 @@ await t.test('more sequences than the limit are refused, with the limit', functi
     t.eq(c.calls.length, 0, 'no request made');
 });
 
+await t.test('a sequence longer than the limit is refused here, by name, and nothing is sent', function () {
+    var c = start({ submit: QUEUED, poll: [RUNNING] }, null, '>long\nACGTACGTAC\nGTACGTACGT\n>short\nACGT',
+                  function (page) { page.window.hgPangenomeFormData = { maxSeqLen: 10 }; });
+    t.contains(c.el.pgStatus.textContent, "sequence 'long' is 20 bp (limit is 10 bp)", 'its name, its length, the limit');
+    t.notOk(/'short'/.test(c.el.pgStatus.textContent), 'the one within the limit is not named');
+    t.eq(c.calls.length, 0, 'no request made');
+    var at = start({ submit: QUEUED, poll: [RUNNING] }, null, '>ten\nACGTACGTAC',
+                   function (page) { page.window.hgPangenomeFormData = { maxSeqLen: 10 }; });
+    t.eq(at.calls.length, 1, 'a sequence of exactly the limit is sent');
+});
+
 // ===================================================== what happens afterwards
 
 var finished = start({ submit: QUEUED, poll: [RUNNING, RUNNING, DONE] },
@@ -182,6 +193,7 @@ require('vm').runInContext('Date.now = function () { return 1e15; };', endless.s
 clearedForm.el.pgClear.dispatch('click');
 clearedForm.pollsAtClear = polls(clearedForm).length;
 twiceForm.firstAtClick = pollsOf(twiceForm, 'j1');
+twiceForm.offAtClick = twiceForm.el.pgSubmit.disabled;
 twiceForm.el.pgSubmit.dispatch('click');
 twiceForm.submitsAfter = twiceForm.calls.filter(function (x) {
     return x.opts && x.opts.method === 'POST'; }).length;
@@ -283,11 +295,20 @@ await t.test('Clear lets a running search go', function () {
     t.notOk(/page=results/.test(String(clearedForm.window.location)), 'and it goes nowhere');
 });
 
-await t.test('a second Submit starts a second search and drops the first', function () {
-    t.eq(twiceForm.submitsAfter, 2, 'two submissions');
-    t.ok(pollsOf(twiceForm, 'j2') > 0, 'the second job is polled');
-    t.ok(pollsOf(twiceForm, 'j1') <= twiceForm.firstAtClick + 1,
-         'and the first no longer is (' + twiceForm.firstAtClick + ' polls at the click, ' +
+await t.test('Submit is off while a search is out: a second one sends nothing', function () {
+    // The second click of a double click, or Ctrl-Enter in the box.
+    t.eq(twiceForm.offAtClick, true, 'the button is off');
+    t.eq(twiceForm.submitsAfter, 1, 'one submission');
+    t.eq(pollsOf(twiceForm, 'j2'), 0, 'no second job');
+    t.ok(pollsOf(twiceForm, 'j1') > twiceForm.firstAtClick + 1,
+         'and the first search is still followed (' + twiceForm.firstAtClick + ' polls at the click, ' +
          pollsOf(twiceForm, 'j1') + ' at the end)');
+});
+
+await t.test('Submit is on again when the search has failed, and after Clear', function () {
+    t.eq(refused.el.pgSubmit.disabled, false, 'a submission that was refused');
+    t.eq(jobFailed.el.pgSubmit.disabled, false, 'a job that failed');
+    t.eq(lost.el.pgSubmit.disabled, false, 'contact lost');
+    t.eq(clearedForm.el.pgSubmit.disabled, false, 'Clear');
 });
 });
