@@ -126,7 +126,8 @@ char *pgPclaiRefPanel(void);
 /* ---- hgPangenome.c - answering, and the names a request may carry ---- */
 
 void emitJson(char *json);
-/* Write an application/json CGI response (no cart/HTML). */
+/* Write an application/json CGI response (no cart/HTML), its header through
+ * cgiPrintContentType(). */
 
 void emitJsonError(char *fmt, ...);
 /* Emit a {"status":"error","error":"..."} body the JS client understands. */

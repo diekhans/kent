@@ -1170,6 +1170,38 @@ class CartCommands(CgiTest):
         self.has("quickLift: a long error from the mapping server is an error envelope", out,
                  '{"status":"error","error":"mapping server returned HTTP 500')
 
+    def test_the_header_of_a_command_in_the_cart(self):
+        # The header goes out through the library's own writer.  The lines the
+        # library queued for it are sent - with the cart, the content policy,
+        # where hg.conf turns that on - and there is one header, not two.
+        self.need("bedToBigBed")
+        csp = conf("csp.conf", "include " + self.q, "cspResponseHeader=on", tools=False)
+        out, _ = run_cgi(csp, "POST", "cmd=quickLift&payload=" + enc(QL_FULL), box=self.box, split=True)
+        head, _, body = out.partition("\n\n")
+        self.has("a command in the cart: the content policy the library queued is sent", head,
+                 "Content-Security-Policy: ")
+        self.eq("... the header ends with the JSON Content-Type", head.split("\n")[-1],
+                "Content-Type: application/json")
+        self.eq("... which is written once", out.count("Content-Type:"), 1)
+        self.has("... and the answer follows it", body[:16], '{"status":"ok"')
+
+    def test_a_library_warning_inside_a_conversion(self):
+        # The library warns when a session's custom tracks cannot be read;
+        # "ctTest" is its own switch for trying that.  The cart shell would
+        # write the warning to the browser as HTML.  It is caught with the
+        # command's aborts, and the answer is the JSON alone.
+        self.need("bedToBigBed")
+        os.makedirs(os.path.join(self.trash, "ct"))
+        with open(os.path.join(self.trash, "ct", "ct_test.bed"), "w"):
+            pass
+        out, _ = run_cgi(self.q, "POST", "cmd=quickLift&payload=%s&ctfile_hg38=%s&ctTest=1"
+                         % (enc(QL_FULL), enc("../trash/ct/ct_test.bed")), box=self.box, split=True)
+        head, _, body = out.partition("\n\n")
+        self.eq("a library warning inside a conversion: the header is still the JSON one",
+                head.split("\n")[-1], "Content-Type: application/json")
+        self.has("... the conversion is answered", body[:16], '{"status":"ok"')
+        self.lacks("... and no HTML comes with it", out, "<")
+
     def test_locus(self):
         # cmd=locus names the genes at each hit.  An interval far longer than
         # any sequence that can be mapped is not looked up: naming it means

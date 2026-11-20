@@ -188,9 +188,15 @@ return cfgOption("pangenome.pclaiRefPanel");
 /* ---- Answering -------------------------------------------------------------- */
 
 void emitJson(char *json)
-/* Write an application/json CGI response (no cart/HTML). */
+/* Write an application/json CGI response (no cart/HTML).
+ *
+ * The header goes out through cgiPrintContentType(), as every header in the
+ * tree does: it writes the lines the library has queued ahead of it - the
+ * content policy, for a command that runs in the cart - and it is how the
+ * library knows that the header is closed, so that nothing after this writes
+ * a second one into the body. */
 {
-printf("Content-Type: application/json\n\n");
+cgiPrintContentType("application/json");
 fputs(json, stdout);
 }
 
@@ -831,6 +837,16 @@ if (errCatch->gotError)
 errCatchFree(&errCatch);
 }
 
+static void pgWarnToLog(char *format, va_list args)
+/* A library warning while a command answers goes to the error log.  The cart
+ * shell's own handler writes it to the browser as HTML, which next to the
+ * JSON leaves an answer the page script cannot read. */
+{
+fputs("hgPangenome: ", stderr);
+vfprintf(stderr, format, args);
+fputc('\n', stderr);
+}
+
 void doMiddle(struct cart *theCart)
 /* Inside the cart: run the command main() chose, or write a page. */
 {
@@ -838,7 +854,11 @@ cart = theCart;
 
 if (cartCommand != NULL)
     {
+    /* What the command itself warns of is caught with its aborts, in
+     * pgRunCartCommand(); this is for the lines either side of that. */
+    pushWarnHandler(pgWarnToLog);
     pgRunCartCommand(cartCommand);
+    popWarnHandler();
     if (cartCommand->leavesCart)
         {
         fflush(stdout);
