@@ -36,6 +36,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 import urllib.parse
@@ -126,6 +127,39 @@ class Mock:
 
 
 MOCK = Mock()
+
+
+class Bottleneck:
+    """A stand-in for the bottleneck server.  It is sent one string a
+    connection, a length byte and then "who weight", and answers the same way
+    with the delay in milliseconds, which here is the one it was made with."""
+
+    def __init__(self, delay_ms):
+        self.asked = []
+        self.delay = str(delay_ms).encode()
+        self.sock = socket.socket()
+        self.sock.bind(("127.0.0.1", 0))
+        self.sock.listen(8)
+        self.port = self.sock.getsockname()[1]
+        threading.Thread(target=self.serve, daemon=True).start()
+
+    def serve(self):
+        while True:
+            try:
+                conn, _ = self.sock.accept()
+            except OSError:
+                return
+            with conn:
+                size = conn.recv(1)
+                if size:
+                    self.asked.append(conn.recv(size[0]).decode("utf8", "replace"))
+                    conn.sendall(bytes([len(self.delay)]) + self.delay)
+
+    def conf(self, name):
+        return mock_conf(name, "bottleneck.host=127.0.0.1", "bottleneck.port=%d" % self.port)
+
+    def close(self):
+        self.sock.close()
 
 
 def cleanup():
@@ -512,6 +546,22 @@ class GraphServerFailures(CgiTest):
         self.has("a long JSON upstream error is still an error envelope", out,
                  '{"status":"error","error":"mapping server returned HTTP 500')
         self.lacks("... and quotes only the first part", out, "x" * 500)
+        # The cut is at 400 bytes.  A letter that takes two bytes, lying across
+        # it, is left out whole: half of one is not text.
+        accented = chr(233)
+        out = self.answer("--status", "500", "--body", '{"error":"' + "x" * 389 + accented * 20 + '"}')
+        self.lacks("... and does not cut a letter of two bytes in half", out, chr(0xFFFD))
+        self.has("... the letters before the cut are quoted", out, "x" * 389)
+        # What is quoted is the graph server's own text.  A control character
+        # in it would be one inside our answer, which is then not JSON.
+        out = self.answer("--status", "500", "--body", '{"error":"a' + chr(1) + 'b"}')
+        body = out[out.index("{"):] if "{" in out else ""
+        try:
+            said = json.loads(body).get("error", "")
+        except ValueError:
+            said = "not JSON: " + repr(body[:90])
+        self.eq("... and a control character in it is not passed on", said,
+                'mapping server returned HTTP 500: {"error":"a b"}')
 
     def test_an_answer_that_is_not_json(self):
         out = self.answer("--status", "200", "--content-type", "text/plain", "--body", "this is not json")
@@ -531,6 +581,15 @@ class GraphServerFailures(CgiTest):
                  "could not reach mapping server")
 
     def test_no_address(self):
+        # an address that is not a web address is no address: the library that
+        # fetches it would read a file as readily
+        known = os.path.join(TMP, "notAnAddress.txt")
+        with open(known, "w") as fh:
+            fh.write("the text of a file on this server\n")
+        out = get(conf("file.conf", "pangenome.apiBase=file://" + os.path.dirname(known)), "cmd=haplotypes")
+        self.has("an apiBase that is not http or https is not used", out, "apiBase is not configured")
+        out = post(conf("file2.conf", "pangenome.apiBase=file://" + known + "?"), "map", ONE_SEQ)
+        self.lacks("... and no file is read through it", out, "the text of a file")
         noapi = conf("noapi.conf")
         self.has("missing apiBase reported", post(noapi, "map", ONE_SEQ), "apiBase is not configured")
         self.has("missing apiBase reported on poll too", get(noapi, "cmd=poll&job_id=job1"),
@@ -588,10 +647,40 @@ class RateLimit(CgiTest):
         self.has("cmd=surjectAll consults the bottleneck server", out, "rate limiter unavailable")
         self.eq("... and is not forwarded when the check cannot be made", MOCK.count(), 0)
 
-    def test_polling_does_not_ask(self):
-        out = get(self.bot, "cmd=poll&job_id=job1")
-        self.lacks("cmd=poll does not consult the bottleneck server", out, "bottleneck")
-        self.has("cmd=poll still works while bot check is unreachable", out, '"status": "done"')
+    def test_the_light_commands_are_answered_without_it(self):
+        # A read that costs little is weighed too, but is not refused because
+        # the bottleneck server is down: a page waiting for its job would lose
+        # it over a failure that is not the reader's.
+        out, log = get(self.bot, "cmd=poll&job_id=job1", split=True)
+        self.has("cmd=poll consults the bottleneck server", log, "bot check failed")
+        self.has("... and is answered when it cannot be reached", out, '"status": "done"')
+        self.has("cmd=haplotypes is answered too", get(self.bot, "cmd=haplotypes"), '"haplotypes"')
+        self.has("... and cmd=pclai", post(self.bot, "pclai", '{"spots":[]}'), '"status":"ok"')
+        self.has("... and cmd=contigs, as far as its own complaint", get(self.bot, "cmd=contigs"),
+                 "missing or malformed assembly")
+
+    def test_what_each_command_weighs(self):
+        asks = (("poll", lambda cf: get(cf, "cmd=poll&job_id=job1")),
+                ("haplotypes", lambda cf: get(cf, "cmd=haplotypes")),
+                ("contigs", lambda cf: get(cf, "cmd=contigs")),
+                ("pclai", lambda cf: post(cf, "pclai", '{"spots":[]}')),
+                ("locus", lambda cf: post(cf, "locus", '{"items":[]}')),
+                ("map", lambda cf: post(cf, "map", ONE_SEQ)))
+        quiet = Bottleneck(0)
+        for _, ask in asks:
+            ask(quiet.conf("quiet.conf"))
+        quiet.close()
+        self.eq("each command is weighed: the poll least, a read that costs little a quarter",
+                " ".join("%s %g" % (name, float(sent.split()[-1])) for (name, _), sent in zip(asks, quiet.asked)),
+                "poll 0.05 haplotypes 0.25 contigs 0.25 pclai 0.25 locus 0.5 map 1")
+        # 30 s of delay owed: past the 20 s at which a request is refused
+        busy = Bottleneck(30000)
+        MOCK.clear()
+        refused = [name for name, ask in asks if "429 Too Many Requests" in ask(busy.conf("busy.conf"))]
+        busy.close()
+        self.eq("a reader far over the limit is refused every one of them", " ".join(refused),
+                " ".join(name for name, _ in asks))
+        self.eq("... and nothing is sent to the graph server", MOCK.count(), 0)
 
 
 # =================================================================== the commands
@@ -1006,6 +1095,14 @@ class CartCommands(CgiTest):
                            '{"contig":"noSuchSeq","start":1,"strand":"+","cigar":"40M"}]'))
         self.eq("alignTrack: the other hits on the haplotype are in the track, sorted",
                 " ".join("%s:%s" % (r[0], r[1]) for r in rows), "chr1:100 chr1:11000 chr2:500")
+        # ... the first fifty of them, whether they fit this assembly or not:
+        # one that does not fit costs as much to find out as one that does
+        misfit = '{"contig":"noSuchSeq","start":1,"strand":"+","cigar":"40M"}'
+        fits = '{"contig":"chr1","start":100,"strand":"+","cigar":"40M"}'
+        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * 49 + [fits])))
+        self.eq("alignTrack: the fiftieth other hit is looked at", len(rows), 2)
+        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * 50 + [fits])))
+        self.eq("... and the fifty-first is not, whatever became of the fifty", len(rows), 1)
         # the CIGAR is input: anything odd is refused
         for bad in ["-5M45M", "10M30Z", "40", "M", "99999999999M", "50M", "10M 30S", "40S"]:
             self.has("alignTrack: CIGAR '%s' refused" % bad, at('"cigar":"%s","strand":"+"' % bad),

@@ -317,7 +317,7 @@ if (isEmpty(seq))
     return FALSE;
 for (p = seq; *p != '\0'; ++p)
     {
-    char c = toupper(*p);
+    char c = toupper((unsigned char)*p);
     if (c != 'A' && c != 'C' && c != 'G' && c != 'T' && c != 'N')
         return FALSE;
     }
@@ -530,7 +530,9 @@ if (othersEl != NULL && othersEl->type == jsonList)
     {
     struct slRef *ref;
     int n = 0;
-    for (ref = othersEl->val.jeList; ref != NULL && n < PG_MAX_OTHER_HITS; ref = ref->next)
+    /* The limit is on how many are looked at, not on how many fit: each one
+     * that does not fit costs as much to find out as one that does. */
+    for (ref = othersEl->val.jeList; ref != NULL && n < PG_MAX_OTHER_HITS; ref = ref->next, ++n)
         {
         struct jsonElement *o = ref->val;
         if (o->type != jsonObject)
@@ -545,11 +547,10 @@ if (othersEl != NULL && othersEl->type == jsonList)
             oStart->val.jeNumber < 0 || oStart->val.jeNumber >= oSize)
             continue;
         char *oErr = NULL;
-        if (pgWritePsl(pslTn.forCgi, TRUE, name, strlen(seq), oCigar, oContig, oSize,
-                       (int)oStart->val.jeNumber, (oStrand[0] == '-') ? '-' : '+',
-                       pgCountField(o, "matches"), pgCountField(o, "mismatches"),
-                       NULL, &oErr))
-            ++n;
+        pgWritePsl(pslTn.forCgi, TRUE, name, strlen(seq), oCigar, oContig, oSize,
+                   (int)oStart->val.jeNumber, (oStrand[0] == '-') ? '-' : '+',
+                   pgCountField(o, "matches"), pgCountField(o, "mismatches"),
+                   NULL, &oErr);
         }
     }
 

@@ -9,6 +9,8 @@
  *
  * Copyright (C) 2026 The Regents of the University of California */
 
+/* global window, document, fetch, URL, Blob, Promise */
+
 (function () {
 'use strict';
 
@@ -44,6 +46,8 @@ function clear(node) {
 
 // ---- text --------------------------------------------------------------------
 
+// As htmlEncode() in utils.js, which is on every page this is.  Written here
+// so that this file leans on no other script, and the tests can load it alone.
 function esc(s) {
     return String(s === null || s === undefined ? "" : s).replace(/[&<>"']/g, function (c) {
         return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
@@ -113,13 +117,24 @@ function formEncode(obj) {
 
 // POST cmd=<cmd>&payload=<json>.  With hgsid for a command that writes to the
 // reader's own session.
+// The most a request may be, as it is sent.  The web server's CGI library
+// refuses a body over 1,048,576 bytes with an HTML page, before this CGI is
+// run; the CGI's own limit is on the payload once decoded, and a payload
+// under it can be over this one, each quote and brace being three bytes here.
+var MAX_POST_BYTES = 1000000;
+
 function post(cmd, payload, hgsid) {
     var fields = { cmd: cmd, payload: JSON.stringify(payload) };
     if (hgsid) { fields.hgsid = hgsid; }
+    var body = formEncode(fields);
+    if (body.length > MAX_POST_BYTES) {
+        return Promise.reject(new Error("the request is too large: " + commas(body.length) +
+                                        " bytes (limit " + commas(MAX_POST_BYTES) + ")"));
+    }
     return fetch(window.location.pathname, {
         method: "POST",
         headers: { "Content-Type": "application/x-www-form-urlencoded", Accept: "application/json" },
-        body: formEncode(fields)
+        body: body
     });
 }
 
@@ -156,7 +171,9 @@ function saveFile(text, fileName, mime) {
     document.body.appendChild(a);
     a.click();
     document.body.removeChild(a);
-    setTimeout(function () { URL.revokeObjectURL(a.href); }, 0);
+    // Let go of the file a minute later, not at once: the browser may not have
+    // started reading it yet, and a large download then stops short.
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
 }
 
 // Rows per page in a table: the reader's last choice on either tool, else 50.

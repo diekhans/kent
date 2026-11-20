@@ -587,6 +587,9 @@ if (errCatchStart(errCatch))
                 sEl == NULL || eEl == NULL ||
                 sEl->type != jsonNumber || eEl->type != jsonNumber)
                 continue;
+            /* Counted here, before it is known whether it can be read: the
+             * page says "N of M placed", and M is the rows it sent.  Counted
+             * only once read, a row that cannot be would drop out of both. */
             asked++;
             /* Tested as the numbers they came as.  Narrowed to an int first, one
              * past what an int holds turns into a value that passes. */

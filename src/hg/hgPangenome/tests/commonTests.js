@@ -175,6 +175,31 @@ await t.test('with the session when the command writes to it', function () {
     C.post('refAnnot', {}, '123_abc');
     t.eq(calls[0].opts.body, 'cmd=refAnnot&payload=%7B%7D&hgsid=123_abc', 'hgsid last');
 });
+await t.test('a request too large to send is refused on the page, with the sizes', async function () {
+    // Over a megabyte the web server's library answers with an HTML page
+    // before the CGI is run.  Quotes and braces count three bytes each here.
+    calls.length = 0;
+    var said = null;
+    await C.post('map', { sequences: new Array(40001).join('{"a":"b"},') }).then(function () { said = 'sent'; },
+                                                                                function (err) { said = err.message; });
+    t.contains(said || '', 'the request is too large', 'refused');
+    t.contains(said || '', '(limit 1,000,000)', 'with the limit');
+    t.eq(calls.length, 0, 'and not sent');
+    await C.post('map', { sequences: new Array(40001).join('ACGTACGTAC') }).then(function () { said = 'sent'; },
+                                                                              function (err) { said = err.message; });
+    t.eq(said, 'sent', '400 kb of plain bases goes');
+});
+await t.test('a saved file is let go of later, not at once', function () {
+    var revoked = 0, waits = [];
+    page.sandbox.URL = { createObjectURL: function () { return 'blob:test'; },
+                         revokeObjectURL: function () { revoked++; } };
+    var timeout = page.sandbox.setTimeout;
+    page.sandbox.setTimeout = function (fn, ms) { waits.push(ms); };
+    C.saveFile('a\tb\n', 'table.tsv', 'text/tab-separated-values');
+    page.sandbox.setTimeout = timeout;
+    t.eq(revoked, 0, 'not while the browser may only be starting on it');
+    t.ok(waits[0] >= 10000, 'some time after (' + waits[0] + ' ms)');
+});
 await t.test('a query is a GET on the same address', function () {
     calls.length = 0;
     C.get('cmd=poll&job_id=j1');

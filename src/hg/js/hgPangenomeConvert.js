@@ -23,7 +23,7 @@
  * token stay server-side.  The helpers named pg.* are hgPangenomeCommon.js;
  * the ancestry plot is hgPangenomePclai.js.
  */
-/* global window, document, pangenomePclai */
+/* global window, document, pangenomePclai, navigator, Blob, module */
 
 (function () {
 'use strict';
@@ -348,10 +348,10 @@ function hideTargetTracks() {
 //
 // It has to be sendBeacon rather than fetch.  This runs immediately before
 // navigating away, and the browser cancels in-flight fetches when the page
-// goes; a beacon is guaranteed to be delivered.  That is also why the payload
-// leaves out the blocks - the server fetches its own, and beacons are size
-// limited.  Nothing waits for the reply, and the browser picks the new chain
-// up on the next pan without a reload.
+// goes; a beacon is guaranteed to be delivered.  The payload carries no
+// blocks: the server fetches its own, and beacons are size limited.  Nothing
+// waits for the reply, and the browser picks the new chain up on the next pan
+// without a reload.
 function requestWiderChain(base) {
     /* typeof, not a plain test: where navigator is absent altogether naming it
      * throws rather than reading as false, and this runs on the way out of the
@@ -359,11 +359,7 @@ function requestWiderChain(base) {
     if (typeof navigator === "undefined" || !navigator.sendBeacon ||
         typeof Blob === "undefined")
         return;
-    var lean = {};
-    Object.keys(base).forEach(function (k) {
-        if (k !== "blocks") lean[k] = base[k];
-    });
-    var fields = { cmd: "extendChain", payload: JSON.stringify(lean) };
+    var fields = { cmd: "extendChain", payload: JSON.stringify(base) };
     if (CFG.hgsid)
         fields.hgsid = CFG.hgsid;
     try {
@@ -1217,8 +1213,9 @@ var hapExactByLower = null;
 var reachable = null;          // lower name -> coverage (or null), else not filtered
 var reachableScored = false;   // true when the server ranked them
 // What the graph last said for this source region.  Kept so that turning the
-// filter off and on again does not ask a second time; cleared whenever the
-// region changes, because then it is an answer to a different question.
+// filter off and on again does not ask a second time.  Never cleared: the
+// source region is written once, by the CGI, and cannot change on the page.
+// If it ever can, this has to be let go when it does.
 var reachableCache = null;
 var reachableCacheScored = false;
 var reachSeq = 0;              // the question whose answer the filter waits for: see askReachable()

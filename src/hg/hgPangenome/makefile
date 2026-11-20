@@ -14,3 +14,8 @@ include ../../inc/cgi_build_rules.mk
 compile: $O
 	${CC} $O ${MYLIBS} ${L}
 	mv ${AOUT} $A${EXE}
+
+# "make test" here runs the suite in tests/, which builds the CGI from this
+# tree and removes it again.  See tests/README.
+test::
+	cd tests && ${MAKE} test

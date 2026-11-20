@@ -113,6 +113,13 @@ char *pgApiBase()
 char *base = cloneString(cfgOptionDefault("pangenome.apiBase", ""));
 if (isEmpty(base))
     return NULL;
+/* The library that fetches it reads other kinds of address too: a mistyped
+ * file:///... would be read and its text quoted in an error. */
+if (!startsWith("http://", base) && !startsWith("https://", base))
+    {
+    fprintf(stderr, "hgPangenome: pangenome.apiBase is not an http or https address, and is not used\n");
+    return NULL;
+    }
 if (endsWith(base, "/"))
     base[strlen(base) - 1] = '\0';
 return base;
@@ -255,6 +262,12 @@ va_start(args, fmt);
 struct dyString *dy = dyStringNew(256);
 dyStringVaPrintf(dy, fmt, args);
 va_end(args);
+/* The text can quote what the request sent.  A control character is not one
+ * that jsonStringEscape() escapes, and left in, the answer is not JSON. */
+char *p;
+for (p = dy->string; *p != '\0'; ++p)
+    if ((unsigned char)*p < 0x20)
+        *p = ' ';
 struct dyString *out = dyStringNew(300);
 dyStringPrintf(out, "{\"status\":\"error\",\"error\":\"%s\"}", jsonStringEscape(dy->string));
 emitJson(out->string);
@@ -577,8 +590,10 @@ char *backPos = cartOptionalString(cart, "position");
 char *backDb = cartOptionalString(cart, "db");
 if (!isEmpty(backPos) && !isEmpty(backDb))
     {
+    /* Encoded: the value is the cart's, and an & or # in it would end the
+     * parameter there and send the link somewhere else. */
     jsonWriteStringf(jw, "backUrl", "hgTracks?db=%s&%s=%s",
-                     backDb, cartSessionVarName(), cartSessionId(cart));
+                     cgiEncode(backDb), cartSessionVarName(), cartSessionId(cart));
     jsonWriteString(jw, "backPos", backPos);
     }
 }
@@ -805,17 +820,26 @@ struct pgCommand
     {
     char *name;                 /* the value of "cmd" */
     void (*answer)(void);       /* writes the whole response */
-    double botWeight;           /* weight with the bottleneck server; 0: not rate limited */
+    double botWeight;           /* weight with the bottleneck server */
     boolean inCart;             /* runs inside the cart shell */
     boolean leavesCart;         /* ... and exits without saving the cart */
     };
 
 /* Rate limiting is the UCSC bottleneck server's, as hgBlat uses it.  Work the
  * graph server does costs seconds, so it carries the full weight where hgBlat
- * carries half.  Reads that cost it nothing are not limited: a job is polled
- * many times, and limiting that would punish the reader for waiting. */
+ * carries half.
+ *
+ * A read that costs little still counts a little: with no weight at all, a
+ * loop of cmd=haplotypes was a way to open any number of connections to the
+ * graph server at once.  A job is polled every second or two for as long as
+ * it runs, so a poll counts least; at that rate it adds up to nothing, and a
+ * loop of them still does.  These light commands are answered when the
+ * bottleneck server cannot be reached, where the heavy ones are refused: a
+ * page that is waiting for a job is not to lose it over a failure of ours. */
 #define PG_FULL_WEIGHT 1.0
 #define PG_HALF_WEIGHT 0.5
+#define PG_LIGHT_WEIGHT 0.25
+#define PG_POLL_WEIGHT 0.05
 
 static struct pgCommand commands[] = {
     /* forwarded to the graph server (proxy.c).  cmd=surjectAll is the heaviest
@@ -824,8 +848,8 @@ static struct pgCommand commands[] = {
      * reload a large results page several times over without being slowed,
      * and a loop of them is still stopped. */
     {"map",             doMap,             PG_FULL_WEIGHT, FALSE, FALSE},
-    {"poll",            doPoll,            0,              FALSE, FALSE},
-    {"haplotypes",      doHaplotypes,      0,              FALSE, FALSE},
+    {"poll",            doPoll,            PG_POLL_WEIGHT, FALSE, FALSE},
+    {"haplotypes",      doHaplotypes,      PG_LIGHT_WEIGHT, FALSE, FALSE},
     {"liftoverTargets", doLiftoverTargets, PG_FULL_WEIGHT, FALSE, FALSE},
     {"liftoverAll",     doLiftoverAll,     PG_FULL_WEIGHT, FALSE, FALSE},
     {"surject",         doSurject,         PG_FULL_WEIGHT, FALSE, FALSE},
@@ -834,8 +858,8 @@ static struct pgCommand commands[] = {
      * these whenever what they show changes.  cmd=locus is asked once for each
      * page of the results table and reads gene files for up to 200 rows, so it
      * is limited at the weight hgBlat and hgc carry. */
-    {"contigs",         doContigs,         0,              FALSE, FALSE},
-    {"pclai",           doPclai,           0,              FALSE, FALSE},
+    {"contigs",         doContigs,         PG_LIGHT_WEIGHT, FALSE, FALSE},
+    {"pclai",           doPclai,           PG_LIGHT_WEIGHT, FALSE, FALSE},
     {"locus",           doLocus,           PG_HALF_WEIGHT, FALSE, FALSE},
     /* building a hub or a custom track, which needs the cart (liftedTracks.c,
      * seqTrack.c).  cmd=extendChain is sent after the reader has followed the
@@ -938,9 +962,10 @@ else
     pageForm();
 }
 
-static boolean pgBotCheck(long enteredMainTime, double weight)
+static boolean pgBotCheck(long enteredMainTime, double weight, boolean serveOnFailure)
 /* The bottleneck server's rate limit for one command.  FALSE when the request
- * has been answered already and the caller should stop.
+ * has been answered already and the caller should stop.  With serveOnFailure,
+ * a check that cannot be made is noted in the error log and the command runs.
  *
  * If the bottleneck server itself is unreachable, botDelay errAborts, which
  * would send an HTML 500 down a JSON endpoint (the client would show raw
@@ -959,7 +984,10 @@ if (!ok)
      * to the browser. */
     fprintf(stderr, "hgPangenome: bot check failed: %s\n",
             trimSpaces(errCatch->message->string));
-    emitJsonError("rate limiter unavailable, please try again in a moment");
+    if (serveOnFailure)
+        ok = TRUE;
+    else
+        emitJsonError("rate limiter unavailable, please try again in a moment");
     }
 errCatchFree(&errCatch);
 return ok;
@@ -1009,7 +1037,8 @@ if (command == NULL)
     emitJsonError("unknown command '%.40s'", cmd);
     return 0;
     }
-if (command->botWeight > 0 && !pgBotCheck(enteredMainTime, command->botWeight))
+if (command->botWeight > 0 &&
+    !pgBotCheck(enteredMainTime, command->botWeight, command->botWeight < PG_HALF_WEIGHT))
     return 0;
 if (command->inCart)
     {

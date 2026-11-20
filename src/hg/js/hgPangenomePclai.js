@@ -22,7 +22,7 @@
  *
  * Copyright (C) 2026 The Regents of the University of California */
 
-/* global window, document, pangenomePclaiMinCoverage */
+/* global window, document, pangenomePclaiMinCoverage, Promise, Infinity */
 
 (function () {
 'use strict';
@@ -400,7 +400,7 @@ function pgpAttachHover(wrap) {
     if (!wrap) { return; }
     var tip = document.createElement("div");
     tip.style.cssText = "position:absolute;display:none;pointer-events:none;" +
-        "background:#ffffe0;border:1px solid #999;padding:3px 6px;font-size:11px;" +
+        "background:#ffffe0;border:1px solid #999;padding:3px 6px;font-size:13px;" +
         "line-height:1.45;white-space:nowrap;z-index:10;" +
         "box-shadow:1px 1px 3px rgba(0,0,0,0.25)";
     wrap.appendChild(tip);
@@ -518,7 +518,7 @@ function pgpTipHtml(m) {
                " \u2014 click to list them</span>";
     }
     var out = "<b>" + pg.esc(m.name) + "</b><br>" + coord +
-              '<br><span style="color:#5b6572">pcLAI confidence ' + m.conf +
+              '<br><span style="color:#5b6572">pcLAI confidence ' + pg.esc(m.conf) +
               "/1000</span>";
     if (m.spot) {
         // Where this haplotype was read, which is its own match and not a
@@ -625,7 +625,7 @@ function pgpDraw() {
         return;
     }
     if (!pts.length) {
-        host.innerHTML = "<p>None of these " + pgpData.asked + " haplotypes " +
+        host.innerHTML = "<p>None of these " + pg.esc(pgpData.asked) + " haplotypes " +
             "has a pcLAI window where the query matched it. pcLAI windows " +
             "follow SNPs, so regions without them - centromeres and other " +
             "repeat-rich sequence - are not covered.</p>";
@@ -645,7 +645,7 @@ function pgpDraw() {
     o.push('<text x="' + PGP_L + '" y="41" font-size="11.5" fill="#5b6572">' +
            (dropped ? pts.length + ' of ' + all.length + ' plotted, ' + dropped +
                       ' filtered out'
-                    : pts.length + ' of ' + pgpData.asked + ' ' + pgpLegend.many +
+                    : pts.length + ' of ' + pg.esc(pgpData.asked) + ' ' + pg.esc(pgpLegend.many) +
                       ' placed') + '</text>');
     // Dispersion: how far apart the hits are, against the reference panel as a
     // yardstick.  Tight means the sequence sits in one part of the space;
@@ -883,7 +883,7 @@ function pgpControlsHtml(shown, total, dropped) {
                dropped + ' filtered out (still listed in the table)</span>');
     }
     if (pgpData && pgpData.failed) {
-        o.push('<span class="pgpCtlNote">' + pgpData.failed + ' ' + pg.esc(pgpLegend.many) +
+        o.push('<span class="pgpCtlNote">' + pg.esc(pgpData.failed) + ' ' + pg.esc(pgpLegend.many) +
                ' could not be read and are not plotted</span>');
     }
     o.push('</div>');
@@ -956,7 +956,7 @@ function pgpDetailHtml() {
     if (point !== null) {
         tile("Position", pgpSwatch(point) + "PC1 " + pgpFmtNum(point.x) + ", PC2 " +
                          pgpFmtNum(point.y));
-        tile("Confidence", point.conf + "/1000");
+        tile("Confidence", pg.esc(point.conf) + "/1000");
         // Where the region is long enough to cross windows, how far apart
         // they are: one position for the whole of it, or several.
         var wins = pgpWindows[pgpSelected];
@@ -986,9 +986,9 @@ function pgpDetailHtml() {
     // click delegation - the plot does not need to know how a lift is armed.
     if (spot && spot.rank != null) {
         o.push('<div class="pgrDetailActions">' +
-               '<a class="gbPill primary" href="#" data-rank="' + spot.rank +
+               '<a class="gbPill primary" href="#" data-rank="' + pg.esc(spot.rank) +
                '" data-act="browser">View in Genome Browser</a>' +
-               '<a class="gbPill" href="#" data-rank="' + spot.rank +
+               '<a class="gbPill" href="#" data-rank="' + pg.esc(spot.rank) +
                '" data-act="details">Alignment</a>' +
                ((pgpSelGroup !== null && pgpSelGroup.length > 1) ?
                 '<a class="gbPill" href="#" data-pgp-hap="">\u2039 The ' +

@@ -458,6 +458,20 @@ static boolean pgWentWell(struct pgResp *r)
 return !r->busy && !r->transportErr && r->code < 300;
 }
 
+static int pgWholeChars(char *s, int max)
+/* How many bytes of s to quote, max at most, without cutting a character that
+ * takes several bytes in two: half of one is not text, and the answer it is
+ * quoted in would not read as JSON. */
+{
+int n = strlen(s);
+if (n <= max)
+    return n;
+n = max;
+while (n > 0 && ((unsigned char)s[n] & 0xC0) == 0x80)   /* the next byte carries on a character */
+    n--;
+return n;
+}
+
 static void pgAnswer(struct pgResp *r)
 /* Answer with what the graph server said, word for word, or with why it could
  * not be asked.  Frees the response. */
@@ -478,9 +492,9 @@ else if (r->code >= 400)
     char *body = skipLeadingSpaces(r->body->string);
     if (body[0] == '{' || body[0] == '[')
         {
-        /* The first part only.  The precision does the cutting: safef() into
-         * a fixed buffer aborts the CGI when the text does not fit. */
-        emitJsonError("mapping server returned HTTP %ld: %.400s", r->code, body);
+        /* The first part only: an error body can be a page long. */
+        emitJsonError("mapping server returned HTTP %ld: %.*s", r->code,
+                      pgWholeChars(body, 400), body);
         }
     else if (r->code == 503)
         emitJsonError("the mapping service is unavailable (HTTP 503) - it may be "

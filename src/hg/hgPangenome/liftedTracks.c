@@ -443,7 +443,9 @@ for (b = blocks; b != NULL; b = b->next)
         }
     if (differentString(display, b->contig))
         {
-        /* Carry the size across under the new name before the old one goes. */
+        /* The size is listed under the new name as well.  The old name stays
+         * in the list, which harms nothing: bedToBigBed wants a size for
+         * every name in the chain, and takes no notice of the rest. */
         int size = hashIntValDefault(*pSizes, b->contig, 0);
         if (size > 0 && hashLookup(*pSizes, display) == NULL)
             hashAddInt(*pSizes, display, size);
@@ -1089,7 +1091,8 @@ if (span <= 0)
  * quite different at either end of the zoom range. */
 if (!wide)
     {
-    long proportional = span * 5;
+    /* Not span * 5 for any span: the product of a very long one does not fit. */
+    long proportional = (span > PG_CHAIN_PAD_NEAR_MAX) ? PG_CHAIN_PAD_NEAR_MAX : span * 5;
     if (proportional > pad)
         pad = proportional;
     if (pad > PG_CHAIN_PAD_NEAR_MAX)
@@ -1520,11 +1523,6 @@ for (blk = blocks; blk != NULL; blk = blk->next)
     if (own != NULL)
         blk->contig = own;
     }
-/* Note: the target's sequences are kept under the accessions the graph uses.
- * Even where an assembly hub sets "chromAuthority ucsc" - so the browser
- * *labels* CM094399.1 as chr9 - hgTracks still queries tracks under the
- * accession, and a chain written with the display names is never found. */
-
 /* Chain files.  The .bb / .link.bb pairing is not a convention we can choose:
  * bigChainGetLinkFile() derives the link name from the chain name. */
 struct tempName chainTn, chainBedTn, linkBedTn, chainAsTn, linkAsTn;

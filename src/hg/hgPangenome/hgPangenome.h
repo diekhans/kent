@@ -137,7 +137,11 @@ void emitJson(char *json);
 /* Write an application/json CGI response (no cart/HTML), its header through
  * cgiPrintContentType(). */
 
-void emitJsonError(char *fmt, ...);
+void emitJsonError(char *fmt, ...)
+#if defined(__GNUC__)
+__attribute__((format(printf, 1, 2)))
+#endif
+;
 /* Emit a {"status":"error","error":"..."} body the JS client understands. */
 
 boolean pgValidDb(char *db);
@@ -318,7 +322,9 @@ void doLocus(void);
  * answers {"status":"ok","loci":["exon ATAD3B", null, ...]}, null where there
  * is nothing to say - a hub assembly, or no genes near enough.  A gene file is
  * opened once per assembly in the request; the database is read over one
- * connection, moved from assembly to assembly. */
+ * connection, moved from assembly to assembly.  At most 200 intervals are
+ * answered, a page of the results table, which is as many as the page sends;
+ * any after those are left off the end of the list. */
 
 void doPclai(void);
 /* Ancestry coordinates for a list of haplotypes, each read at its own

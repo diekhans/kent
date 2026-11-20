@@ -22,7 +22,7 @@
 .hgPangenomeTable td { padding: 4px 8px; vertical-align: top; }
 .hgPangenomeTable textarea {
     width: 100%; box-sizing: border-box;
-    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 0.8em;
+    font-family: Monaco, 'andale mono', 'lucida console', monospace; font-size: 13px;
 }
 
 .pgResults { max-width: 1000px; }
@@ -51,7 +51,7 @@
 /* ---- Plain UCSC-blue text buttons ("Retry") ---- */
 
 .pgDlBtn {
-    font: inherit; font-size: 0.85em; color: #121E9A; background: none; border: none;
+    font: inherit; font-size: 13px; color: #121E9A; background: none; border: none;
     padding: 0 8px 0 0; cursor: pointer; text-decoration: underline;
 }
 .pgDlBtn:hover { color: #aa3333; }
@@ -172,7 +172,7 @@
 #pgrTable td.popCol { white-space:normal; min-width:12em; line-height:1.3; }
 #pgrTable td.locusCol { white-space:normal; min-width:7em; line-height:1.3; }
 #pgrTable thead th { background:var(--headrow); border-bottom:1px solid var(--headrowLine);
-    font-size:12px; color:var(--navy); font-weight:700; padding:8px 6px; white-space:nowrap; }
+    font-size:13px; color:var(--navy); font-weight:700; padding:8px 6px; white-space:nowrap; }
 /* As in hgBlat.css: the th background above wipes out DataTables' sort-arrow
  * images, so sortable columns get a text triangle - grey while unsorted, navy
  * and pointing the right way once sorted by that column. */
@@ -292,7 +292,7 @@
 .pgcAllBtn:hover, .pgcAllBtn:focus-visible { text-decoration: underline; outline: none; }
 .pgcPopsList, .pgcHapsList { flex: 1 1 auto; overflow-y: auto; }
 .pgcPop { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
-    background: none; border: 0; padding: 4px 10px; font: inherit; font-size: 0.85em;
+    background: none; border: 0; padding: 4px 10px; font: inherit; font-size: 13px;
     color: #1e2833; cursor: pointer; }
 .pgcPop:hover { background: #eceff3; }
 .pgcPop:focus-visible { outline: 2px solid #003a72; outline-offset: -2px; }
@@ -305,7 +305,7 @@
 .pgcHapsList { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
     align-content: start; gap: 1px 4px; padding: 6px 8px; }
 .pgcHap { display: flex; align-items: center; gap: 6px; padding: 3px 4px; border-radius: 3px;
-    font-size: 0.85em; cursor: pointer; white-space: nowrap; }
+    font-size: 13px; cursor: pointer; white-space: nowrap; }
 .pgcHap:hover { background: #f0f3f7; }
 .pgcHap.on { background: #e8f0fa; }
 .pgcHap input { margin: 0; }
@@ -385,7 +385,7 @@
 #pgcTable { font-size:13px; width:100%; border-collapse:collapse; }
 #pgcTable td.posCol { white-space:nowrap; }
 #pgcTable thead th { background:var(--headrow); border-bottom:1px solid var(--headrowLine);
-    font-size:12px; color:var(--navy); font-weight:700; padding:8px 12px; white-space:nowrap; }
+    font-size:13px; color:var(--navy); font-weight:700; padding:8px 12px; white-space:nowrap; }
 #pgcTable thead th.sorting::after, #pgcTable thead th.sorting_asc::after,
 #pgcTable thead th.sorting_desc::after { content:"\25BE"; margin-left:5px; color:var(--muted); }
 #pgcTable thead th.sorting_asc::after { content:"\25B4"; color:var(--navy); }
@@ -454,7 +454,7 @@ svg.pgcHist .bar rect.hit { fill:transparent; }
 svg.pgcHist .bar { cursor:pointer; outline:none; }
 svg.pgcHist .bar:hover rect:not(.hit), svg.pgcHist .bar:focus rect:not(.hit) { fill:var(--navy); }
 .pgcPopScroll { max-height:250px; overflow:auto; border:1px solid var(--lineSoft); }
-.pgcPopTable { width:100%; border-collapse:collapse; font-size:12px; }
+.pgcPopTable { width:100%; border-collapse:collapse; font-size:13px; }
 .pgcPopTable th { position:sticky; top:0; background:var(--headrow); text-align:left;
     font-weight:700; color:var(--ink); padding:4px 6px; border-bottom:1px solid var(--headrowLine); }
 .pgcPopTable td { padding:3px 6px; border-bottom:1px solid var(--lineSoft); }

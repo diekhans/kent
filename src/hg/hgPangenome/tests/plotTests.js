@@ -159,6 +159,14 @@ await t.test('the plot says how many it is missing', function () {
     x.pgpData = { status: 'ok' };
     t.notOk(/could not be read/.test(x.pgpControlsHtml(150, 150, 0)), 'and nothing when all were');
 });
+await t.test('a count from the server is written as text, whatever it holds', function () {
+    var x = loadPlot();
+    x.pgpInit(spots(3), { legend: { many: 'regions' }, fresh: true });
+    x.pgpData = { status: 'ok', failed: '<img src=x>' };
+    var html = x.pgpControlsHtml(150, 150, 0);
+    t.notOk(/<img/.test(html), 'no markup of its own');
+    t.contains(html, '&lt;img src=x&gt; regions could not be read', 'shown as it came');
+});
 
 t.suite('a new set of regions');
 await t.test('nothing opened or read for the last one is kept', function () {

@@ -22,7 +22,7 @@
 /* global window, document, jQuery, pangenomeJobId, pangenomeConfig, pangenomePclai */
 /* global pangenomeSurjectTop, pangenomeSurjectMax, pangenomePlaceAllAtLoad */
 /* global pangenomeMinCoverage, pangenomeShowCoverage, pangenomeResultsPage */
-/* global navigator, copyButtonSaysCopied */
+/* global navigator, copyButtonSaysCopied, Promise */
 
 (function () {
 'use strict';
@@ -803,10 +803,9 @@ function pgrAct(row, what, link) {
     var plain = what === "plain";
     if (plain) { what = "browser"; }
     var ref = (what === "details" || plain) ? null : pgrAnnotFor(row);
-    // Only the link that is about to sit there waiting says so.  "new tab" is
-    // never touched: its label carries the little new-tab icon as an <svg>, and
-    // restoring it through textContent would write back the plain words and
-    // take the icon with it - the row then no longer lines up with the others.
+    // Only the link that is about to sit there waiting says so.  The new-tab
+    // link is never touched: it has no words, only an icon the style sheet
+    // draws, and words written into it would push the row out of line.
     var busy = !!link && what !== "newtab";
     // A link already waiting is left to it.  A second click would take
     // "opening..." for the link's own words and put that back in their place.
@@ -2126,7 +2125,7 @@ function pgrStart() {
     var job = pgrJobId();
     if (!job) {
         pgrMessage(el, "No job was named in this link. " +
-            '<a href="' + pgrSelf + '">Start a new search</a>.');
+            '<a href="' + pg.esc(pgrSelf) + '">Start a new search</a>.');
         return;
     }
     // Already been here in this tab - draw it straight back.
@@ -2177,7 +2176,7 @@ function pgrStart() {
             var none = pgrQueryCount > 1 ? "None of these sequences was found in any haplotype."
                                          : "This sequence was not found in any haplotype.";
             pgrMessage(el, (failed.length ? pgrLeftOutNotes(failed, pgrQueryCount).join(" ") : none) +
-                ' <a href="' + pgrSelf + '">New search</a>.');
+                ' <a href="' + pg.esc(pgrSelf) + '">New search</a>.');
             return null;
         }
         return pgrPool(jobs.map(function (j) {
@@ -2195,7 +2194,7 @@ function pgrStart() {
         function finish(rows) {
             if (!rows.length) {
                 pgrMessage(el, "This sequence was not found in any haplotype. " +
-                    '<a href="' + pgrSelf + '">New search</a>.');
+                    '<a href="' + pg.esc(pgrSelf) + '">New search</a>.');
                 return;
             }
             pgrRows = rows;
@@ -2209,7 +2208,7 @@ function pgrStart() {
         // not a failure worth an alarming message.
         pgrMessage(el, "Could not load these results: " + pg.esc(err.message) +
             ". Mapping jobs are kept for a limited time, so a link to " +
-            'results may stop working. <a href="' + pgrSelf +
+            'results may stop working. <a href="' + pg.esc(pgrSelf) +
             '">Run the search again</a>.');
     });
 }

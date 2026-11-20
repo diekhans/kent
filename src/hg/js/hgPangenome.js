@@ -6,7 +6,7 @@
  * job.  Config comes from window.pangenomeConfig, written by the CGI; the
  * helpers named pg.* are hgPangenomeCommon.js.
  */
-/* global window, document, fetch */
+/* global window, document, fetch, console, FileReader, Event, module */
 
 (function () {
 'use strict';
