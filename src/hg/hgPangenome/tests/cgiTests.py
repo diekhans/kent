@@ -416,19 +416,35 @@ class InputLimits(CgiTest):
 
 class RequestShaping(CgiTest):
 
-    def test_a_mapping_is_forwarded_as_it_came(self):
+    def test_a_mapping_is_forwarded_as_it_was_read(self):
+        # The graph server is sent the payload written out again from the
+        # CGI's reading of it: the same content, not the same bytes.
         payload = ('{"sequences":[{"name":"r1","sequence":"ACGTACGT"}],"options":{"max_multimaps":1,'
-                   '"surject":true,"surject_target":"CHM13#0#chr10"}}')
+                   '"surject":true,"surject_target":"CHM13#0#chr10","min_haplotype_coverage":12.5,'
+                   '"keep":null,"more":[1,"two",false]}}')
         out = post(self.conf, "map", payload)
         self.eq("valid submit forwarded exactly once", MOCK.count(), 1)
         self.eq("forwarded as POST", MOCK.last("method"), "POST")
         self.eq("forwarded to /api/v1/map", MOCK.last("path"), "/api/v1/map")
         self.eq("sent as application/json", MOCK.last("content_type"), "application/json")
-        self.eq("payload forwarded byte-for-byte", MOCK.last("body"), payload)
+        self.eq("every field is forwarded with its value: text, numbers, true, false, null, lists",
+                json.loads(MOCK.last("body") or "null"), json.loads(payload))
         self.eq("Accept: application/json sent", MOCK.last("accept"), "application/json")
         self.has("identifies itself as hgPangenome", MOCK.last("user_agent") or "", "hgPangenome")
         self.has("middleware answer passed through", out, '"job_id": "job1"')
         self.has("CGI emits JSON content type", out, "Content-Type: application/json")
+        # What is sent is what was checked.  A limit and a name are sent as
+        # the CGI read them, however the request spelled them.
+        MOCK.clear()
+        post(self.conf, "map", '{"sequences":[{"name":"r\\u0031","sequence":"ACGTACGT"}],'
+                               '"options":{"max_multimaps":%d}}' % (2 ** 64 + 1))
+        sent = json.loads(MOCK.last("body") or '{"options":{},"sequences":[{}]}')
+        self.eq("a limit is sent as the number that was checked", sent["options"].get("max_multimaps"), 1)
+        self.eq("... and a name as the text that was checked", sent["sequences"][0].get("name"), "r\\u0031")
+        MOCK.clear()
+        out = post(self.conf, "map", '{"sequences":[{"name":"r1","sequence":"ACGTACGT"}')
+        self.has("a payload that does not read as JSON is refused", out, "invalid JSON payload")
+        self.eq("... and not forwarded", MOCK.count(), 0)
 
     def test_poll(self):
         out = get(self.conf, "cmd=poll&job_id=job1")
@@ -649,38 +665,42 @@ class RateLimit(CgiTest):
 
     def test_the_light_commands_are_answered_without_it(self):
         # A read that costs little is weighed too, but is not refused because
-        # the bottleneck server is down: a page waiting for its job would lose
-        # it over a failure that is not the reader's.
+        # the bottleneck server is down.  The poll is not weighed at all.
         out, log = get(self.bot, "cmd=poll&job_id=job1", split=True)
-        self.has("cmd=poll consults the bottleneck server", log, "bot check failed")
-        self.has("... and is answered when it cannot be reached", out, '"status": "done"')
-        self.has("cmd=haplotypes is answered too", get(self.bot, "cmd=haplotypes"), '"haplotypes"')
+        self.lacks("cmd=poll does not consult the bottleneck server", log, "bottleneck")
+        self.has("... and works while it cannot be reached", out, '"status": "done"')
+        out, log = get(self.bot, "cmd=haplotypes", split=True)
+        self.has("cmd=haplotypes consults it", log, "bot check failed")
+        self.has("... and is answered when it cannot be reached", out, '"haplotypes"')
         self.has("... and cmd=pclai", post(self.bot, "pclai", '{"spots":[]}'), '"status":"ok"')
         self.has("... and cmd=contigs, as far as its own complaint", get(self.bot, "cmd=contigs"),
                  "missing or malformed assembly")
 
     def test_what_each_command_weighs(self):
-        asks = (("poll", lambda cf: get(cf, "cmd=poll&job_id=job1")),
-                ("haplotypes", lambda cf: get(cf, "cmd=haplotypes")),
+        asks = (("haplotypes", lambda cf: get(cf, "cmd=haplotypes")),
                 ("contigs", lambda cf: get(cf, "cmd=contigs")),
                 ("pclai", lambda cf: post(cf, "pclai", '{"spots":[]}')),
                 ("locus", lambda cf: post(cf, "locus", '{"items":[]}')),
                 ("map", lambda cf: post(cf, "map", ONE_SEQ)))
         quiet = Bottleneck(0)
+        get(quiet.conf("quiet.conf"), "cmd=poll&job_id=job1")
+        self.eq("a poll is not weighed: a job is polled for as long as it runs", len(quiet.asked), 0)
         for _, ask in asks:
             ask(quiet.conf("quiet.conf"))
         quiet.close()
-        self.eq("each command is weighed: the poll least, a read that costs little a quarter",
+        self.eq("the other commands are: a read that costs little a quarter",
                 " ".join("%s %g" % (name, float(sent.split()[-1])) for (name, _), sent in zip(asks, quiet.asked)),
-                "poll 0.05 haplotypes 0.25 contigs 0.25 pclai 0.25 locus 0.5 map 1")
+                "haplotypes 0.25 contigs 0.25 pclai 0.25 locus 0.5 map 1")
         # 30 s of delay owed: past the 20 s at which a request is refused
         busy = Bottleneck(30000)
         MOCK.clear()
         refused = [name for name, ask in asks if "429 Too Many Requests" in ask(busy.conf("busy.conf"))]
-        busy.close()
         self.eq("a reader far over the limit is refused every one of them", " ".join(refused),
                 " ".join(name for name, _ in asks))
         self.eq("... and nothing is sent to the graph server", MOCK.count(), 0)
+        self.has("... but the poll of a job already running is answered",
+                 get(busy.conf("busy.conf"), "cmd=poll&job_id=job1"), '"status": "done"')
+        busy.close()
 
 
 # =================================================================== the commands
@@ -845,7 +865,8 @@ class Liftover(CgiTest):
         out = post(self.conf, "liftoverTargets", targets_ok)
         self.eq("forwarded to /api/v1/liftover/targets", MOCK.last("path"), "/api/v1/liftover/targets")
         self.eq("forwarded as POST", MOCK.last("method"), "POST")
-        self.eq("payload forwarded byte-for-byte", MOCK.last("body"), targets_ok)
+        self.eq("payload forwarded with every field", json.loads(MOCK.last("body") or "null"),
+                json.loads(targets_ok))
         self.has("reachable list passed through", out, '"haplotypes"')
         # no tgt is required here, but the source and range still are
         MOCK.clear()
@@ -1158,7 +1179,9 @@ class CartCommands(CgiTest):
     def test_subtracks_chosen_in_the_cart(self):
         # Which subtracks of a composite are ticked is the reader's choice,
         # kept in the cart as <track>_sel, and goes into the hub on the
-        # subtrack's parent line (dumpTdbAndChildren in trackHub.c).
+        # subtrack's parent line (dumpTdbAndChildren in trackHub.c).  These
+        # subtracks have their parent linked, so this holds the ordinary case
+        # in place; the case of no parent linked is not reached from here.
         self.need("bedToBigBed")
         self.in_box("cmd=quickLift&payload=%s&encBlacklist_sel=1&comments_sel=0" % enc(QL_FULL))
         hub = read(self.hubs()[0]) if self.hubs() else ""
@@ -1305,7 +1328,9 @@ class CartCommands(CgiTest):
         # The library warns when a session's custom tracks cannot be read;
         # "ctTest" is its own switch for trying that.  The cart shell would
         # write the warning to the browser as HTML.  It is caught with the
-        # command's aborts, and the answer is the JSON alone.
+        # command's aborts, and the answer is the JSON alone.  That catch is
+        # older than pgWarnToLog(), which this test does not reach: it is here
+        # so that the answer stays clean, whichever of the two does it.
         self.need("bedToBigBed")
         os.makedirs(os.path.join(self.trash, "ct"))
         with open(os.path.join(self.trash, "ct", "ct_test.bed"), "w"):

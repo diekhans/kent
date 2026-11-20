@@ -1592,6 +1592,9 @@ function pgrRowsToTsv(rows) {
 
 // Put text on the clipboard; resolves true if it got there.  The browser
 // refuses when the page is not the one in front, and says so only here.
+// Where the first way is refused or missing, the older one is tried, and that
+// one copies what is selected on the page, not `text`: the caller selects the
+// same text first.
 function pgrCopy(text) {
     var old = function () {
         try { return !!document.execCommand("copy"); } catch (e) { return false; }
@@ -1602,7 +1605,9 @@ function pgrCopy(text) {
     return Promise.resolve(old());
 }
 
-// The button says how the copy went, and gets its own words back after.
+// The button says how the copy went.  With utils.js on the page, as it is on
+// every page of ours, it gets its own words back three seconds later; without
+// it (the tests), what it says stays.
 function pgrCopySays(button, ok) {
     if (typeof copyButtonSaysCopied === "function") {
         copyButtonSaysCopied(button);       // utils.js: "Copied", and the label back in 3 s

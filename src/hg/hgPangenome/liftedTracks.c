@@ -1514,8 +1514,8 @@ if (blocks == NULL)
     return;
     }
 /* The blocks name the target's sequences as the graph does.  A name the
- * assembly does not have is left as it is, and refused where its size is
- * looked up. */
+ * assembly does not have is left as it is; pgWriteChainBeds() then leaves its
+ * blocks out of the chain, and refuses the request when none are left. */
 struct pgBlock *blk;
 for (blk = blocks; blk != NULL; blk = blk->next)
     {

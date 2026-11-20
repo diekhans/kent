@@ -359,7 +359,9 @@ void doLocus()
  * answers {"status":"ok","loci":["exon ATAD3B", null, ...]}, null where there
  * is nothing to say - a hub assembly, or no genes near enough.  A gene file is
  * opened once per assembly in the request; the database is read over one
- * connection, moved from assembly to assembly. */
+ * connection, moved from assembly to assembly.  At most 200 intervals are
+ * answered, a page of the results table, which is as many as the page sends;
+ * any after those are left off the end of the list. */
 {
 char *payload = cgiOptionalString("payload");
 if (isEmpty(payload))
@@ -588,8 +590,10 @@ if (errCatchStart(errCatch))
                 sEl->type != jsonNumber || eEl->type != jsonNumber)
                 continue;
             /* Counted here, before it is known whether it can be read: the
-             * page says "N of M placed", and M is the rows it sent.  Counted
-             * only once read, a row that cannot be would drop out of both. */
+             * page says "N of M placed", and M is the rows it sent that name
+             * a haplotype, an assembly and an interval, up to the most one
+             * request reads.  Counted only once read, a row that cannot be
+             * would drop out of both numbers. */
             asked++;
             /* Tested as the numbers they came as.  Narrowed to an int first, one
              * past what an int holds turns into a value that passes. */

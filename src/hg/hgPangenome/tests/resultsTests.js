@@ -966,7 +966,7 @@ await t.test('the button says Copied only when the text reached the clipboard', 
     ok.x.pgrCopySays(button, false);
     t.eq(button.textContent, 'Not copied', 'and said when it did not');
 });
-await t.test('with the Genome Browser\'s helper (utils.js) on the page, the label comes back by itself', function () {
+await t.test('with the Genome Browser\'s helper (utils.js) on the page, the helper is used, for a failure too', function () {
     var lib = copyPage(null, true, true), button = { innerHTML: 'Copy to Clipboard' };
     lib.x.pgrCopySays(button, true);
     t.eq(lib.said.length, 1, 'the helper is used');

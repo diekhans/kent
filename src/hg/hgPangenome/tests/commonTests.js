@@ -180,10 +180,10 @@ await t.test('a request too large to send is refused on the page, with the sizes
     // before the CGI is run.  Quotes and braces count three bytes each here.
     calls.length = 0;
     var said = null;
-    await C.post('map', { sequences: new Array(40001).join('{"a":"b"},') }).then(function () { said = 'sent'; },
+    await C.post('map', { sequences: new Array(42001).join('{"a":"b"},') }).then(function () { said = 'sent'; },
                                                                                 function (err) { said = err.message; });
     t.contains(said || '', 'the request is too large', 'refused');
-    t.contains(said || '', '(limit 1,000,000)', 'with the limit');
+    t.contains(said || '', '(limit 1,048,576)', 'with the limit, which is the CGI library\'s');
     t.eq(calls.length, 0, 'and not sent');
     await C.post('map', { sequences: new Array(40001).join('ACGTACGTAC') }).then(function () { said = 'sent'; },
                                                                               function (err) { said = err.message; });

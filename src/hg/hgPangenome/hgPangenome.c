@@ -262,8 +262,10 @@ va_start(args, fmt);
 struct dyString *dy = dyStringNew(256);
 dyStringVaPrintf(dy, fmt, args);
 va_end(args);
-/* The text can quote what the request sent.  A control character is not one
- * that jsonStringEscape() escapes, and left in, the answer is not JSON. */
+/* The text can quote what the request or the graph server sent.  Of the
+ * control characters jsonStringEscape() escapes only the five that have a
+ * short form (\n \t \r \b \f); any other left in, the answer is not JSON.
+ * All of them are made blanks here: an error is one line. */
 char *p;
 for (p = dy->string; *p != '\0'; ++p)
     if ((unsigned char)*p < 0x20)
@@ -282,7 +284,8 @@ dyStringFree(&out);
 
 boolean pgValidDb(char *db)
 /* Assembly names reach us from the page and end up in file paths and cart
- * variables, so keep them to the shape a db name actually has. */
+ * variables, so keep them to the shape a db name actually has: letters, digits
+ * and . _ - only, beginning with a letter or a digit. */
 {
 if (isEmpty(db) || strlen(db) > 128)
     return FALSE;
@@ -820,7 +823,7 @@ struct pgCommand
     {
     char *name;                 /* the value of "cmd" */
     void (*answer)(void);       /* writes the whole response */
-    double botWeight;           /* weight with the bottleneck server */
+    double botWeight;           /* weight with the bottleneck server; 0: not rate limited */
     boolean inCart;             /* runs inside the cart shell */
     boolean leavesCart;         /* ... and exits without saving the cart */
     };
@@ -831,15 +834,17 @@ struct pgCommand
  *
  * A read that costs little still counts a little: with no weight at all, a
  * loop of cmd=haplotypes was a way to open any number of connections to the
- * graph server at once.  A job is polled every second or two for as long as
- * it runs, so a poll counts least; at that rate it adds up to nothing, and a
- * loop of them still does.  These light commands are answered when the
- * bottleneck server cannot be reached, where the heavy ones are refused: a
- * page that is waiting for a job is not to lose it over a failure of ours. */
+ * graph server at once.  These light commands are answered when the
+ * bottleneck server cannot be reached, where the heavy ones are refused.
+ *
+ * The poll alone is not weighed.  A job is polled every second or two for as
+ * long as it runs, and a check is not free: besides the bottleneck server it
+ * opens connections to the central database, where a server tracks its
+ * readers (hguidIpTracking).  That, for every poll of every reader waiting, is
+ * more than the poll itself costs. */
 #define PG_FULL_WEIGHT 1.0
 #define PG_HALF_WEIGHT 0.5
 #define PG_LIGHT_WEIGHT 0.25
-#define PG_POLL_WEIGHT 0.05
 
 static struct pgCommand commands[] = {
     /* forwarded to the graph server (proxy.c).  cmd=surjectAll is the heaviest
@@ -848,7 +853,7 @@ static struct pgCommand commands[] = {
      * reload a large results page several times over without being slowed,
      * and a loop of them is still stopped. */
     {"map",             doMap,             PG_FULL_WEIGHT, FALSE, FALSE},
-    {"poll",            doPoll,            PG_POLL_WEIGHT, FALSE, FALSE},
+    {"poll",            doPoll,            0,              FALSE, FALSE},
     {"haplotypes",      doHaplotypes,      PG_LIGHT_WEIGHT, FALSE, FALSE},
     {"liftoverTargets", doLiftoverTargets, PG_FULL_WEIGHT, FALSE, FALSE},
     {"liftoverAll",     doLiftoverAll,     PG_FULL_WEIGHT, FALSE, FALSE},
@@ -909,9 +914,12 @@ errCatchFree(&errCatch);
 }
 
 static void pgWarnToLog(char *format, va_list args)
-/* A library warning while a command answers goes to the error log.  The cart
- * shell's own handler writes it to the browser as HTML, which next to the
- * JSON leaves an answer the page script cannot read. */
+/* Where a library warning goes from the few lines of a cart command that run
+ * outside pgRunCartCommand()'s own catch, such as the ones that answer after
+ * an abort: to the error log.  The cart shell's own handler would write it to
+ * the browser as HTML, which next to the JSON leaves an answer the page script
+ * cannot read.  A warning from inside the command never gets here: that catch
+ * takes it, and it is shown only if the command then aborts. */
 {
 fputs("hgPangenome: ", stderr);
 vfprintf(stderr, format, args);

@@ -134,8 +134,13 @@ char *pgGbdbFile(char *path);
 /* ---- hgPangenome.c - answering, and the names a request may carry ---- */
 
 void emitJson(char *json);
-/* Write an application/json CGI response (no cart/HTML), its header through
- * cgiPrintContentType(). */
+/* Write an application/json CGI response (no cart/HTML).
+ *
+ * The header goes out through cgiPrintContentType(), as every header in the
+ * tree does: it writes the lines the library has queued ahead of it - the
+ * content policy, for a command that runs in the cart - and it is how the
+ * library knows that the header is closed, so that nothing after this writes
+ * a second one into the body. */
 
 void emitJsonError(char *fmt, ...)
 #if defined(__GNUC__)
@@ -226,7 +231,9 @@ char *pgSeqName(char *db, struct hash *sizes, char *name);
 char *pgChromSizesFile(char *db, struct hash *sizes, boolean renamed);
 /* bedToBigBed wants a chrom.sizes file.  Use the assembly's own where there is
  * one, but not once we have renamed the sequences to their display names - the
- * shipped file is keyed by accession and bedToBigBed would reject every row. */
+ * shipped file is keyed by accession and bedToBigBed would reject every row.
+ * Nor when it is a URL: the sizes are in hand, and written out here they are
+ * not fetched a second time. */
 
 void pgForgetStaleHubs(char *keepHubFile, boolean missingOnly);
 /* Disconnect pangenome quickLift hubs this cart is still holding.

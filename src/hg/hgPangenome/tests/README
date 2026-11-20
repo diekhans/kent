@@ -142,9 +142,12 @@ error mapping    400/401/403/429/500/503 surfaced as an error envelope naming
                  graph server reported clearly; a slow graph server times out
                  instead of hanging; missing apiBase reported on map and poll.
 rate limit       with the bottleneck server pointed at a dead port, cmd=map,
-                 cmd=locus and cmd=surjectAll consult it (and fail closed,
-                 in JSON) while cmd=poll does not and still works - work is
-                 rate limited, polling is exempt.
+                 cmd=locus and cmd=surjectAll consult it and fail closed, in
+                 JSON; the light reads (haplotypes, contigs, pclai) consult it
+                 and are answered all the same; cmd=poll does not consult it.
+                 With a stand-in for the bottleneck server: what each command
+                 weighs, and that a reader far over the limit is refused
+                 everything but the poll of a job already running.
 commands        every command the page scripts send is one the CGI knows;
                  an unknown cmd is not forwarded and is answered with a JSON
                  error that names it.

@@ -158,6 +158,18 @@ await t.test('a sequence longer than the limit is refused here, by name, and not
     t.eq(at.calls.length, 1, 'a sequence of exactly the limit is sent');
 });
 
+await t.test('the largest search the limits allow is sent', async function () {
+    // Ten sequences of 100,000 bases, the defaults of the two settings: what
+    // the form accepts, the page's own size check must let through.
+    var full = [];
+    for (var i = 0; i < 10; i++) full.push('>s' + i + '\n' + new Array(100001).join('A'));
+    var c = start({ submit: QUEUED, poll: [RUNNING] }, { pollIntervalMs: 5, maxSequences: 10 }, full.join('\n'),
+                  function (page) { page.window.hgPangenomeFormData = { maxSeqLen: 100000, maxRequestBytes: 1040000 }; });
+    await check.wait(10);
+    t.eq(c.calls.length >= 1, true, 'sent');
+    t.notOk(/too large/.test(c.el.pgStatus.textContent), 'and not refused as too large');
+});
+
 // ===================================================== what happens afterwards
 
 var finished = start({ submit: QUEUED, poll: [RUNNING, RUNNING, DONE] },

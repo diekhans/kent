@@ -432,15 +432,32 @@ return url;
 }
 
 static char *pgPayload()
-/* The request's "payload".  NULL, with the error already answered, when it
- * has none. */
+/* The request's "payload", read here and written out again.  NULL, with the
+ * error already answered, when it has none or it does not read as JSON.
+ *
+ * The checks below are made on our reading of the payload, and the graph
+ * server makes its own reading of the text it is sent.  So the text every
+ * command checks, keeps and sends on is the one written here from our reading:
+ * each number and each name in it is the one that was checked. */
 {
-char *payload = cgiOptionalString("payload");
-if (isEmpty(payload))
+char *raw = cgiOptionalString("payload");
+if (isEmpty(raw))
     {
     emitJsonError("missing 'payload'");
     return NULL;
     }
+char *payload = NULL;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    struct jsonWrite *jw = jsonWriteNew();
+    jsonWriteJsonElement(jw, NULL, jsonParse(raw));
+    payload = cloneString(jw->dy->string);
+    }
+errCatchEnd(errCatch);
+errCatchFree(&errCatch);
+if (payload == NULL)
+    emitJsonError("invalid JSON payload");
 return payload;
 }
 

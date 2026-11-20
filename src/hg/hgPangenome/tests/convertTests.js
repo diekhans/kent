@@ -485,6 +485,34 @@ await (async function () {
         t.eq(link.isRemote, false, 'not on another server');
     });
 
+    await t.test('Clear while the sequence names are still being read: the box is not acted on later', async function () {
+        var held = { asks: 0 };
+        var c = startPage({ respond: function (u, b) {
+            if (u.indexOf('cmd=contigs') >= 0) return new Promise(function (resolve) { held.names = resolve; });
+            if (b.indexOf('cmd=liftoverTargets') >= 0) { held.asks++; return { haplotypes: ['chm13#0'] }; }
+            return undefined;
+        } });
+        await check.wait(40);
+        var all = c.el.pgcTargets.children.length;
+        c.el.pgcReachableOnly.checked = true;
+        c.el.pgcReachableOnly.dispatch('change');
+        t.eq(c.el.pgcReachableOnly.disabled, true, 'the box is busy while the names are read');
+        c.el.pgcClear.dispatch('click');
+        held.names({ contigs: [{ name: 'CM094066.1', display: 'chr7', size: 134577915 }] });
+        await check.wait(40);
+        t.eq(held.asks, 0, 'the graph is not asked once they arrive');
+        t.eq(c.el.pgcReachableOnly.checked, false, 'the box stays unticked');
+        t.eq(c.el.pgcReachableOnly.disabled, false, 'and can be ticked');
+        t.ok(all > 1, 'the list had more than one haplotype');
+        t.eq(c.el.pgcTargets.children.length, all, 'and still has them all');
+        // ticked again with the names in: asked, and narrowed
+        c.el.pgcReachableOnly.checked = true;
+        c.el.pgcReachableOnly.dispatch('change');
+        await check.wait(40);
+        t.eq(held.asks, 1, 'ticking it afterwards asks');
+        t.eq(c.el.pgcTargets.children.length, 1, 'and narrows the list');
+    });
+
     t.suite('the sequence names arrive late');
     await t.test('the conversion waits for them, and sends the graph\'s name', function () {
         t.eq(slowBefore, 0, 'nothing sent before they are in');

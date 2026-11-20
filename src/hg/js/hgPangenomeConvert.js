@@ -1214,8 +1214,9 @@ var reachable = null;          // lower name -> coverage (or null), else not fil
 var reachableScored = false;   // true when the server ranked them
 // What the graph last said for this source region.  Kept so that turning the
 // filter off and on again does not ask a second time.  Never cleared: the
-// source region is written once, by the CGI, and cannot change on the page.
-// If it ever can, this has to be let go when it does.
+// source region is settled as the page loads - written by the CGI, or put in
+// its place by applySourceFallback() - and the reader cannot change it after.
+// If it ever can change, this has to be let go when it does.
 var reachableCache = null;
 var reachableCacheScored = false;
 var reachSeq = 0;              // the question whose answer the filter waits for: see askReachable()
@@ -1534,19 +1535,21 @@ function onReachableToggle() {
     showReachable();
 }
 
+// The question is numbered here, before the wait for the sequence names, and
+// the box is busy from here on.  Clear, or asking again, moves on from it:
+// whatever is still to come for an older number - the names, then the answer -
+// changes nothing on the page.  Applied, it would filter the list under a box
+// that says it is not filtered.
 function showReachable() {
-    whenContigs(askReachable);
-}
-
-function askReachable() {
-    var src = buildSource();
-    if (src.error) { showError(src.error); untick(); return; }
-    // Clear, or asking again, moves on from this question.  Its answer is
-    // then kept for the next time the box is ticked and changes nothing on
-    // the page: applied, it would filter the list under a box that says it
-    // is not filtered.
     var seq = ++reachSeq;
     setToggleBusy(true);
+    whenContigs(function () { askReachable(seq); });
+}
+
+function askReachable(seq) {
+    if (seq !== reachSeq) return;
+    var src = buildSource();
+    if (src.error) { setToggleBusy(false); showError(src.error); untick(); return; }
     showBusy("Asking which assemblies contain " +
              fmtPos(src.contig, src.start, src.end) + "…");
     var req = { src: src.src, start: src.start, end: src.end, scored: true };
@@ -1581,6 +1584,7 @@ function askReachable() {
                     found[String(h).toLowerCase()] = null;
                 }
             });
+            // Kept whatever happened since: it depends only on the source.
             reachableCache = found;
             reachableCacheScored = scored;
             if (seq !== reachSeq) return;
@@ -1617,6 +1621,8 @@ function untick() {
 function showAllHaplotypes() {
     reachable = null;
     reachableScored = false;
+    reachSeq++;                 // a question still out is not to filter the list again
+    setToggleBusy(false);
     fillTargets($("pgcFilter").value);
     hideStatus();
 }

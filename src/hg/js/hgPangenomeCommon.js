@@ -115,14 +115,17 @@ function formEncode(obj) {
     }).join("&");
 }
 
-// POST cmd=<cmd>&payload=<json>.  With hgsid for a command that writes to the
-// reader's own session.
-// The most a request may be, as it is sent.  The web server's CGI library
-// refuses a body over 1,048,576 bytes with an HTML page, before this CGI is
-// run; the CGI's own limit is on the payload once decoded, and a payload
-// under it can be over this one, each quote and brace being three bytes here.
-var MAX_POST_BYTES = 1000000;
+// The most a request may be, as it is sent: the body the CGI library reads at
+// most (CGI_INPUT_SIZE_LIMIT_DEFAULT in cheapcgi.c).  Over that the library
+// stops the CGI with an HTML error page before it can answer in its own way.
+// The CGI's own limit is lower and on the payload once decoded
+// (PG_MAX_REQUEST_BYTES), so whatever the search form lets through fits here;
+// this is for a request that grew some other way.  A server that raised the
+// library's limit (GB_CGI_INPUT_SIZE_LIMIT) is held to this one by the page.
+var MAX_POST_BYTES = 1048576;
 
+// POST cmd=<cmd>&payload=<json>.  With hgsid for a command that writes to the
+// reader's own session.  Rejects, without sending, a request too large to send.
 function post(cmd, payload, hgsid) {
     var fields = { cmd: cmd, payload: JSON.stringify(payload) };
     if (hgsid) { fields.hgsid = hgsid; }

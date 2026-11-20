@@ -240,6 +240,8 @@ static struct jsonElement *jsonParseObjectLm(char *str, int *posPtr, struct lm *
 {
 struct hash *h = hashNewLm(5, lm);
 getSpecificChar('{', str, posPtr);
+// an empty object may have white space in it: "{ }", which is how jsonWrite writes one
+skipLeadingSpacesWithPos(str, posPtr);
 while(str[*posPtr] != '}')
     {
     // parse out a name : val pair
@@ -264,6 +266,8 @@ static struct jsonElement *jsonParseListLm(char *str, int *posPtr, struct lm *lm
 {
 struct slRef *list = NULL;
 getSpecificChar('[', str, posPtr);
+// and so may an empty list: "[ ]"
+skipLeadingSpacesWithPos(str, posPtr);
 while(str[*posPtr] != ']')
     {
     struct slRef *e;

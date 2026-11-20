@@ -487,7 +487,8 @@ if (isEmpty(cigar) || startEl == NULL || startEl->type != jsonNumber)
 struct hash *sizes = pgChromSizes(db);
 if (sizes == NULL)
     { emitJsonError("no sequence sizes available for %s", db); return; }
-/* The graph's name for the sequence, which on HG002 is not the assembly's. */
+/* contig is the graph's name for the sequence, which on HG002 is not the
+ * assembly's; own is the assembly's. */
 char *own = pgSeqName(db, sizes, contig);
 int tSize = (own == NULL) ? 0 : hashIntValDefault(sizes, own, 0);
 if (tSize == 0)
@@ -499,7 +500,7 @@ if (startEl->val.jeNumber < 0 || startEl->val.jeNumber >= tSize)
     { emitJsonError("the alignment starts outside %.100s", contig); return; }
 /* The assembly's own sequence name - the accession on a GenArk assembly.  The
  * chrN alias is only what gets displayed, so the track and the position both
- * use the name we were given. */
+ * use the assembly's name, which pgSeqName() found from the one we were given. */
 char *viewChrom = contig;
 
 struct tempName pslTn, faTn;
