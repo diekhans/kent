@@ -248,7 +248,7 @@ if (el == NULL || el->type != jsonNumber || el->val.jeNumber < 0)
 return (long)el->val.jeNumber;
 }
 
-#define PG_SEQ_TRACK_NAME "PanView Seq"
+#define PG_SEQ_TRACK_NAME "PanAlign Seq"
 
 static char *pgBigPslTrack(char *pslFile, char *faFile, char *chromSizes, char **retError)
 /* The alignments as a bigPsl file, the way hgBlat keeps its results (hgc.c
@@ -302,7 +302,7 @@ if (status != 0 || !fileExists(bbTn.forCgi))
 /* hgBlat's track line for a nucleotide search, under this tool's name. */
 struct dyString *line = dyStringNew(512);
 dyStringPrintf(line, "track type=bigPsl name=\"" PG_SEQ_TRACK_NAME "\" "
-    "description=\"Your Sequence from PanView\" visibility=pack showAll=on "
+    "description=\"Your Sequence from PanAlign\" visibility=pack showAll=on "
     "indelDoubleInsert=on indelQueryInsert=on indelPolyA=on showDiffBasesAllScales=. "
     "baseColorUseSequence=lfExtra baseColorDefault=diffBases "
     "colorByStrand=\"0,0,0 0,0,150\" bigDataUrl=%s", bbTn.forCgi);

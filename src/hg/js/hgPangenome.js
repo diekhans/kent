@@ -1,4 +1,4 @@
-/* hgPangenome.js - the PanView search form (pangenome mapping).
+/* hgPangenome.js - the PanAlign search form (pangenome mapping).
  *
  * Builds the form, parses pasted or uploaded sequences (one per line or
  * FASTA), validates them, submits them as a mapping job, polls until the job
@@ -414,11 +414,11 @@ function formSidebar(fd) {
         '<div class="gbCard"><h3>Similar tools</h3>' +
         '<div><a href="' + pg.esc(fd.blatUrl) + '">BLAT</a> - finds a sequence ' +
         'in one assembly, rather than across every haplotype at once.</div>' +
-        '<div><a href="' + pg.esc(fd.panLiftUrl) + '">PanLift</a> - for a region ' +
+        '<div><a href="' + pg.esc(fd.panConvertUrl) + '">PanConvert</a> - for a region ' +
         'you already have coordinates for: translates it from one assembly to ' +
         'another through the graph.</div>' +
         '</div>' +
-        '<div class="gbCard"><h3>About PanView</h3>' +
+        '<div class="gbCard"><h3>About PanAlign</h3>' +
         '<div>Your sequence is aligned to the pangenome graph, which holds every ' +
         'haplotype in it at once. The results list the haplotypes that carry it, ' +
         'with how well it matches each and where it lands, and open any of them ' +

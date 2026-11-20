@@ -59,7 +59,7 @@ HUB_ASSEMBLY = {
 # are chr2, chrX, 2chrM in the graph, and CP139519.2 and so on in GenArk.
 # Coming back from the graph the CGI finds the sequence by the assembly's
 # other names for it (pgSeqName).  Going to the graph there is nothing to look
-# the graph's name up in, so PanLift does not start from these.
+# the graph's name up in, so PanConvert does not start from these.
 GRAPH_NAMES_DIFFER = ('GCA_018852605.3', 'GCA_018852615.3')
 
 
@@ -156,7 +156,7 @@ def main():
     lines.append(' * Maps a pangenome haplotype (PanSN "SAMPLE#PHASE", lower-cased) to the UCSC')
     lines.append(' * assembly it can be browsed in: a GenArk accession for HPRC sample')
     lines.append(' * haplotypes, or a plain db for the references.  Read through')
-    lines.append(' * hgPangenomeCommon.js (assemblyFor) by the results page and by PanLift, to')
+    lines.append(' * hgPangenomeCommon.js (assemblyFor) by the results page and by PanConvert, to')
     lines.append(' * link a place on any haplotype to the Genome Browser.')
     lines.append(' *')
     lines.append(' * Source: %s' % os.path.basename(args.src))

@@ -782,7 +782,7 @@ static char *pgBuildSourceHub(char *db, struct trackDb **retBadList)
  * trackHubBuild writes to the file the cart names in hubQuickLift-<db>, which
  * is the hub hgConvert's quickLift has attached to this user's browser.  It
  * also merges: a stanza already in the file stays.  Both are right for
- * hgConvert and wrong for us.  PanLift wants only what is showing now, and
+ * hgConvert and wrong for us.  PanConvert wants only what is showing now, and
  * has no business changing a hub that another tool attached, least of all
  * emptying it.  So the cart variable is taken away for the length of the
  * call, which makes trackHubBuild start a new file, and is put back
@@ -1732,7 +1732,7 @@ pgQuickLift(cgiOptionalString("payload"), TRUE);
  * With a reference chosen, the tracks the user has turned on in that reference
  * come too: the hit's region is translated to the reference through the graph,
  * and that interval is handed to pgQuickLift() as a conversion from the
- * reference onto the haplotype - the same path PanLift's "PanLift tracks"
+ * reference onto the haplotype - the same path PanConvert's "PanConvert tracks"
  * takes, chain from the graph and all, so neither depends on precomputed chain
  * files. */
 
@@ -1848,7 +1848,7 @@ if (!pgLiftInterval(path, ref, start, end, &refPath, &refStart, &refEnd, &err))
     return;
     }
 
-/* A conversion from the reference onto the haplotype, as PanLift would send
+/* A conversion from the reference onto the haplotype, as PanConvert would send
  * it: pgQuickLift() pads the interval, fetches the blocks and builds the rest.
  * The haplotype's own tracks are hidden, so the page opens on the reference's
  * annotations and the user's sequence rather than two gene sets on top of

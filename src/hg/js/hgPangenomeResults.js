@@ -1,4 +1,4 @@
-/* hgPangenomeResults.js - the results of one PanView mapping job, as a table.
+/* hgPangenomeResults.js - the results of one PanAlign mapping job, as a table.
  *
  * Reached as hgPangenome?page=results&job_id=<id>.  The page carries nothing
  * but the job id, so everything here is fetched from that: the mapping is read
@@ -171,7 +171,7 @@ function pgrSampleOf(hap) {
 }
 
 // The sample's population as the HPRC describes it, "British from England
-// and Scotland (GBR)", from hgPangenomeSamples.js; PanLift shows the same.
+// and Scotland (GBR)", from hgPangenomeSamples.js; PanConvert shows the same.
 function pgrPopOf(hap) {
     var p = pg.population(hap);
     return p ? p.desc + " (" + p.code + ")" : "";

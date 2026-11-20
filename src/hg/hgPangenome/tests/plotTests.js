@@ -1,6 +1,6 @@
 /* plotTests.js - tests for the ancestry plot (js/hgPangenomePclai.js).
  *
- * The plot is shared by PanView's results page and PanLift.  These test what
+ * The plot is shared by PanAlign's results page and PanConvert.  These test what
  * it keeps between one set of regions and the next, how it reads its points
  * in batches, and what it says when it cannot draw.  The file is loaded into
  * a vm with just enough of a document to evaluate; nothing is fetched.

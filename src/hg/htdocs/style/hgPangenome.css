@@ -1,6 +1,6 @@
 /* hgPangenome.css - styling for hgPangenome's pages.
  *
- * The PanView pages - the search form and the results table - are in
+ * The PanAlign pages - the search form and the results table - are in
  * the house style of hgBlat's new pages: the shared components (design tokens on
  * .gbApp, .gbPill, .gbCard, .gbStrip, .gbSection, .gbBanner, the busy overlay)
  * come from gbModern.css, loaded alongside this file, and this file holds only
@@ -8,13 +8,13 @@
  * mirror hgBlat.css's, so the two tools read as one design; where a rule here
  * differs from its counterpart there, the comment says why.
  *
- * PanLift (page=convert) still has the classic look: cream section boxes, a
+ * PanConvert (page=convert) still has the classic look: cream section boxes, a
  * light-blue subheading bar, UCSC-blue links and Arial body text, as in
  * HGStyle.css.
  *
- * In five parts: 1 what every page uses; 2 PanView's search form; 3 PanView's
- * results page, whose table, bars and detail panel PanLift and the ancestry
- * plot use too; 4 PanLift, the form and then its tables; 5 the ancestry plot. */
+ * In five parts: 1 what every page uses; 2 PanAlign's search form; 3 PanAlign's
+ * results page, whose table, bars and detail panel PanConvert and the ancestry
+ * plot use too; 4 PanConvert, the form and then its tables; 5 the ancestry plot. */
 
 /* ==== 1. Every page ============================================================ */
 
@@ -56,7 +56,7 @@
 }
 .pgDlBtn:hover { color: #aa3333; }
 
-/* ==== 2. PanView: the search form (formBuild in hgPangenome.js) =============
+/* ==== 2. PanAlign: the search form (formBuild in hgPangenome.js) =============
  * Mirrors the search-form rules of hgBlat.css (#blatFormBox), under #pgFormBox. */
 #pgFormBox { font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; color:var(--ink); font-size:14px; }
 #pgFormBox .pgFormGrid { display:grid; grid-template-columns:minmax(0,1fr) 300px; gap:28px;
@@ -123,7 +123,7 @@
     color:var(--muted); }
 #pgFormBox .pgSpinner { border-color:var(--lineSoft); border-top-color:var(--navy); }
 
-/* ==== 3. PanView: the results page (pgrDraw in hgPangenomeResults.js) =======
+/* ==== 3. PanAlign: the results page (pgrDraw in hgPangenomeResults.js) =======
  * Mirrors the results rules of hgBlat.css (#blatTable, .blatDetail, ...). */
 #pgrResults { font-family:'Helvetica Neue',Helvetica,Arial,sans-serif; color:var(--ink); font-size:14px; }
 /* No wider than the window.  The page sits in the framework's layout table,
@@ -149,7 +149,7 @@
  * table, as hgBlat opens its query-sequence and share panels. */
 .pgrPanel { padding:14px 18px; border-bottom:1px solid var(--line); background:var(--panel); overflow-x:auto; }
 .pgrNotes { padding:2px 18px 6px; }
-/* A bar above a table saying what it is showing (.on): PanLift's
+/* A bar above a table saying what it is showing (.on): PanConvert's
  * all-haplotypes page uses it.  Toggled with the hidden attribute, which a
  * display:flex rule would otherwise win over. */
 .pgrBar[hidden] { display:none; }
@@ -255,7 +255,7 @@
 .pgrTile .v { font-size:14px; font-weight:700; color:var(--ink); }
 .pgrDetailActions { display:flex; gap:8px; margin-top:14px; flex-wrap:wrap; }
 
-/* ==== 4. PanLift (hgPangenomeConvert.js) ===================================== */
+/* ==== 4. PanConvert (hgPangenomeConvert.js) ===================================== */
 
 /* ---- The form ---- */
 
@@ -380,7 +380,7 @@
 .pgcOr::before, .pgcOr::after { content: ""; flex: 1; border-top: 1px solid #d5d9de; }
 
 /* ---- The table of where a region lands ---- */
-/* PanLift's results table (hgPangenomeConvert.js): the mapping results
+/* PanConvert's results table (hgPangenomeConvert.js): the mapping results
  * table's look, without the row selection - its rows are not clickable. */
 #pgcTable { font-size:13px; width:100%; border-collapse:collapse; }
 #pgcTable td.posCol { white-space:nowrap; }
@@ -406,7 +406,7 @@
 #pgcTable td.pieceCol { font-variant-numeric:tabular-nums; color:var(--muted); }
 #pgcTable td.pctCol.zero { color:var(--faint); }
 
-/* ---- PanLift on every haplotype (page=liftAll) ----
+/* ---- PanConvert on every haplotype (page=liftAll) ----
  * Three panels of figures between the strip and the table; each figure that
  * counts haplotypes lists them in the table when clicked (.pgcPick2). */
 #pgcAll { margin-top:4px; }

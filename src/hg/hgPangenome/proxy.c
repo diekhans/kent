@@ -579,7 +579,7 @@ pgAnswer(&r);
 }
 
 void doHaplotypes()
-/* cmd=haplotypes: the haplotypes in the loaded graph, for PanLift's picker. */
+/* cmd=haplotypes: the haplotypes in the loaded graph, for PanConvert's picker. */
 {
 char *url = pgUrl("/api/v1/haplotypes");
 if (url == NULL)

@@ -1,7 +1,7 @@
 hgPangenome test suite
 ======================
 
-Tests for PanView and PanLift: the page scripts (js/hgPangenome*.js) and the
+Tests for PanAlign and PanConvert: the page scripts (js/hgPangenome*.js) and the
 CGI (hgPangenome.c and the files beside it).  Nothing here needs a browser or
 the real graph server.
 
@@ -66,13 +66,13 @@ unitTests.js    LAYER 1: pure-function unit tests.
 commonTests.js  What the page scripts share (js/hgPangenomeCommon.js), and the
                 scripts as shipped: loaded in the page's order, each may add
                 only its own name to the global scope, and the pages start.
-formTests.js    LAYER 3: the PanView search form, driven through a stubbed
+formTests.js    LAYER 3: the PanAlign search form, driven through a stubbed
                 fetch: the request, polling, the hand-off to the results page,
                 and its failure messages.
 resultsTests.js Results page (js/hgPangenomeResults.js): the table's cell
                 renderers, row order, tab-separated download and record
                 parsing, tested as functions - no DataTable, no network.
-convertTests.js PanLift (js/hgPangenomeConvert.js): the source, the picker,
+convertTests.js PanConvert (js/hgPangenomeConvert.js): the source, the picker,
                 the request, the table of where a region lands, its links.
                 Also holds that file to its four parts: the result view names
                 nothing the form declares, and runs with the form cut out.
@@ -219,7 +219,7 @@ Bugs this layer has already caught
 
 What Layer 3 covers
 -------------------
-The PanView search form.  Each test loads the form, types a sequence, clicks
+The PanAlign search form.  Each test loads the form, types a sequence, clicks
 Submit and answers the form's requests with fixtures.
 
 the request      posted to our own CGI as cmd=map, form-encoded; the sequence

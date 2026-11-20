@@ -317,7 +317,7 @@ await t.test('each adds its own name to the page and nothing else', function () 
     t.deepEq(b.add('hgPangenomeSamples.js'), ['pangenomeSamples'], 'the population table');
     t.deepEq(b.add('hgPangenomePclai.js'), ['pangenomePlot'], 'the ancestry plot');
     t.deepEq(b.add('hgPangenomeResults.js'), [], 'the results page');
-    t.deepEq(b.add('hgPangenomeConvert.js'), [], 'PanLift');
+    t.deepEq(b.add('hgPangenomeConvert.js'), [], 'PanConvert');
     t.deepEq(b.add('hgPangenome.js'), [], 'the search form');
 });
 await t.test('the plot is reached through its one object', function () {

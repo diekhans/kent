@@ -117,9 +117,9 @@ runCgi() {
 runJs unitTests.js    "Pure functions"
 runJs commonTests.js  "Shared helpers"
 runCgi
-runJs formTests.js    "PanView form"
-runJs resultsTests.js "PanView results"
-runJs convertTests.js "PanLift"
+runJs formTests.js    "PanAlign form"
+runJs resultsTests.js "PanAlign results"
+runJs convertTests.js "PanConvert"
 runJs plotTests.js    "Ancestry plot"
 
 echo

@@ -45,7 +45,7 @@ extern struct cart *cart;
 #define PG_PCLAI_MIN_COVERAGE 50        /* coverage (%) a hit needs to be in the ancestry plot */
 #define PG_PCLAI_MAX_HAPLOTYPES 100     /* haplotypes one ancestry request may name */
 
-/* PanLift. */
+/* PanConvert. */
 #define PG_MAX_LIFT_SPAN 1000000        /* bases in one coordinate translation */
 #define PG_MAX_LIFT_ALL_BYTES 20000000  /* longest answer accepted for one region on every
                                          * haplotype: a summary is about 1 kB a haplotype */
@@ -116,7 +116,7 @@ int pgMaxSeqLen(void);
 
 boolean pgAncestryOn(void);
 /* pangenome.resultsPclai: "on" adds the ancestry plot to the results page and
- * to PanLift.  Off is the default. */
+ * to PanConvert.  Off is the default. */
 
 char *pgGraphLabel(void);
 /* pangenome.graphLabel: the graph's name as the pages show it. */

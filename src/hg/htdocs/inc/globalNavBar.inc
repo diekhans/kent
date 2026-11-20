@@ -47,8 +47,8 @@
 	<ul style="display: none; visibility: hidden;">
 	<li class="first"><a id="blatMenuLink" title="Search the genome for sequence matches" href="../cgi-bin/hgBlat?command=start">Blat</a></li>
 	<!-- OPTIONAL_PANGENOME_MENU_START
-	<li><a id="pangenomeMenuLink" title="Map sequences to the pangenome graph and surject onto any haplotype" href="../cgi-bin/hgPangenome">PanView</a></li>
-	<li><a id="pangenomeConvertMenuLink" title="Translate coordinates from one haplotype to another through the pangenome graph" href="../cgi-bin/hgPangenome?page=convert">PanLift</a></li>
+	<li><a id="pangenomeMenuLink" title="Map sequences to the pangenome graph and surject onto any haplotype" href="../cgi-bin/hgPangenome">PanAlign</a></li>
+	<li><a id="pangenomeConvertMenuLink" title="Translate coordinates from one haplotype to another through the pangenome graph" href="../cgi-bin/hgPangenome?page=convert">PanConvert</a></li>
 	OPTIONAL_PANGENOME_MENU_END -->
 	<li><a id="ispMenuLink" title="Check the specificity of short primers" href="../cgi-bin/hgPcr">In-Silico PCR</a></li>
 	<li><a id="tableBrowserMenuLink" title="Query and retrieve from all Genome Browser data" href="../cgi-bin/hgTables">Table Browser</a></li>

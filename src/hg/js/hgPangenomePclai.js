@@ -59,7 +59,7 @@ var pgpEscBound = false;
 // exactly what is drawn - and both say what they excluded rather than dropping
 // it quietly.
 // What the two marks of our own are called in the legend.  The results page's
-// points are hits it can tick; PanLift's are the targets of a conversion and
+// points are hits it can tick; PanConvert's are the targets of a conversion and
 // its source, and it says so through pgpInit's options.
 var pgpLegend = { hit: "a hit", pick: "ticked in the table", many: "hits" };
 var pgpMinCov = null;       // coverage floor, % - null until the config is read
@@ -876,7 +876,7 @@ function pgpDraw() {
 // kept in sync with the DOM.
 function pgpControlsHtml(shown, total, dropped) {
     var o = ['<div id="pgpControls" class="pgpControls">'];
-    // Only where the points have a coverage to filter on: PanLift's targets
+    // Only where the points have a coverage to filter on: PanConvert's targets
     // are regions, not hits, and have none.
     if ((pgpSpots || []).some(function (s) { return s.coverage != null; })) {
         o.push('<label class="pgpCtl">Plot hits covering at least ' +
@@ -1009,7 +1009,7 @@ function pgpDetailHtml() {
                '</div>');
     } else if (spot && spot.url) {
         // A page with no table to delegate to gives the spot its own link.  With
-        // an openId the page answers the click itself - PanLift sends it to the
+        // an openId the page answers the click itself - PanConvert sends it to the
         // region's own link, so the plot opens exactly what the card does.
         o.push('<div class="pgrDetailActions"><a class="gbPill primary" href="' +
                pg.esc(spot.url) + '"' +
@@ -1147,7 +1147,7 @@ function pgpInit(spots, opts) {
     pgpDataSpots = null;
     pgpGen++;
     if (opts && opts.fresh) {
-        // PanLift draws each conversion with the same ids, so what was open
+        // PanConvert draws each conversion with the same ids, so what was open
         // for one would show on another's haplotype.
         pgpWindows = Object.create(null);
         pgpSelected = null;

@@ -1,4 +1,4 @@
-/* hgPangenomeCommon.js - what the PanView and PanLift scripts share.
+/* hgPangenomeCommon.js - what the PanAlign and PanConvert scripts share.
  *
  * Loaded before a page's own script (hgPangenome.js, hgPangenomeResults.js,
  * hgPangenomeConvert.js, hgPangenomePclai.js), each of which reads it as

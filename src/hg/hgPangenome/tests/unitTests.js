@@ -1,6 +1,6 @@
 /* unitTests.js - Layer 1 of the hgPangenome test suite.
  *
- * Pure-function unit tests for js/hgPangenome.js, the PanView search form:
+ * Pure-function unit tests for js/hgPangenome.js, the PanAlign search form:
  * input parsing, validation and form encoding.  No network, no real DOM, no
  * graph server.  (The coordinate arithmetic of the results page is tested in
  * resultsTests.js, beside the functions that do it.)
@@ -14,7 +14,7 @@ var test = require('node:test');
 var check = require('./check.js');
 var loader = require('./loadClient.js');
 
-test("PanView's form: reading and checking what is typed (js/hgPangenome.js)", async function (ctx) {
+test("PanAlign's form: reading and checking what is typed (js/hgPangenome.js)", async function (ctx) {
 var t = check.under(ctx);
 
 // One shared client instance for the stateless tests.  Tests that mutate client

@@ -15,7 +15,7 @@ var test = require('node:test');
 var check = require('./check.js');
 var loader = require('./loadClient.js');
 
-test('PanLift (js/hgPangenomeConvert.js)', async function (ctx) {
+test('PanConvert (js/hgPangenomeConvert.js)', async function (ctx) {
 var t = check.under(ctx);
 
 var PAGE_IDS = ['pgcForm', 'pgcSrcHap', 'pgcSrcDb', 'pgcSrcNote', 'pgcSrcLabel',

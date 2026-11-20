@@ -567,7 +567,7 @@ if (errCatchStart(errCatch))
     {
     struct jsonElement *root = jsonParse(payload);
     struct jsonElement *spotsEl = jsonFindNamedField(root, "", "spots");
-    /* PanLift asks for every window in each region, not just its point. */
+    /* PanConvert asks for every window in each region, not just its point. */
     struct jsonElement *winEl = jsonFindNamedField(root, "", "windows");
     wantWindows = (winEl != NULL && winEl->type == jsonBoolean && winEl->val.jeBoolean);
     struct jsonElement *panelEl = jsonFindNamedField(root, "", "panel");

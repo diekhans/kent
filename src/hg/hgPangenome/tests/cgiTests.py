@@ -726,7 +726,7 @@ class Commands(CgiTest):
         self.eq("unknown cmd is not forwarded upstream", MOCK.count(), 0)
         self.has("unknown cmd is answered in JSON, as every command is", out, "Content-Type: application/json")
         self.has("... with an error that names it", out, "\"error\":\"unknown command 'bogus'\"")
-        # There is no plain block-by-block command: PanLift asks for the
+        # There is no plain block-by-block command: PanConvert asks for the
         # summary, and a chain's blocks are fetched by the server itself.
         post(self.conf, "liftover",
              '{"src":"HG00097#1#CM094066.1","start":19113,"end":19137,"tgt":"HG01234#2","blocks":true}')
@@ -1114,7 +1114,7 @@ class CartCommands(CgiTest):
         self.has("... the browser link opens that session", out,
                  '"url":"hgTracks?hgsid=%s&db=hg38&position=chr1' % sid)
         self.has("... and hands it the custom track", out, "hgct_customText=track+type%3DbigPsl")
-        self.has('... named as shown, so "hide other tracks" leaves it', out, "&ct_PanViewSeq_")
+        self.has('... named as shown, so "hide other tracks" leaves it', out, "&ct_PanAlignSeq_")
         self.has("... the alignment link opens the same session and track", out,
                  '"details":"hgc?hgsid=%s&db=hg38&g=htcBigPslAli&i=q&c=chr1' % sid)
         self.eq("... and only the track file is left: no PSL, no FASTA", left_over(), 0)
@@ -1552,13 +1552,13 @@ class CartCommands(CgiTest):
             names = [re.sub(r"-v[0-9]+", "", n) for n in re.findall(r"hgPangenome[A-Za-z]*(?:-v[0-9]+)?\.js", page)]
             return "%s %s" % (names[0], names[-1]) if names else ""
 
-        # the PanLift form prints the cart's db and position into the page
+        # the PanConvert form prints the cart's db and position into the page
         out = self.in_box("page=convert&db=hg38&position=" + enc("chr1:1-2'><script>alert(1)</script>"))
-        self.has("PanLift form: drawn", out, "id='pgcPos'")
+        self.has("PanConvert form: drawn", out, "id='pgcPos'")
         self.lacks("... with the position escaped", out, "'><script>alert(1)")
         # every page names the shared script first and its own script last:
         # the page scripts read hgPangenomeCommon.js as they load
-        self.eq("PanLift form: the shared script, then the page's", ends(out),
+        self.eq("PanConvert form: the shared script, then the page's", ends(out),
                 "hgPangenomeCommon.js hgPangenomeConvert.js")
         self.eq("results page: the shared script, then the page's", ends(self.in_box("page=results&job_id=job1")),
                 "hgPangenomeCommon.js hgPangenomeResults.js")

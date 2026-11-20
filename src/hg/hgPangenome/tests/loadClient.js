@@ -199,7 +199,7 @@ function load(options) {
             vm.runInContext(fs.readFileSync(tablePath, 'utf8'), sandbox,
                             { filename: 'hgPangenomeAssemblies.js' });
     }
-    // And the sample->population table, which PanLift's picker groups by.
+    // And the sample->population table, which PanConvert's picker groups by.
     var samplesPath = path.join(JS_DIR, 'hgPangenomeSamples.js');
     if (options.withAssemblies !== false && fs.existsSync(samplesPath))
         vm.runInContext(fs.readFileSync(samplesPath, 'utf8'), sandbox,

@@ -1,4 +1,4 @@
-/* hgPangenome - PanView and PanLift: a sequence found across the human
+/* hgPangenome - PanAlign and PanConvert: a sequence found across the human
  * pangenome, and a region carried from one of its haplotypes to the others.
  *
  * The mapping and the coordinate translation are done by a separate graph
@@ -13,8 +13,8 @@
  *
  * A request is for a page or for a command.
  *
- * Pages, chosen by "page": none for PanView's form, "results" for a mapping
- * job's table, "convert" for PanLift, "liftAll" for one PanLift region on
+ * Pages, chosen by "page": none for PanAlign's form, "results" for a mapping
+ * job's table, "convert" for PanConvert, "liftAll" for one PanConvert region on
  * every haplotype.
  *
  * Commands, chosen by "cmd".  Each answers in JSON, and one that fails answers
@@ -165,7 +165,7 @@ return atoi(cfgOptionDefault("pangenome.maxSeqLen", "100000"));
 
 boolean pgAncestryOn()
 /* pangenome.resultsPclai: "on" adds the ancestry plot to the results page and
- * to PanLift.  Off, the default, the plot's script is never loaded and the
+ * to PanConvert.  Off, the default, the plot's script is never loaded and the
  * pages have no plot control and no checkbox column. */
 {
 return sameString(cfgOptionDefault("pangenome.resultsPclai", "off"), "on");
@@ -359,8 +359,8 @@ return ok;
 
 /* ---- The pages --------------------------------------------------------------
  *
- * Four, chosen by "page": none for PanView's form, "results" for a mapping
- * job's table, "convert" for PanLift, and "liftAll" for one PanLift region on
+ * Four, chosen by "page": none for PanAlign's form, "results" for a mapping
+ * job's table, "convert" for PanConvert, and "liftAll" for one PanConvert region on
  * every haplotype.  First what they are built from. */
 
 static void injectConfig()
@@ -441,7 +441,7 @@ jsonWriteString(jw, "exampleLabel", "Load example");
 jsonWriteString(jw, "exampleTitle", "Fill the box with an example query: "
     "20 kb of the human MCM6 gene, which every haplotype in the graph carries.");
 jsonWriteStringf(jw, "blatUrl", "hgBlat?%s=%s", cartSessionVarName(), cartSessionId(cart));
-jsonWriteStringf(jw, "panLiftUrl", "hgPangenome?page=convert&%s=%s",
+jsonWriteStringf(jw, "panConvertUrl", "hgPangenome?page=convert&%s=%s",
                  cartSessionVarName(), cartSessionId(cart));
 jsonWriteObjectEnd(jw);
 jsInlineF("var hgPangenomeFormData = %s;\n", jw->dy->string);
@@ -449,7 +449,7 @@ jsonWriteFree(&jw);
 }
 
 static void drawConvertPage()
-/* PanLift, the coordinate-translation page, in the spirit of hgConvert's "In Other
+/* PanConvert, the coordinate-translation page, in the spirit of hgConvert's "In Other
  * Genomes".  The source assembly and position are inherited from the cart, so
  * arriving from a track view pre-fills them with whatever the user was looking
  * at - but both stay editable.  Destination haplotypes come from the live graph
@@ -461,7 +461,7 @@ char *db = cartUsualString(cart, "db", "");
 char *position = cartUsualString(cart, "position", "");
 
 printf("<form id='pgcForm' onsubmit='return false;'>\n");
-printf("<h2>PanLift</h2>\n");
+printf("<h2>PanConvert</h2>\n");
 printf("<p>Convert a region to other haplotypes through the pangenome graph.</p>\n");
 
 printf("<table class='hgPangenomeTable pgcTable' border=0>\n");
@@ -538,7 +538,7 @@ if (quickLiftEnabled(cart))
     printf("<td><label for='pgcQuickLift' title='Display tracks from the "
            "source assembly mapped onto the target assembly'>"
            "<input type='checkbox' id='pgcQuickLift' %s> "
-           "PanLift tracks</label>\n",
+           "PanConvert tracks</label>\n",
            on ? "checked" : "");
     printf("<div id='pgcHideRow'><label for='pgcHideTracks' title='Hide all of "
            "the target assembly default tracks, showing only the QuickLifted "
@@ -573,7 +573,7 @@ printf("</form>\n");
 printf("<div id='pgcStatus' class='pgStatus' style='display:none'></div>\n");
 printf("<div id='pgcResults' class='pgResults'></div>\n");
 
-printf("<p>Have a sequence instead?  Use <a href='hgPangenome'>PanView</a>.</p>\n");
+printf("<p>Have a sequence instead?  Use <a href='hgPangenome'>PanAlign</a>.</p>\n");
 }
 
 static void pageStart(char *title)
@@ -609,7 +609,7 @@ static void pageResults()
  * reloading it works, and it can be handed to someone else for as long as the
  * job is still cached upstream. */
 {
-pageStart("PanView Results");
+pageStart("PanAlign Results");
 /* The results page of hgBlat's new design: hgPangenomeResults.js builds the
  * summary strip, the sortable DataTable and the detail panel inside this
  * container, from the shared house style in gbModern.css and this tool's
@@ -729,12 +729,12 @@ return atol(s);
 }
 
 static void pageLiftAll()
-/* page=liftAll: one PanLift region on every haplotype in the graph: how it
+/* page=liftAll: one PanConvert region on every haplotype in the graph: how it
  * carries over, and the table.  Named entirely by the link - the source path
  * and the interval - so it can be reloaded and handed on; cmd=liftoverAll
  * checks them again. */
 {
-pageStart("PanLift — All haplotypes");
+pageStart("PanConvert — All haplotypes");
 jsIncludeDataTablesLibs();
 webIncludeResourceFile("gbModern.css");
 webIncludeResourceFile("hgPangenome.css");
@@ -756,7 +756,7 @@ for (c = src; srcOk && *c != '\0'; ++c)
 jsonWriteString(jw, "src", srcOk ? src : "");
 jsonWriteNumber(jw, "start", pgPageCoord("start"));
 jsonWriteNumber(jw, "end", pgPageCoord("end"));
-jsonWriteStringf(jw, "panLiftUrl", "hgPangenome?page=convert&%s=%s",
+jsonWriteStringf(jw, "panConvertUrl", "hgPangenome?page=convert&%s=%s",
                  cartSessionVarName(), cartSessionId(cart));
 pgJsonBackLink(jw);
 jsonWriteObjectEnd(jw);
@@ -774,9 +774,9 @@ cartWebEnd();
 }
 
 static void pageConvert()
-/* page=convert: PanLift's form, and under it the result of a conversion. */
+/* page=convert: PanConvert's form, and under it the result of a conversion. */
 {
-pageStart("PanLift");
+pageStart("PanConvert");
 /* gbModern.css for the ancestry plot's details panel, which is the results
  * page's; everything in it is scoped to .gbApp, so the form is untouched. */
 webIncludeResourceFile("gbModern.css");
@@ -799,9 +799,9 @@ cartWebEnd();
 }
 
 static void pageForm()
-/* No page named: PanView's form. */
+/* No page named: PanAlign's form. */
 {
-pageStart("PanView — Find a DNA sequence across the human pangenome");
+pageStart("PanAlign — Find a DNA sequence across the human pangenome");
 webIncludeResourceFile("gbModern.css");   // shared house-style components (.gbPill, .gbCard, ...)
 webIncludeResourceFile("hgPangenome.css");
 
@@ -959,7 +959,7 @@ if (cartCommand != NULL)
 if (!pgToolsOn())
     {
     cartWebStart(cart, NULL, "Pangenome tools");
-    printf("<p>PanView and PanLift are not available on this server.</p>\n");
+    printf("<p>PanAlign and PanConvert are not available on this server.</p>\n");
     cartWebEnd();
     return;
     }
@@ -1031,7 +1031,7 @@ if (isEmpty(cmd))
 /* Off on this server: every command says so, and the page does in doMiddle. */
 if (!pgToolsOn())
     {
-    emitJsonError("PanView and PanLift are not available on this server");
+    emitJsonError("PanAlign and PanConvert are not available on this server");
     return 0;
     }
 

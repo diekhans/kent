@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""mockMiddleware.py - stand-in for the PanView graph server.
+"""mockMiddleware.py - stand-in for the PanAlign graph server.
 
 Used by the Layer 2 proxy tests.  Two jobs:
 

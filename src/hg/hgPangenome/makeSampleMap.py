@@ -8,7 +8,7 @@ produces the same result for a given release.
 
 What the page gets is each sample's population as the HPRC describes it: the
 1000 Genomes population code ("GBR") and descriptor ("British from England and
-Scotland").  PanLift's target picker groups and filters haplotypes by it.
+Scotland").  PanConvert's target picker groups and filters haplotypes by it.
 
 Nothing is added to that.  The HPRC follows the NHGRI's guidelines for referring
 to populations, which do not use super-populations, and leaves them out of the
@@ -89,7 +89,7 @@ def main():
     lines.append(' * Maps a pangenome sample (the SAMPLE of PanSN "SAMPLE#PHASE", lower-cased)')
     lines.append(' * to its population as the HPRC describes it: [1000 Genomes code, descriptor].')
     lines.append(' * Read through hgPangenomeCommon.js (population) by the results page, for its')
-    lines.append(' * Population column, and by PanLift, to group and filter the target picker.')
+    lines.append(' * Population column, and by PanConvert, to group and filter the target picker.')
     lines.append(' * Super-populations are deliberately absent: the HPRC follows the NHGRI')
     lines.append(" * guidelines for referring to populations, which do not use them.")
     lines.append(' *')

@@ -1,7 +1,7 @@
 kentSrc = ../../..
 include ../../../inc/common.mk
 
-# Tests for PanView and PanLift.  "make test" builds the CGI from this tree,
+# Tests for PanAlign and PanConvert.  "make test" builds the CGI from this tree,
 # without installing it, runs every layer against it and removes it again.  It
 # contacts no network, no MySQL, no live middleware and no bottleneck server.
 # A layer that cannot run (no node, say) is reported as NOT RUN and the suite
@@ -41,9 +41,9 @@ Individual layers:\n\
   node unitTests.js     pure-function unit tests (Layer 1)\n\
   node commonTests.js   what the scripts share, and the scripts as shipped\n\
   python3 cgiTests.py   the CGI against a mock graph server (Layer 2)\n\
-  node formTests.js     the PanView search form (Layer 3)\n\
+  node formTests.js     the PanAlign search form (Layer 3)\n\
   node resultsTests.js  results page: cells, row order, download\n\
-  node convertTests.js  PanLift\n\
+  node convertTests.js  PanConvert\n\
   node plotTests.js     the ancestry plot both tools share\n\
 \n\
 To test a CGI you built yourself:  PG_CGI=/path/to/hgPangenome python3 cgiTests.py\n"

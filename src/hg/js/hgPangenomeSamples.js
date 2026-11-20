@@ -3,7 +3,7 @@
  * Maps a pangenome sample (the SAMPLE of PanSN "SAMPLE#PHASE", lower-cased)
  * to its population as the HPRC describes it: [1000 Genomes code, descriptor].
  * Read through hgPangenomeCommon.js (population) by the results page, for its
- * Population column, and by PanLift, to group and filter the target picker.
+ * Population column, and by PanConvert, to group and filter the target picker.
  * Super-populations are deliberately absent: the HPRC follows the NHGRI
  * guidelines for referring to populations, which do not use them.
  *

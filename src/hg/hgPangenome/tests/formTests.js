@@ -1,6 +1,6 @@
 /* formTests.js - Layer 3 of the hgPangenome test suite.
  *
- * The PanView search form (js/hgPangenome.js), driven end to end through a
+ * The PanAlign search form (js/hgPangenome.js), driven end to end through a
  * stubbed fetch: what it sends when Submit is clicked, how it polls, where it
  * goes when the job is done, and what it says when something fails.  The
  * results themselves are drawn by another page and are tested in
@@ -18,7 +18,7 @@ var test = require('node:test');
 var check = require('./check.js');
 var loader = require('./loadClient.js');
 
-test("PanView's search form (js/hgPangenome.js)", async function (ctx) {
+test("PanAlign's search form (js/hgPangenome.js)", async function (ctx) {
 var t = check.under(ctx);
 
 var PAGE_IDS = ['pgStatus', 'pgSeq', 'pgSubmit', 'pgClear', 'pgFile'];

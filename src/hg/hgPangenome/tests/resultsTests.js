@@ -17,7 +17,7 @@ var check = require('./check.js');
 var vm = require('vm');
 var loader = require('./loadClient.js');
 
-test("PanView's results page (js/hgPangenomeResults.js)", async function (ctx) {
+test("PanAlign's results page (js/hgPangenomeResults.js)", async function (ctx) {
 var t = check.under(ctx);
 
 // The results page's file is loaded without its module wrapper (loadClient.js
@@ -189,7 +189,7 @@ await t.test('a PanSN name is shown as its sample and haplotype number', functio
     t.eq(R.pgrPhaseOf('GRCh38#0'), '0', 'haplotype 0');
     t.eq(R.pgrPhaseOf('odd'), '', 'no number to show');
     R.window.pangenomeSamples = { hg00097: ['GBR', 'British from England and Scotland'] };
-    t.eq(R.pgrPopOf('HG00097#2'), 'British from England and Scotland (GBR)', 'population, as PanLift words it');
+    t.eq(R.pgrPopOf('HG00097#2'), 'British from England and Scotland (GBR)', 'population, as PanConvert words it');
     t.eq(R.pgrPopOf('GRCh38#0'), '', 'a reference has none');
 });
 await t.test('a hit reads "2 of 3", not a placement', function () {

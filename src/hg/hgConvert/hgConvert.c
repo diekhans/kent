@@ -179,14 +179,14 @@ if (askAboutQuickLift)
     }
 
 /* The haplotypes of the human pangenome mostly have no chain between them, so they are not in
- * the list above; PanLift converts between them through the pangenome graph.  Offered where the
+ * the list above; PanConvert converts between them through the pangenome graph.  Offered where the
  * pangenome tools are turned on (hg.conf pangenomeTools=on, as hgPangenome reads it) and the
  * source is human. */
 if (cfgOptionBooleanDefault("pangenomeTools", FALSE) && sameWord(fromDb->organism, "Human"))
     {
     puts("<div class='fieldRow' style='margin-top: 15px;'>\n");
     hPrintf("To a pangenome haplotype? "
-            "<a href='../cgi-bin/hgPangenome?page=convert&%s&db=%s&position=%s'>Use PanLift</a>\n",
+            "<a href='../cgi-bin/hgPangenome?page=convert&%s&db=%s&position=%s'>Use PanConvert</a>\n",
             cartSidUrlString(cart), cgiEncode(trackHubSkipHubName(database)), cgiEncode(fromPos));
     puts("</div>\n");
     }

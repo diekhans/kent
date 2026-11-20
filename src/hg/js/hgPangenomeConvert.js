@@ -1,4 +1,4 @@
-/* hgPangenomeConvert.js - PanLift, the coordinate-conversion pages.
+/* hgPangenomeConvert.js - PanConvert, the coordinate-conversion pages.
  *
  * Translates a region from one haplotype's coordinates to the others' through
  * the pangenome graph, in the spirit of hgConvert's "In Other Genomes" - but
@@ -936,12 +936,12 @@ function allAnnotControl() {
         el("span", { class: "k", text: "Opening a haplotype" }),
         el("span", { class: "v" }, [
             el("label", { for: "pgcQuickLift", title: "Display tracks from the source " +
-                          "assembly mapped onto the target assembly" }, [lift, " PanLift tracks"]),
+                          "assembly mapped onto the target assembly" }, [lift, " PanConvert tracks"]),
             hideLabel])]);
 }
 
 // The table of where a region lands, one row a piece.  With "chosen", a list
-// of haplotypes, it is PanLift's answer for those: each of them has a row,
+// of haplotypes, it is PanConvert's answer for those: each of them has a row,
 // found or not, and the page's statistics and filters, which describe the
 // whole pangenome, are left out.  Without, it is the all-haplotypes page.
 function renderAll(resp, src, chosen) {
@@ -1171,7 +1171,7 @@ function renderAll(resp, src, chosen) {
             shown = allRows.filter(function (r) { return !r.tr.hidden; });
         }
         var name = String(src.src).replace(/#/g, "_") + "_" + (src.start + 1) + "-" + src.end;
-        pg.saveFile(allTsv(shown, len), "panLift_" + name + ".tsv", "text/tab-separated-values");
+        pg.saveFile(allTsv(shown, len), "panConvert_" + name + ".tsv", "text/tab-separated-values");
     });
     if (anc) ancPlot(acts, anc);
 }
@@ -1184,8 +1184,8 @@ function allHeadActions(page) {
     if (page.backUrl)
         acts.appendChild(el("a", { class: "gbPill", href: page.backUrl, text: "Back to Genome Browser",
             title: "Return to the Genome Browser at your previous location (" + page.backPos + ")" }));
-    acts.appendChild(el("a", { class: "gbPill", href: page.panLiftUrl || (selfUrl() + "?page=convert"),
-        text: "Back to PanLift", title: "Convert to a few assemblies, chosen by hand" }));
+    acts.appendChild(el("a", { class: "gbPill", href: page.panConvertUrl || (selfUrl() + "?page=convert"),
+        text: "Back to PanConvert", title: "Convert to a few assemblies, chosen by hand" }));
     sectTtl.appendChild(acts);
 }
 
@@ -1196,7 +1196,7 @@ function initAll() {
     var named = parts.length >= 3 && page.start >= 0 && page.end > page.start;
     if (!named) {
         showError("This link does not name a region to convert. Go to the region in the " +
-                  "Genome Browser and open PanLift from there.");
+                  "Genome Browser and open PanConvert from there.");
         return;
     }
     var src = { src: page.src, contig: parts.slice(2).join("#"), start: page.start, end: page.end };
@@ -1724,7 +1724,7 @@ function notInPangenome(db) {
     });
     var differs = pg.graphNamesDiffer(pg.bareDb(db));
     return pg.bareDb(db) + (differs ? " cannot be converted from yet." : " is not in the pangenome.") +
-           " Open PanLift from " +
+           " Open PanConvert from " +
            from.concat([differs ? "another HPRC assembly" : "an HPRC assembly"])
                .join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
 }
