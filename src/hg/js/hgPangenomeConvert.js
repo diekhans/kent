@@ -57,6 +57,10 @@ function hapForDb(db) {
     if (!dbToHap) buildDbToHap();
     if (!db) return null;
     var bare = pg.bareDb(db);
+    // Not a source: the page has the assembly's names for its sequences, the
+    // graph has its own, and it answers a name it does not know with "nothing
+    // there" rather than with an error.
+    if (pg.graphNamesDiffer(bare)) return null;
     return dbToHap[db] || dbToHap[String(db).toLowerCase()] ||
            dbToHap[bare] || dbToHap[bare.toLowerCase()] || null;
 }

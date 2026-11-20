@@ -487,9 +487,12 @@ if (isEmpty(cigar) || startEl == NULL || startEl->type != jsonNumber)
 struct hash *sizes = pgChromSizes(db);
 if (sizes == NULL)
     { emitJsonError("no sequence sizes available for %s", db); return; }
-int tSize = hashIntValDefault(sizes, contig, 0);
+/* The graph's name for the sequence, which on HG002 is not the assembly's. */
+char *own = pgSeqName(db, sizes, contig);
+int tSize = (own == NULL) ? 0 : hashIntValDefault(sizes, own, 0);
 if (tSize == 0)
     { emitJsonError("%s is not a sequence of %s", contig, db); return; }
+contig = own;
 /* Before the start is narrowed to an int: one past what an int holds would
  * turn into a start that looks fine. */
 if (startEl->val.jeNumber < 0 || startEl->val.jeNumber >= tSize)
@@ -536,7 +539,8 @@ if (othersEl != NULL && othersEl->type == jsonList)
         char *oCigar = jsonOptionalStringField(o, "cigar", NULL);
         char *oStrand = jsonOptionalStringField(o, "strand", "+");
         struct jsonElement *oStart = jsonFindNamedField(o, "", "start");
-        int oSize = isEmpty(oContig) ? 0 : hashIntValDefault(sizes, oContig, 0);
+        oContig = pgSeqName(db, sizes, oContig);
+        int oSize = (oContig == NULL) ? 0 : hashIntValDefault(sizes, oContig, 0);
         if (oSize == 0 || isEmpty(oCigar) || oStart == NULL || oStart->type != jsonNumber ||
             oStart->val.jeNumber < 0 || oStart->val.jeNumber >= oSize)
             continue;

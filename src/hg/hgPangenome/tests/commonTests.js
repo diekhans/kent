@@ -87,10 +87,22 @@ await t.test('the references come from the same table', function () {
     t.eq(C.assemblyFor('CHM13#0'), 'hs1', 'CHM13');
     t.eq(C.assemblyFor('GRCh38#0'), 'hg38', 'GRCh38');
 });
-await t.test('an assembly served only from a hub elsewhere is kept as its URL', function () {
-    var v = C.assemblyFor('HG002#1');
-    t.contains(v, 'https://genome.ucsc.edu', 'absolute');
-    t.contains(v, 'db=hub_', 'hub id db, which only resolves on that server');
+await t.test('HG002 is opened in its GenArk assemblies, like every other sample', function () {
+    // HPRC's index links it by a hub's number on genome.ucsc.edu, which opens
+    // whatever assembly the reader's session there was on last.
+    t.eq(C.assemblyFor('HG002#1'), 'GCA_018852605.3', 'paternal');
+    t.eq(C.assemblyFor('HG002#2'), 'GCA_018852615.3', 'maternal');
+    t.eq(C.assemblyName('GCA_018852605.3'), 'hg002v1.1.pat', 'under the name it was published by');
+    var hubs = Object.keys(page.window.pangenomeAssemblies).filter(function (hap) {
+        return /hub_[0-9]+_/.test(page.window.pangenomeAssemblies[hap]); });
+    t.deepEq(hubs, [], 'and no haplotype is left that opens by a hub\'s number');
+});
+await t.test('the assemblies the graph names its own way are marked', function () {
+    t.eq(C.graphNamesDiffer('GCA_018852615.3'), true, 'HG002 maternal');
+    t.eq(C.graphNamesDiffer('GCA_018852605.3'), true, 'HG002 paternal');
+    t.eq(C.graphNamesDiffer('GCA_044165215.1'), false, 'not another sample');
+    t.eq(C.graphNamesDiffer('hg38'), false, 'nor a reference');
+    t.eq(C.graphNamesDiffer('toString'), false, 'nor a name Object.prototype has');
 });
 await t.test('an unknown haplotype has no assembly', function () {
     t.isNull(C.assemblyFor('NOSUCHSAMPLE#1'), 'unknown sample');
@@ -274,7 +286,8 @@ t.suite('the scripts as shipped');
 await t.test('each adds its own name to the page and nothing else', function () {
     var b = browser();
     t.deepEq(b.add('hgPangenomeCommon.js'), ['pangenomeCommon'], 'the shared helpers');
-    t.deepEq(b.add('hgPangenomeAssemblies.js'), ['pangenomeAssemblies', 'pangenomeAssemblyNames'],
+    t.deepEq(b.add('hgPangenomeAssemblies.js'),
+             ['pangenomeAssemblies', 'pangenomeAssemblyNames', 'pangenomeGraphNamesDiffer'],
              'the assembly tables');
     t.deepEq(b.add('hgPangenomeSamples.js'), ['pangenomeSamples'], 'the population table');
     t.deepEq(b.add('hgPangenomePclai.js'), ['pangenomePlot'], 'the ancestry plot');

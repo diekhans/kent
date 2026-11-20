@@ -1241,6 +1241,57 @@ class CartCommands(CgiTest):
         self.eq("... and so do the eleven asked for twice over", for_twice, for_one)
         self.eq("... each still answered in its place", (each[:1], twice), (one, each + each))
 
+    # ---- a sequence the graph names its own way ----
+
+    def test_hg002_by_the_graphs_names(self):
+        # The graph has HG002's sequences as chr2; its GenArk assembly has
+        # them as CP139519.2, with chr2 as another name.  The page sends the
+        # graph's name, and the files are read and written by the assembly's.
+        self.need("pslToBigPsl", "bigPsl.as", "bedToBigBed", "bigBedToBed")
+        mat, pat = "GCA_018852615.3", "GCA_018852605.3"
+
+        def track(contig):
+            """The answer for an alignment on that sequence, and the sequence
+            its track file has it on."""
+            out = self.in_box("cmd=alignTrack&payload=" + enc(
+                '{"db":"%s","contig":"%s","name":"q","sequence":"%s","start":135676798,"cigar":"40M","strand":"+"}'
+                % (mat, contig, "ACGT" * 10)))
+            m = re.search(r'bigDataUrl%3D([^"& ]*\.bb)', out)
+            rows = self.rows(urllib.parse.unquote(m.group(1))) if m else []
+            return out, (rows[0][0] if rows else None)
+        out, on = track("chr2")
+        self.has("HG002: an alignment is shown on a sequence named as the graph names it", out, '"status":"ok"')
+        self.eq("... in a track on the sequence as the assembly names it", on, "CP139519.2")
+        self.has("... with the browser opened there", out, "position=CP139519.2%3A")
+        self.eq("... the assembly's own name does as before", track("CP139519.2")[1], "CP139519.2")
+        self.has("... and a name it has no sequence for is refused", track("chrZ")[0],
+                 "chrZ is not a sequence of " + mat)
+
+        is_chain = lambda n: n.startswith("chain") and n.endswith(".bb") and not n.endswith(".link.bb")
+
+        def convert(src_db, src, tgt_db, tgt, s, e, ts, te):
+            """The answer to a conversion of one block, and its chain as
+            "target size, start-end, source name start-end"."""
+            before = set(self.files("pangenomeQuickLift", is_chain))
+            out = self.in_box("cmd=quickLift&payload=" + enc(
+                '{"srcDb":"%s","tgtDb":"%s","src":"%s","srcHap":"x","position":"chr2:%d-%d","hideTracks":"off",'
+                '"blocks":[{"haplotype":"%s","source_start":%d,"source_end":%d,"target_start":%d,"target_end":%d,'
+                '"strand":"+"}]}' % (src_db, tgt_db, src, ts + 1, te, tgt, s, e, ts, te)))
+            new = sorted(set(self.files("pangenomeQuickLift", is_chain)) - before)
+            rows = self.rows(new[0]) if new else []
+            return out, " ".join("%s, %s-%s, %s %s-%s" % (r[6], r[1], r[2], r[7], r[9], r[10]) for r in rows)
+        out, chain = convert("hg38", "GRCh38#0#chr2", mat, "HG002#2#chr2", 135800000, 135801000, 135676798, 135677798)
+        self.has("HG002: annotations are converted onto the maternal haplotype", out, '"url":"hgTracks?db=' + mat)
+        self.eq("... over a chain on its chr2, by that sequence's size", chain,
+                "242114397, 135676798-135677798, chr2 135800000-135801000")
+        out, chain = convert("hg38", "GRCh38#0#chr2", pat, "HG002#1#chr2", 135800000, 135801000, 135436069, 135437069)
+        self.has("... and onto the paternal one", out, '"url":"hgTracks?db=' + pat)
+        self.eq("... whose chr2 is another length", chain, "241873532, 135436069-135437069, chr2 135800000-135801000")
+        out, chain = convert(mat, "HG002#2#chr2", "hg38", "GRCh38#0#chr2", 135676798, 135677798, 135800000, 135801000)
+        self.has("HG002: and from it, the source named as the graph names it", out, '"url":"hgTracks?db=hg38')
+        self.eq("... the chain naming the source as its assembly does", chain,
+                "242193529, 135800000-135801000, CP139519.2 135676798-135677798")
+
     # ---- a server that keeps /gbdb somewhere else ----
 
     def gbdb_at(self, name, *links):

@@ -42,6 +42,26 @@ DEFAULT_SRC = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 DEFAULT_OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            '..', 'js', 'hgPangenomeAssemblies.js')
 
+# The index links HG002 by a hub's number on genome.ucsc.edu
+# (hgTracks?db=hub_4837794_HG002v1.1.MAT).  That number opens nothing: the
+# browser there stays on whichever assembly the reader's session was on last,
+# and looks for the position in that.  Both assemblies are in GenArk, where
+# they open on any server like every other sample's.  Checked 2026-11-20: the
+# graph's HG002 coordinates are those of these two versions (hg002v1.1), and
+# not of the .2 versions before them.
+HUB_ASSEMBLY = {
+    'HG002v1.1.PAT': 'GCA_018852605.3',
+    'HG002v1.1.MAT': 'GCA_018852615.3',
+}
+
+# Assemblies whose sequences the graph names its own way.  Every other
+# haplotype's are named in the graph as in its assembly (CM094066.1).  HG002's
+# are chr2, chrX, 2chrM in the graph, and CP139519.2 and so on in GenArk.
+# Coming back from the graph the CGI finds the sequence by the assembly's
+# other names for it (pgSeqName).  Going to the graph there is nothing to look
+# the graph's name up in, so PanLift does not start from these.
+GRAPH_NAMES_DIFFER = ('GCA_018852605.3', 'GCA_018852615.3')
+
 
 def db_from_browser_url(url):
     """Turn the table's browser URL into what the pages should link to.
@@ -51,11 +71,12 @@ def db_from_browser_url(url):
         the page can link to the LOCAL browser (keeping the user's session):
             https://genome.ucsc.edu/h/GCA_041900255.1        -> GCA_041900255.1
             https://genome.ucsc.edu/cgi-bin/hgTracks?db=hg38 -> hg38
-      * a full URL, used when the assembly id is NOT portable - a "hub_<id>_"
-        db names a hub by a per-server hub id, which does not resolve on other
-        servers (verified: hub_4837794_HG002v1.1.PAT errors on hgwdev), so those
-        must keep pointing at the server the table names:
-            ...hgTracks?db=hub_4837794_HG002v1.1.PAT -> that URL verbatim
+      * the GenArk accession of a hub assembly we know (HUB_ASSEMBLY):
+            ...hgTracks?db=hub_4837794_HG002v1.1.PAT -> GCA_018852605.3
+      * a full URL for a hub assembly we do not know.  A "hub_<id>_" db names
+        a hub by a number that means nothing on another server, and little on
+        its own, so the pages only link to it and offer nothing more:
+            ...hgTracks?db=hub_123_Other -> that URL verbatim
     Returns None if the URL is not recognized."""
     url = (url or '').strip()
     if not url:
@@ -63,6 +84,9 @@ def db_from_browser_url(url):
     m = re.search(r'[?&]db=([A-Za-z0-9._]+)', url)
     if m:
         db = m.group(1)
+        hub = re.match(r'hub_[0-9]+_(.+)$', db)
+        if hub:
+            return HUB_ASSEMBLY.get(hub.group(1), url)
         return url if db.startswith('hub_') else db
     m = re.search(r'/h/([A-Za-z0-9._]+)', url)
     if m:
@@ -141,8 +165,9 @@ def main():
     lines.append(' * Regenerate with hgPangenome/makeAssemblyMap.py when HPRC publishes a new')
     lines.append(' * release; %d haplotypes here (%d named db, %d GenArk accessions,'
                  % (len(table), len(plain), len(table) - len(plain) - len(urls)))
-    lines.append(' * %d non-portable hub URLs kept absolute).' % len(urls))
-    lines.append(' * A second table gives each assembly its published name, for display.')
+    lines.append(' * %d hub URLs kept as they are).' % len(urls))
+    lines.append(' * A second table gives each assembly its published name, for display, and')
+    lines.append(' * a third the assemblies whose sequences the graph names its own way.')
     lines.append(' */')
     lines.append('')
     lines.append('window.pangenomeAssemblies = {')
@@ -156,6 +181,12 @@ def main():
     for i, db in enumerate(keys):
         comma = ',' if i < len(keys) - 1 else ''
         lines.append('    "%s": "%s"%s' % (db, names[db], comma))
+    lines.append('};')
+    lines.append('')
+    differ = sorted(db for db in GRAPH_NAMES_DIFFER if db in names)
+    lines.append('window.pangenomeGraphNamesDiffer = {')
+    for i, db in enumerate(differ):
+        lines.append('    "%s": true%s' % (db, ',' if i < len(differ) - 1 else ''))
     lines.append('};')
     lines.append('')
 

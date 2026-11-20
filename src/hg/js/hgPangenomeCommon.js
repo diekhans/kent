@@ -70,9 +70,16 @@ function lookUp(table, key) {
 }
 
 // The UCSC assembly a haplotype is browsed in: a db, a GenArk accession, or
-// for two haplotypes the URL of a hub elsewhere.  Null when it has none.
+// the URL of a hub elsewhere for one that is only there.  Null when it has none.
 function assemblyFor(name) {
     return lookUp(window.pangenomeAssemblies, hapKey(name));
+}
+
+// Does the graph name this assembly's sequences its own way?  It does HG002's:
+// chr2 where the assembly says CP139519.2.  What comes back from the graph is
+// matched up by the CGI; a page cannot name such a sequence to the graph.
+function graphNamesDiffer(db) {
+    return lookUp(window.pangenomeGraphNamesDiffer, db) === true;
 }
 
 // The name an assembly was published under, or null.
@@ -175,6 +182,7 @@ window.pangenomeCommon = {
     byId: byId, el: el, clear: clear,
     esc: esc, commas: commas,
     hapKey: hapKey, assemblyFor: assemblyFor, assemblyName: assemblyName,
+    graphNamesDiffer: graphNamesDiffer,
     bareDb: bareDb, population: population,
     formEncode: formEncode, post: post, get: get, json: json, jsonOrBody: jsonOrBody,
     saveFile: saveFile, pageLen: pageLen, keepPageLen: keepPageLen

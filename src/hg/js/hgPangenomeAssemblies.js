@@ -10,9 +10,10 @@
  *   sha256 efa250ce8ffe1e0774d856e8f62db8b2027fa006d840e058562f11afb43c209e
  *   from https://github.com/human-pangenomics/hprc_intermediate_assembly/blob/main/data_tables/browser/ucsc_browser_hprc_r2_v1.0.index.csv
  * Regenerate with hgPangenome/makeAssemblyMap.py when HPRC publishes a new
- * release; 466 haplotypes here (2 named db, 462 GenArk accessions,
- * 2 non-portable hub URLs kept absolute).
- * A second table gives each assembly its published name, for display.
+ * release; 466 haplotypes here (2 named db, 464 GenArk accessions,
+ * 0 hub URLs kept as they are).
+ * A second table gives each assembly its published name, for display, and
+ * a third the assemblies whose sequences the graph names its own way.
  */
 
 window.pangenomeAssemblies = {
@@ -32,8 +33,8 @@ window.pangenomeAssemblies = {
     "hg00140#2": "GCA_042030705.1",
     "hg00146#1": "GCA_042077995.1",
     "hg00146#2": "GCA_042078085.1",
-    "hg002#1": "https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.PAT",
-    "hg002#2": "https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.MAT",
+    "hg002#1": "GCA_018852605.3",
+    "hg002#2": "GCA_018852615.3",
     "hg00232#1": "GCA_042077985.1",
     "hg00232#2": "GCA_042077745.1",
     "hg00235#1": "GCA_044165645.1",
@@ -575,6 +576,8 @@ window.pangenomeAssemblyNames = {
     "GCA_018506975.2": "HG00733_mat_hprc_r2_v1.0.1",
     "GCA_018852585.2": "HG02145_mat_hprc_r2_v1.0.1",
     "GCA_018852595.2": "HG02145_pat_hprc_r2_v1.0.1",
+    "GCA_018852605.3": "hg002v1.1.pat",
+    "GCA_018852615.3": "hg002v1.1.mat_MT",
     "GCA_041899965.1": "HG03834_pat_hprc_r2_v1.0.1",
     "GCA_041899975.1": "HG02258_pat_hprc_r2_v1.0.1",
     "GCA_041899985.1": "HG02129_pat_hprc_r2_v1.0.1",
@@ -948,7 +951,10 @@ window.pangenomeAssemblyNames = {
     "GCA_046629575.1": "NA20762_hap2_hprc_r2_v1.0.1",
     "GCA_046629585.1": "NA20827_hap1_hprc_r2_v1.0.1",
     "hg38": "GCA_000001405.15_GRCh38_no_alt_analysis_set",
-    "hs1": "chm13v2.0_maskedY_rCRS",
-    "https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.MAT": "hg002v1.1.mat_MT",
-    "https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.PAT": "hg002v1.1.pat"
+    "hs1": "chm13v2.0_maskedY_rCRS"
+};
+
+window.pangenomeGraphNamesDiffer = {
+    "GCA_018852605.3": true,
+    "GCA_018852615.3": true
 };

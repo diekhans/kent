@@ -194,6 +194,73 @@ freez(&twoBitPath);
 return hash;
 }
 
+static struct hash *pgOtherNames(char *db)
+/* Every other name an assembly has for one of its sequences -> its own name
+ * for it, from the assembly's chromAlias file.  Empty when it has no such
+ * file.  Read whole, once for each assembly: the file is a row a sequence. */
+{
+static struct hash *byDb = NULL;
+if (byDb == NULL)
+    byDb = hashNew(4);
+struct hash *names = hashFindVal(byDb, db);
+if (names != NULL)
+    return names;
+names = hashNew(10);
+hashAdd(byDb, db, names);
+char *path = pgAssemblyFile(db, ".chromAlias.bb");
+if (path == NULL)
+    return names;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    struct bbiFile *bbi = bigBedFileOpen(path);
+    struct lm *lm = lmInit(0);
+    struct bbiChromInfo *chrom, *chromList = bbiChromList(bbi);
+    for (chrom = chromList; chrom != NULL; chrom = chrom->next)
+        {
+        struct bigBedInterval *iv = bigBedIntervalQuery(bbi, chrom->name, 0, chrom->size, 0, lm);
+        for (; iv != NULL; iv = iv->next)
+            {
+            if (iv->rest == NULL)
+                continue;
+            char *rest = cloneString(iv->rest), *words[32];
+            int i, n = chopByChar(rest, '\t', words, ArraySize(words));
+            for (i = 0; i < n; i++)
+                if (!isEmpty(words[i]) && hashLookup(names, words[i]) == NULL)
+                    hashAdd(names, words[i], cloneString(chrom->name));
+            freez(&rest);
+            }
+        }
+    bbiChromInfoFreeList(&chromList);
+    lmCleanup(&lm);
+    bbiFileClose(&bbi);
+    }
+errCatchEnd(errCatch);
+if (errCatch->gotError)
+    fprintf(stderr, "hgPangenome: could not read %s: %s\n", path,
+            trimSpaces(errCatch->message->string));
+errCatchFree(&errCatch);
+freez(&path);
+return names;
+}
+
+char *pgSeqName(char *db, struct hash *sizes, char *name)
+/* The assembly's own name for a sequence, given the graph's name for it, or
+ * NULL when the assembly has no such sequence.  sizes is pgChromSizes(db).
+ *
+ * Nearly always the two are the same name and it comes back as it went in.
+ * HG002 is where they are not: the graph has its sequences as chr2, and its
+ * GenArk assembly has them as CP139519.2 with chr2 as another name.  The files
+ * of an assembly - its sizes, its 2bit, its tracks - go by its own name. */
+{
+if (isEmpty(name))
+    return NULL;
+if (hashLookup(sizes, name) != NULL)
+    return name;
+char *own = hashFindVal(pgOtherNames(db), name);
+return (own != NULL && hashLookup(sizes, own) != NULL) ? own : NULL;
+}
+
 char *pgChromSizesFile(char *db, struct hash *sizes, boolean renamed)
 /* bedToBigBed wants a chrom.sizes file.  Use the assembly's own where there is
  * one, but not once we have renamed the sequences to their display names - the
@@ -1381,13 +1448,17 @@ if (srcSizes == NULL || tgtSizes == NULL)
                   "lifted onto it", srcSizes == NULL ? srcDb : tgtDb);
     return;
     }
-long qSize = hashIntValDefault(srcSizes, srcContig, 0);
+/* srcPath keeps the graph's name for the sequence, for the graph server.
+ * What is read and written here goes by the assembly's own. */
+char *srcOwn = pgSeqName(srcDb, srcSizes, srcContig);
+long qSize = (srcOwn == NULL) ? 0 : hashIntValDefault(srcSizes, srcOwn, 0);
 if (qSize == 0)
     {
     pgRestoreDb(savedDb);
     emitJsonError("%s is not a sequence of %s", srcContig, srcDb);
     return;
     }
+srcContig = srcOwn;
 
 /* Fetch the blocks this chain is built from, widened beyond the interval that
  * was converted so the tracks survive a pan.
@@ -1438,6 +1509,16 @@ if (blocks == NULL)
     pgRestoreDb(savedDb);
     emitJsonError("%s", err);
     return;
+    }
+/* The blocks name the target's sequences as the graph does.  A name the
+ * assembly does not have is left as it is, and refused where its size is
+ * looked up. */
+struct pgBlock *blk;
+for (blk = blocks; blk != NULL; blk = blk->next)
+    {
+    char *own = pgSeqName(tgtDb, tgtSizes, blk->contig);
+    if (own != NULL)
+        blk->contig = own;
     }
 /* Note: the target's sequences are kept under the accessions the graph uses.
  * Even where an assembly hub sets "chromAuthority ucsc" - so the browser

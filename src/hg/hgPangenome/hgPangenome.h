@@ -214,6 +214,11 @@ struct hash *pgChromSizes(char *db);
  * (hs1 among them) have no such table, and the 2bit is the one thing every
  * assembly has, whether it is native, curated or GenArk. */
 
+char *pgSeqName(char *db, struct hash *sizes, char *name);
+/* The assembly's own name for a sequence, given the graph's name for it, which
+ * is nearly always the same one.  NULL when the assembly has no such
+ * sequence.  sizes is pgChromSizes(db). */
+
 char *pgChromSizesFile(char *db, struct hash *sizes, boolean renamed);
 /* bedToBigBed wants a chrom.sizes file.  Use the assembly's own where there is
  * one, but not once we have renamed the sequences to their display names - the

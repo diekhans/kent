@@ -467,6 +467,23 @@ await (async function () {
         t.contains(foreign.el.pgcStatus.textContent, 'not in the pangenome', 'with the reason');
         t.eq(liftPosts(foreignAuto).length, 0, 'nothing sent on arrival');
     });
+    await t.test('HG002 is not a source either: the graph names its sequences its own way', async function () {
+        // The page has the assembly's name for a sequence, CP139519.2, and the
+        // graph has chr2.  Asked by a name it does not know, the graph says
+        // that nothing is there, which would be shown as an answer.
+        var c = startPage({ db: 'GCA_018852615.3', position: 'chr2:1000-2000' });
+        await check.wait(40);
+        c.el.pgcSubmit.dispatch('click');
+        await check.wait(20);
+        t.contains(c.el.pgcSrcNote.textContent, 'is not in the pangenome', 'the page says so');
+        t.eq(liftPosts(c).length, 0, 'and the graph is not asked');
+    });
+    await t.test('a place on HG002 opens in its own assembly on this server', function () {
+        var link = pg.browserLinkFor({ haplotype: 'HG002#2#chr2', start: 135704416, end: 135733180 });
+        t.eq(link.url, '../cgi-bin/hgTracks?db=GCA_018852615.3&position=chr2%3A135704417-135733180',
+             'by the graph\'s name for the sequence, which the browser takes');
+        t.eq(link.isRemote, false, 'not on another server');
+    });
 
     t.suite('the sequence names arrive late');
     await t.test('the conversion waits for them, and sends the graph\'s name', function () {
