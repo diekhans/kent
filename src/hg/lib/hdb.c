@@ -1273,8 +1273,10 @@ if (trackHubDatabase(db) || startsWith("GC", db))
     if (genome == NULL)
         errAbort("cannot find %s in loaded track hubs", db);
 
-    if (genome->twoBitPath)
-        safef(retNibName, HDB_MAX_PATH_STRING, "%s", genome->twoBitPath);
+    /* Without this the caller reads a file name out of memory nobody wrote. */
+    if (genome->twoBitPath == NULL)
+        errAbort("the hub of %s names no twoBitPath for it", db);
+    safef(retNibName, HDB_MAX_PATH_STRING, "%s", genome->twoBitPath);
     return;
     }
 if (cfgOptionBooleanDefault("forceTwoBit", TRUE) == TRUE && !trackHubDatabase(db))

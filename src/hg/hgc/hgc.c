@@ -8861,7 +8861,12 @@ if (restrictToWindow)
     {
     psl = pslTrimToTargetRange(wholePsl, winStart, winEnd);
     if (psl == NULL)
+       {
+       /* Nothing of it is in the window: the window is beside the alignment, or inside one of
+        * its introns, where the alignment spans the window and no block of it is there. */
        fprintf(body, "<p>No alignment of %s within browser window.", wholePsl->qName);
+       return 0;
+       }
     }
 
 struct dnaSeq *dnaSeq;
@@ -8995,9 +9000,10 @@ FILE *index, *body;
 trashDirFile(&indexTn, "index", "index", ".html");
 trashDirFile(&bodyTn, "body", "body", ".html");
 
-/* Writing body of alignment. */
+/* Writing body of alignment.  partPsl is NULL when nothing of the alignment is in the window,
+ * so the names are read from wholePsl, which has the same ones. */
 body = mustOpen(bodyTn.forCgi, "w");
-htmStartDirDepth(body, partPsl->qName, 2);
+htmStartDirDepth(body, wholePsl->qName, 2);
 blockCount = showPartialDnaAlignment(wholePsl, oSeq, body, cdsS, cdsE, TRUE);
 htmEnd(body);
 fclose(body);
@@ -9006,13 +9012,14 @@ chmod(bodyTn.forCgi, 0666);
 /* Write index. */
 index = mustOpen(indexTn.forCgi, "w");
 if (qName == NULL)
-    qName = partPsl->qName;
+    qName = wholePsl->qName;
+boolean partInWindow = (partPsl != NULL && partPsl != wholePsl);
 htmStartDirDepth(index, qName, 2);
 fprintf(index, "<H3>Alignment of %s</H3>", qName);
 fprintf(index, "<A HREF=\"../%s#cDNA\" TARGET=\"body\">%s</A><BR>\n", bodyTn.forCgi, qName);
-if (partPsl != wholePsl)
+if (partInWindow)
     fprintf(index, "<A HREF=\"../%s#cDNAStart\" TARGET=\"body\">%s in browser window</A><BR>\n", bodyTn.forCgi, qName);
-fprintf(index, "<A HREF=\"../%s#genomic\" TARGET=\"body\">%s.%s</A><BR>\n", bodyTn.forCgi, hOrganism(database), partPsl->tName);
+fprintf(index, "<A HREF=\"../%s#genomic\" TARGET=\"body\">%s.%s</A><BR>\n", bodyTn.forCgi, hOrganism(database), wholePsl->tName);
 for (i=1; i<=blockCount; ++i)
     {
     fprintf(index, "<A HREF=\"../%s#%d\" TARGET=\"body\">block%d</A><BR>\n",
@@ -9029,7 +9036,7 @@ printf("  <FRAME SRC=\"%s\" NAME=\"index\">\n", indexTn.forCgi);
 // Start the body frame at the #cDNAStart anchor.  This used to be an ONLOAD
 // attribute on the FRAMESET, but our CSP puts a nonce in script-src, so
 // browsers ignore 'unsafe-inline' and never run an inline event handler.
-if (partPsl != wholePsl)
+if (partInWindow)
     printf("  <FRAME SRC=\"%s#cDNAStart\" NAME=\"body\">\n", bodyTn.forCgi);
 else
     printf("  <FRAME SRC=\"%s\" NAME=\"body\">\n", bodyTn.forCgi);
@@ -10021,7 +10028,8 @@ printf("<div class='blatAlnStrip'>"
        "<div class='blatAlnStat'><span class='k'>Strand</span><span class='v'>%s</span></div>"
        "</div>\n",
        qNameHtml, chromHtml, tStartC, tEndC, idColor, ident, matchC, qSizeC, psl->strand);
-if (gAlnInWindow)
+/* Not when nothing of it is in the window: what is below then says so itself. */
+if (gAlnInWindow && pslTrimToTargetRange(psl, winStart, winEnd) != NULL)
     {
     char winStartC[32], winEndC[32];
     sprintLongWithCommas(winStartC, winStart + 1);

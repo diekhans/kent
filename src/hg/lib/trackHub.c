@@ -1939,7 +1939,11 @@ while ((hel = hashNext(&cookie)) != NULL)
         if (cartSelected != NULL)
             {
             char *str = (sameWord(cartSelected, "on") || atoi(cartSelected) > 0) ? "on" : "off";
-            dyStringPrintf(dy, "parent %s %s\n", trackHubSkipHubName(tdb->parent->track), str);
+            // A track can have the setting and no parent linked to it; the branch below allows
+            // for that too.  The parent is then named as the setting names it.
+            char *parentName = (tdb->parent != NULL) ? tdb->parent->track
+                                                     : cloneFirstWord((char *)hel->val);
+            dyStringPrintf(dy, "parent %s %s\n", trackHubSkipHubName(parentName), str);
             }
         else if (tdb->parent != NULL)
             {

@@ -1058,6 +1058,25 @@ class CartCommands(CgiTest):
         self.has("quickLift: converting again gives a link", out, '"url":"hgTracks?db=hg38')
         self.eq("... through the same hub file, not a second one", len(self.hubs()), 1)
 
+    def test_subtracks_chosen_in_the_cart(self):
+        # Which subtracks of a composite are ticked is the reader's choice,
+        # kept in the cart as <track>_sel, and goes into the hub on the
+        # subtrack's parent line (dumpTdbAndChildren in trackHub.c).
+        self.need("bedToBigBed")
+        self.in_box("cmd=quickLift&payload=%s&encBlacklist_sel=1&comments_sel=0" % enc(QL_FULL))
+        hub = read(self.hubs()[0]) if self.hubs() else ""
+
+        def parent_of(track):
+            for stanza in hub.split("\n\n"):
+                if re.search(r"^track %s$" % track, stanza, re.M):
+                    return " ".join(re.findall(r"^parent .*$", stanza, re.M))
+            return "no such track in the hub"
+        self.eq("hub: a subtrack ticked in the cart is on", parent_of("encBlacklist"), "parent problematic on")
+        self.eq("... one unticked is off", parent_of("comments"), "parent problematic off")
+        self.eq("... and those the cart says nothing of are as their trackDb has them",
+                parent_of("grcExclusions") + ", " + parent_of("ncbiRefSeqCurated"),
+                "parent problematic off, parent refSeqComposite on")
+
     def test_the_chain(self):
         # Built from the blocks of a translation.  Read back from the files:
         # one row a chain, and one row a block in the link file.
