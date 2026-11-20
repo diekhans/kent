@@ -17,6 +17,10 @@
 #
 # Exit 0 = every layer ran and passed.  1 = a test failed.  2 = no test
 # failed, but a layer did not run.
+#
+# With PG_ALLOW_NOT_RUN=1 the last of those is said and exits 0.  That is for
+# "make test" in src/hg, which reaches this suite with the rest of the tree's:
+# a machine with no node is not a tree with a failing test.
 
 set -u
 cd "$(dirname "$0")"
@@ -45,9 +49,11 @@ figure() {          # figure <file> <word before or after the number>
 
 runJs() {           # runJs <file> <layer name>
     banner "$2 ($1)"
-    if ! node --version >/dev/null 2>&1; then
-        echo "NOT RUN: node not found"
-        note "$2" "NOT RUN (node not found)"
+    # node:test came with node 18; an older node would fail every file here
+    # for a reason that has nothing to do with the code under test.
+    if ! node -e "require('node:test')" >/dev/null 2>&1; then
+        echo "NOT RUN: node not found, or too old to have node:test"
+        note "$2" "NOT RUN (no node with node:test)"
         notRun=1
         return
     fi
@@ -116,6 +122,10 @@ if [ "$failed" -ne 0 ]; then
 fi
 if [ "$notRun" -ne 0 ]; then
     echo "SUITE RESULT: INCOMPLETE - nothing failed, but not everything ran"
+    if [ "${PG_ALLOW_NOT_RUN:-}" = "1" ]; then
+        echo "(let go: PG_ALLOW_NOT_RUN is set)"
+        exit 0
+    fi
     exit 2
 fi
 echo "SUITE RESULT: PASS"

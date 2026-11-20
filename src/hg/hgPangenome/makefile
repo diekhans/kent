@@ -17,5 +17,11 @@ compile: $O
 
 # "make test" here runs the suite in tests/, which builds the CGI from this
 # tree and removes it again.  See tests/README.
+#
+# "make test" in src/hg comes here too (TEST_DIRS there).  So a layer that
+# cannot run on this machine - the JavaScript ones need node 18 or later - is
+# said and let go, as the js makefile lets jshint go where there is no node.
+# A test that fails still stops the run.  "make test" in tests/ itself is
+# strict about both.
 test::
-	cd tests && ${MAKE} test
+	cd tests && PG_ALLOW_NOT_RUN=1 ${MAKE} test

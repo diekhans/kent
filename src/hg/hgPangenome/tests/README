@@ -19,6 +19,14 @@ A layer that cannot run - no node, no CGI built - is reported as NOT RUN and
 the suite result is INCOMPLETE, not PASS.  A file that ends without a verdict
 is a failure.  "make help" lists the targets.
 
+"make test" in src/hg runs this suite with the tree's other tests (TEST_DIRS
+in src/hg/makefile), by way of "make test" one directory up from here.  That
+way in, an INCOMPLETE result is printed and let go: the JavaScript layers need
+node 18 or later, and a machine without it is not a tree with a failing test.
+A test that fails stops that run as it stops this one.  Do not start two runs
+in one checkout at the same moment: both build the CGI in the source
+directory, and one of them loses it.
+
 Run one file, or one class of the CGI tests:
 
     node unitTests.js                  # exit 0 = all passed

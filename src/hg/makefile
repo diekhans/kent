@@ -28,7 +28,7 @@ BROWSER_LOADERS += utils/regionsToChain
 #endif
 
 # these should not be included in UTILS_APPLIST or parallel test runs will fail
-TEST_DIRS = lib utils
+TEST_DIRS = lib utils hgPangenome
 
 TEST_EXTRA = cgilib
 
