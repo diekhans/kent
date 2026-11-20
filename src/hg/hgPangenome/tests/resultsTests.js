@@ -879,6 +879,25 @@ await t.test('a second click on a link that is opening is left alone', async fun
     await check.wait(2);
     t.eq(p.arms.length, 2, 'and it can be clicked again');
 });
+await t.test('nor is a click on the same row\'s link, drawn anew with the table while the first waits', async function () {
+    var p = actPage(), link = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row(), 'browser', link);
+    // More rows were placed: the table is drawn again, and the row has a new link.
+    var anew = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row({ rank: 4 }), 'browser', anew);
+    await check.wait(2);
+    t.eq(p.arms.length, 1, 'asked for once');
+    t.eq(anew.innerHTML, 'CM1.1:1-9', 'and the new link keeps its words');
+    p.x.pgrAct(row({ rank: 4 }), 'details', { innerHTML: 'details' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'browser', { innerHTML: 'B' });
+    await check.wait(2);
+    t.eq(p.arms.length, 3, 'another link of the row, and another row, are their own');
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    p.x.pgrAct(row({ rank: 4 }), 'browser', anew);
+    await check.wait(2);
+    t.eq(p.arms.length, 4, 'and once the first has ended the new link can be clicked');
+});
 await t.test('the page goes where the reader clicked last, whichever answer is first', async function () {
     var p = actPage(), a = { innerHTML: 'A' }, b = { innerHTML: 'B' };
     p.x.pgrAct(row(), 'browser', a);
@@ -974,6 +993,63 @@ await t.test('with the Genome Browser\'s helper (utils.js) on the page, the help
     lib.x.pgrCopySays(button, false);
     t.eq(lib.said.length, 2, 'for a failure too, so that the label is put back');
     t.eq(button.innerHTML, 'Not copied', 'with the failure said');
+});
+
+await t.test('a click on the button in the sequence box says what became of the copy', async function () {
+    // The handler itself, on the button the box is drawn with.
+    function boxPage(clipboard, exec) {
+        var nodes = {};
+        var c = copyPage(clipboard, exec);
+        c.x.document.getElementById = function (id) {
+            if (!nodes[id]) { nodes[id] = { id: id, style: {}, select: function () { nodes.selected = true; } }; }
+            return nodes[id];
+        };
+        c.x.pangenomeResultsPage = { querySeqs: [{ name: 'q1', seq: 'acgt' }] };
+        c.x.pgrShowSeq();
+        c.nodes = nodes;
+        return c;
+    }
+    var wrote = [];
+    var ok = boxPage({ writeText: function (s) { wrote.push(s); return Promise.resolve(); } }, false);
+    ok.nodes.pgrSeqCopy.onclick();
+    await check.wait(2);
+    t.eq(wrote[0], '>q1\nACGT\n', 'the sequence in the box is what is copied');
+    t.eq(ok.nodes.pgrSeqCopy.textContent, 'Copied', 'and the button says so');
+    var refused = boxPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, false);
+    refused.nodes.pgrSeqCopy.onclick();
+    await check.wait(2);
+    t.eq(refused.nodes.pgrSeqCopy.textContent, 'Not copied', 'refused: the button does not say Copied');
+    t.ok(refused.nodes.selected, 'and the text is selected, for Ctrl+C');
+});
+
+t.suite('the Download button, drawn anew with the table');
+await t.test('a download being put together is not started a second time from the new button', async function () {
+    var nodes = {}, held = [], saved = [];
+    var newButton = function () { nodes.pgrTsvBtn = { textContent: 'Download table', disabled: false }; return nodes.pgrTsvBtn; };
+    var x = loadResults({ pangenomePclai: false, document: {
+        readyState: 'complete', addEventListener: function () {},
+        getElementById: function (id) { return nodes[id] || null; } } });
+    x.pgrCompleteForExport = function () { return new Promise(function (resolve) { held.push(resolve); }); };
+    x.pgrExportRows = function () { return []; };
+    x.window.pangenomeCommon.saveFile = function (text, name) { saved.push(name); };
+    var first = newButton();
+    x.pgrWireTsv('pangenome_q1');
+    first.onclick();
+    t.deepEq([first.disabled, first.textContent], [true, 'Preparing\u2026'], 'the button says it is preparing');
+    var second = newButton();           // more rows placed: the table and its button are drawn again
+    x.pgrWireTsv('pangenome_q1');
+    t.deepEq([second.disabled, second.textContent], [true, 'Preparing\u2026'], 'and so does the one drawn in its place');
+    second.onclick();
+    await check.wait(2);
+    t.eq(held.length, 1, 'a click on it starts nothing');
+    held[0]();
+    await check.wait(2);
+    t.deepEq(saved, ['pangenome_q1.tsv'], 'one file');
+    t.deepEq([second.disabled, second.textContent], [false, 'Download table'],
+             'and the button on the page has its words back');
+    second.onclick();
+    await check.wait(2);
+    t.eq(held.length, 2, 'and can be clicked again');
 });
 
 t.suite('the download and the page look up loci in turn');

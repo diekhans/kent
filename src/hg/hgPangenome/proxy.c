@@ -213,7 +213,8 @@ if (errCatchStart(errCatch))
             result = "max_targets must be a number";
         else if (el != NULL && n > maxTargets)
             {
-            safef(msg, sizeof(msg), "too many targets: %.0f (limit is %d)", n, maxTargets);
+            /* %g: a number such as 1e300 written out in full would not fit the message */
+            safef(msg, sizeof(msg), "too many targets: %g (limit is %d)", n, maxTargets);
             result = msg;
             }
         el = jsonFindNamedField(root, "", "min_coverage");
@@ -256,7 +257,7 @@ if (errCatchStart(errCatch))
     else if (mmEl != NULL && multimaps > maxMultimaps)
         {
         safef(msg, sizeof(msg),
-              "too many alignments per sequence: %.0f (limit is %d)",
+              "too many alignments per sequence: %g (limit is %d)",
               multimaps, maxMultimaps);
         result = msg;
         }
@@ -283,7 +284,7 @@ if (errCatchStart(errCatch))
                 if (seq == NULL)
                     { result = "a sequence entry has no 'sequence'"; break; }
                 if (!pgPlainName(jsonOptionalStringField(seqObj, "name", "")))
-                    { result = "a sequence name has a blank or a line break in it"; break; }
+                    { result = "a sequence name has a blank or a control character in it"; break; }
                 int n = strlen(seq);
                 if (n == 0)
                     { result = "a sequence is empty"; break; }

@@ -47,7 +47,6 @@
  * here.  That is why this returns a point per haplotype and not a mixture. */
 
 #define PCLAI_CONTRIB "contrib/hprc2annot"
-#define PCLAI_PANEL_MAX (4 * 1024 * 1024)   /* the published panel is 94 kb */
 
 static char *pgPclaiDir(char *acc)
 /* The contrib directory holding one assembly's pcLAI, or NULL.  A name, not
@@ -57,7 +56,7 @@ static char *pgPclaiDir(char *acc)
  * so an accession we do not serve yields NULL rather than a path - the caller
  * never builds a directory name out of unchecked input. */
 {
-if (isEmpty(acc))
+if (isEmpty(acc) || !pgSafeToken(acc))
     return NULL;
 char *arkDir = pgGenArkDir(acc);
 if (arkDir == NULL)
@@ -199,7 +198,6 @@ return got;
  * own CAT/LiftOff set.  Both files keep the gene symbol and the gene type in
  * the same columns. */
 
-#define LOCUS_MAX_ITEMS 200     /* one page of the table */
 #define LOCUS_MAX_GENES 3       /* "exon A-B-C" says enough */
 #define LOCUS_SPAN_PER_SEQ 10   /* longest interval named, in longest sequences */
 
@@ -393,7 +391,7 @@ if (errCatchStart(errCatch))
         {
         struct slRef *ref;
         int n = 0;
-        for (ref = jsonListVal(itemsEl, "items"); ref != NULL && n < LOCUS_MAX_ITEMS;
+        for (ref = jsonListVal(itemsEl, "items"); ref != NULL && n < PG_LOCUS_MAX_ITEMS;
              ref = ref->next, ++n)
             {
             struct jsonElement *item = ref->val;
@@ -470,7 +468,9 @@ dyStringFree(&out);
 
 static char *pgSmallFile(char *path, off_t maxSize)
 /* The text of a file, here or at a URL.  NULL when it is not there, is bigger
- * than maxSize, or will not read.  Through udc, which reads both. */
+ * than maxSize, or will not read.  Through udc, which reads both.  The limit
+ * goes to the read as well: the size asked for first is that of the file as it
+ * was then. */
 {
 char *text = NULL;
 struct errCatch *errCatch = errCatchNew();
@@ -478,7 +478,7 @@ if (errCatchStart(errCatch))
     {
     off_t size = udcFileSize(path);
     if (size >= 0 && size <= maxSize)
-        text = udcFileReadAllIfExists(path, NULL, 0, NULL);
+        text = udcFileReadAllIfExists(path, NULL, maxSize, NULL);
     }
 errCatchEnd(errCatch);
 errCatchFree(&errCatch);
@@ -488,13 +488,14 @@ return text;
 static char *pgPclaiPanel(char *path)
 /* The reference panel file's text, or NULL when there is no file, it is far
  * bigger than a panel is, or it does not read as an object with a "points"
- * list.
+ * list.  Read as this library reads JSON, which lets through some text that a
+ * browser refuses: this catches a file cut short, not every malformed one.
  *
  * The text goes into the answer as it is.  A file caught half written during
  * a data push would make the whole answer unreadable; left out, the page says
  * that there is no panel. */
 {
-char *text = isEmpty(path) ? NULL : pgSmallFile(path, PCLAI_PANEL_MAX);
+char *text = isEmpty(path) ? NULL : pgSmallFile(path, PG_PCLAI_PANEL_MAX);
 if (text == NULL)
     return NULL;
 boolean ok = FALSE;
@@ -540,6 +541,8 @@ void doPclai()
 /* Ancestry coordinates for a list of haplotypes, each read at its own
  * surjected interval, plus the reference cloud they are read against.  With
  * "windows": true, each point also lists every window its interval crosses.
+ * With "panel": false the cloud is left out, for a page that has it already:
+ * a table of many hits is asked about in pieces, and one cloud serves them all.
  *
  * The payload is a list rather than one shared locus because that is the whole
  * point of using the assembly-coordinate files - see the note above. */
@@ -553,7 +556,7 @@ if (isEmpty(payload))
 
 struct dyString *out = dyStringNew(4096);
 dyStringAppend(out, "{\"status\":\"ok\",\"points\":[");
-boolean wantWindows = FALSE;
+boolean wantWindows = FALSE, wantPanel = TRUE;
 int found = 0, asked = 0;
 int maxHaps = PG_PCLAI_MAX_HAPLOTYPES;
 char *panelDir = NULL;                  /* the first contrib dir that resolved */
@@ -567,6 +570,8 @@ if (errCatchStart(errCatch))
     /* PanLift asks for every window in each region, not just its point. */
     struct jsonElement *winEl = jsonFindNamedField(root, "", "windows");
     wantWindows = (winEl != NULL && winEl->type == jsonBoolean && winEl->val.jeBoolean);
+    struct jsonElement *panelEl = jsonFindNamedField(root, "", "panel");
+    wantPanel = !(panelEl != NULL && panelEl->type == jsonBoolean && !panelEl->val.jeBoolean);
     if (spotsEl == NULL)
         parseError = "payload is missing 'spots'";
     else
@@ -655,9 +660,10 @@ dyStringPrintf(out, "],\"asked\":%d,\"found\":%d", asked, found);
  * the answer stays within the files the points came from. */
 char *panelPath = NULL;
 char *cfgPanel = pgPclaiRefPanel();
-if (cfgPanel != NULL)
-    panelPath = cloneString(cfgPanel);
-else if (panelDir != NULL)
+if (wantPanel && cfgPanel != NULL)
+    /* a name under /gbdb is found as every other one is: where this server keeps it */
+    panelPath = startsWith("/gbdb/", cfgPanel) ? pgGbdbFile(cfgPanel) : cloneString(cfgPanel);
+else if (wantPanel && panelDir != NULL)
     {
     char name[PATH_LEN];
     safef(name, sizeof(name), "%s/pclaiRefPanel.json", panelDir);

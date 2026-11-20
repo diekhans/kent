@@ -25,6 +25,13 @@
 set -u
 cd "$(dirname "$0")"
 
+# node: the one on the PATH, or else the one the build uses, which the
+# makefile passes on as NODEBIN (src/inc/common.mk).
+NODE=$(command -v node 2>/dev/null || true)
+if [ -z "$NODE" ] && [ -n "${NODEBIN:-}" ] && [ -x "$NODEBIN/node" ]; then
+    NODE="$NODEBIN/node"
+fi
+
 NOT_RUN=77          # cgiTests.py's "could not run"
 summary=""          # one line a layer, printed at the end
 failed=0
@@ -49,17 +56,20 @@ figure() {          # figure <file> <word before or after the number>
 
 runJs() {           # runJs <file> <layer name>
     banner "$2 ($1)"
-    # node:test came with node 18; an older node would fail every file here
-    # for a reason that has nothing to do with the code under test.
-    if ! node -e "require('node:test')" >/dev/null 2>&1; then
-        echo "NOT RUN: node not found, or too old to have node:test"
-        note "$2" "NOT RUN (no node with node:test)"
+    # The tests are written for node 18 and later; an older node would fail
+    # files here for a reason that has nothing to do with the code under test.
+    if [ -z "$NODE" ] ||
+       ! "$NODE" -e "process.exit(parseInt(process.versions.node, 10) >= 18 ? 0 : 1)" >/dev/null 2>&1; then
+        echo "NOT RUN: node not found, or older than 18"
+        note "$2" "NOT RUN (no node 18 or later)"
         notRun=1
         return
     fi
     local out status passed
     out=$(mktemp "${TMPDIR:-/tmp}/pgTests.XXXXXX")
-    node "$1" 2>&1 | tee "$out"
+    # Plain output whatever the caller's environment asks of node: the verdict
+    # is read from it below, and colour codes around a number hide it.
+    FORCE_COLOR=0 NODE_OPTIONS= "$NODE" "$1" 2>&1 | tee "$out"
     status=${PIPESTATUS[0]}
     passed=$(figure "$out" pass)
     if [ "$status" -ne 0 ]; then

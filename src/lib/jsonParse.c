@@ -306,6 +306,8 @@ for(i = 0;; i++)
     char c = str[*posPtr + i];
     if(c == 'e' || c == 'E' || c == '.')
         integral = FALSE;
+    else if(c == '+' && i > 0 && tolower(str[*posPtr + i - 1]) == 'e')
+        ;       // the sign of an exponent: 1e+06, as jsonWriteDouble() writes a million
     else if(!c || (!isdigit(c) && c != '-'))
         break;
     }

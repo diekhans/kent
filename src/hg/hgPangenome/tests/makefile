@@ -6,18 +6,24 @@ include ../../../inc/common.mk
 # contacts no network, no MySQL, no live middleware and no bottleneck server.
 # A layer that cannot run (no node, say) is reported as NOT RUN and the suite
 # does not pass.
+#
+# The CGI is removed only if it was not there before: "make compile" leaves one
+# in the directory, and that one is not this makefile's to take away.  NODEBIN
+# is where common.mk found node, for a machine that has none on its PATH.
+runSuite = had=no; [ -e ../hgPangenome ] && had=yes; \
+	(cd .. && ${MAKE} compile) || exit 1; \
+	$(1) NODEBIN=${NODEBIN} PG_CGI=../hgPangenome ./runTests.sh; status=$$?; \
+	[ $$had = yes ] || rm -f ../hgPangenome; exit $$status
 
 test::
-	(cd .. && ${MAKE} compile)
-	PG_CGI=../hgPangenome ./runTests.sh; status=$$?; rm -f ../hgPangenome; exit $$status
+	$(call runSuite,)
 
 # The same, plus the checks on the commands that run inside the cart
 # (quickLift, refAnnot, alignTrack).  Those need the browser's central
 # database, taken from your hg.conf, and each request starts a session row
 # there, which is why they are not in "make test".
 testWithDb::
-	(cd .. && ${MAKE} compile)
-	PG_DB_TESTS=1 PG_CGI=../hgPangenome ./runTests.sh; status=$$?; rm -f ../hgPangenome; exit $$status
+	$(call runSuite,PG_DB_TESTS=1)
 
 # Refresh the generated haplotype -> UCSC assembly table from the published
 # HPRC index, then re-run the tests that depend on it.

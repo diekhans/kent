@@ -73,6 +73,13 @@ extern struct cart *cart;
 #define PG_ANNOTATION_HIDE_OWN TRUE     /* a haplotype's own tracks are hidden when a
                                          * reference's annotations are brought */
 
+/* What one request to this CGI reads. */
+#define PG_MAX_OTHER_HITS 50            /* other hits on a haplotype put in its track: more
+                                         * than any install asks the mapper for */
+#define PG_LOCUS_MAX_ITEMS 200          /* hits one locus request names: a page of the table */
+#define PG_PCLAI_PANEL_MAX 4194304      /* bytes in an ancestry reference panel; the
+                                         * published one is 94 kb */
+
 /* Talking to the graph server. */
 #define PG_QUEUE_WAIT_SECS 120          /* longest a request waits for its turn */
 #define PG_SLOT_DIR "../trash/hgPangenomeSlots"     /* where the queue's lock files live */

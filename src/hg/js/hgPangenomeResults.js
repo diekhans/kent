@@ -796,6 +796,10 @@ function pgrAnnotControl() {
 // takes over, and the answer to the one before is then not followed: the page
 // can only go to one place, and it goes where the reader clicked last.
 var pgrActSeq = 0;
+// The links now waiting, by row and by what they open.  Kept here and not on
+// the link: the table is drawn again while a link waits, and the new link of
+// the same row is then the same one to the reader.
+var pgrActOut = Object.create(null);
 
 function pgrAct(row, what, link) {
     // "plain" is the browser link again, without the annotations - offered
@@ -809,16 +813,17 @@ function pgrAct(row, what, link) {
     var busy = !!link && what !== "newtab";
     // A link already waiting is left to it.  A second click would take
     // "opening..." for the link's own words and put that back in their place.
-    if (busy && link.pgrOpening) { return; }
+    var out = JSON.stringify([pgrKeyOf(row), plain ? "plain" : what]);
+    if (busy && pgrActOut[out]) { return; }
     var was = busy ? link.innerHTML : null;
-    if (busy) { link.pgrOpening = true; link.innerHTML = "opening&#8230;"; }
+    if (busy) { pgrActOut[out] = true; link.innerHTML = "opening&#8230;"; }
     // A new tab has to be opened in the click itself or the popup blocker takes
     // it, so it is opened now and pointed at the answer when it arrives.
     var tab = (what === "newtab") ? window.open("", "_blank") : null;
     var mine = tab ? 0 : ++pgrActSeq;
     // The link gets its words back; true if this opening is still the one to follow.
     var settle = function () {
-        if (busy) { link.innerHTML = was; link.pgrOpening = false; }
+        if (busy) { link.innerHTML = was; delete pgrActOut[out]; }
         return !!tab || mine === pgrActSeq;
     };
     var ready = (what === "details") ? Promise.resolve() : pgrHapEverywhere(row);
@@ -1617,6 +1622,34 @@ function pgrCopySays(button, ok) {
     }
 }
 
+// The Download button of the table just drawn, for a file named base.tsv.
+//
+// The button is drawn anew with the table, also while a download is being put
+// together: the new one is then as busy as the one it replaced, and the one on
+// the page when the file is ready is the one set right again.
+var pgrExporting = false;
+
+function pgrWireTsv(base) {
+    var label = document.getElementById("pgrTsvBtn").textContent;
+    var busy = function (on) {
+        var btn = document.getElementById("pgrTsvBtn");
+        if (!btn) { return; }
+        btn.disabled = on;
+        btn.textContent = on ? "Preparing…" : label;
+    };
+    if (pgrExporting) { busy(true); }
+    document.getElementById("pgrTsvBtn").onclick = function () {
+        if (pgrExporting) { return; }
+        pgrExporting = true;
+        busy(true);
+        pgrCompleteForExport().catch(function () { /* what there is, then */ }).then(function () {
+            pgrExporting = false;
+            busy(false);
+            pg.saveFile(pgrRowsToTsv(pgrExportRows()), base + ".tsv", "text/tab-separated-values");
+        });
+    };
+}
+
 function pgrShowSeq() {
     var box = document.getElementById("pgrSeqBox");
     if (box.style.display === "flex") { box.style.display = "none"; return; }
@@ -1959,20 +1992,8 @@ function pgrDraw(queries, allRows) {
     // as they are on any page turned to.
     pgrFillPage(dt);
 
-    document.getElementById("pgrTsvBtn").onclick = function () {
-        var btn = this;
-        if (btn.disabled) { return; }
-        var label = btn.textContent;
-        var base = multiQuery ? "pangenomeResults" :
-            "pangenome_" + String((rows[0] || {}).query || "query").replace(/[^A-Za-z0-9._-]+/g, "_");
-        btn.disabled = true;
-        btn.textContent = "Preparing…";
-        pgrCompleteForExport().catch(function () { /* what there is, then */ }).then(function () {
-            btn.disabled = false;
-            btn.textContent = label;
-            pg.saveFile(pgrRowsToTsv(pgrExportRows()), base + ".tsv", "text/tab-separated-values");
-        });
-    };
+    pgrWireTsv(multiQuery ? "pangenomeResults" :
+        "pangenome_" + String((rows[0] || {}).query || "query").replace(/[^A-Za-z0-9._-]+/g, "_"));
     if (document.getElementById("pgrSeqBtn")) {
         document.getElementById("pgrSeqBtn").onclick = pgrShowSeq;
     }

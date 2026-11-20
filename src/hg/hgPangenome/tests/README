@@ -145,9 +145,10 @@ rate limit       with the bottleneck server pointed at a dead port, cmd=map,
                  cmd=locus and cmd=surjectAll consult it and fail closed, in
                  JSON; the light reads (haplotypes, contigs, pclai) consult it
                  and are answered all the same; cmd=poll does not consult it.
-                 With a stand-in for the bottleneck server: what each command
-                 weighs, and that a reader far over the limit is refused
-                 everything but the poll of a job already running.
+                 With a stand-in for the bottleneck server: what the light
+                 reads, a locus lookup and a mapping weigh, and that a reader
+                 far over the limit is refused them all, but not the poll of
+                 a job already running.
 commands        every command the page scripts send is one the CGI knows;
                  an unknown cmd is not forwarded and is answered with a JSON
                  error that names it.

@@ -125,15 +125,30 @@ function getCmd(qs) {
 
 // ---- Status -----------------------------------------------------------------
 
-function showStatus(node) {
+// One box says what the page is doing, and two things write to it that can
+// overlap: a conversion, and the question of which assemblies hold the region.
+// The second gives its name, REACH, and keeps out of the first's way: its
+// spinner does not replace a conversion's, and it takes away only what it put
+// there itself.  The box it ticks shows that it is busy in any case.
+var REACH = "reach", CONVERT = "convert";
+var statusOwner = null;         // who wrote what the box shows now
+
+function showStatus(node, owner) {
     var box = $("pgcStatus");
     box.style.display = "";
     clear(box);
     box.appendChild(typeof node === "string" ? document.createTextNode(node) : node);
+    statusOwner = owner || null;
 }
-function hideStatus() { var b = $("pgcStatus"); b.style.display = "none"; clear(b); }
+function hideStatus(owner) {
+    if (owner && statusOwner !== owner) return;
+    var b = $("pgcStatus");
+    b.style.display = "none";
+    clear(b);
+    statusOwner = null;
+}
 
-function showError(message, retry) {
+function showError(message, retry, owner) {
     var box = el("div", { class: "pgErrBox" }, [
         el("span", { class: "pgErrText", text: message })
     ]);
@@ -147,13 +162,14 @@ function showError(message, retry) {
         });
         box.appendChild(b);
     }
-    showStatus(box);
+    showStatus(box, owner);
 }
 
-function showBusy(text) {
+function showBusy(text, owner) {
+    if (owner === REACH && statusOwner === CONVERT) return;
     showStatus(el("div", { class: "pgProgress" }, [
         el("span", { class: "pgSpinner" }), el("span", { text: text })
-    ]));
+    ]), owner);
 }
 
 // =============================================================================
@@ -1529,7 +1545,7 @@ function onReachableToggle() {
         reachable = reachableCache;
         reachableScored = reachableCacheScored;
         fillTargets($("pgcFilter").value);
-        hideStatus();
+        hideStatus(REACH);
         return;
     }
     showReachable();
@@ -1549,9 +1565,9 @@ function showReachable() {
 function askReachable(seq) {
     if (seq !== reachSeq) return;
     var src = buildSource();
-    if (src.error) { setToggleBusy(false); showError(src.error); untick(); return; }
+    if (src.error) { setToggleBusy(false); showError(src.error, null, REACH); untick(); return; }
     showBusy("Asking which assemblies contain " +
-             fmtPos(src.contig, src.start, src.end) + "…");
+             fmtPos(src.contig, src.start, src.end) + "…", REACH);
     var req = { src: src.src, start: src.start, end: src.end, scored: true };
     // Very low scores are usually incidental repeat matches, so ask the server
     // to drop them rather than filtering a long list here.
@@ -1593,9 +1609,9 @@ function askReachable(seq) {
             setToggleBusy(false);
             fillTargets($("pgcFilter").value);
             if (Object.keys(reachable).length === 0)
-                showError("No assembly in the graph contains this region.");
+                showError("No assembly in the graph contains this region.", null, REACH);
             else
-                hideStatus();
+                hideStatus(REACH);
         })
         .catch(function (err) {
             if (seq !== reachSeq) return;
@@ -1607,7 +1623,7 @@ function askReachable(seq) {
                       err.message, function () {
                           if ($("pgcReachableOnly")) { $("pgcReachableOnly").checked = true; }
                           showReachable();
-                      });
+                      }, REACH);
         });
 }
 
@@ -1624,7 +1640,7 @@ function showAllHaplotypes() {
     reachSeq++;                 // a question still out is not to filter the list again
     setToggleBusy(false);
     fillTargets($("pgcFilter").value);
-    hideStatus();
+    hideStatus(REACH);
 }
 
 // Pre-select a sensible target so the page is one click from an answer.  Skips
@@ -1699,13 +1715,18 @@ function showSourceLabel() {
     el2.textContent = text;
 }
 
-// What to say of an assembly that is not in the graph, and where to go.
+// What to say of an assembly that cannot be converted from, and where to go:
+// one that is not in the graph, or one that is and whose sequences the graph
+// names its own way (hapForDb).
 function notInPangenome(db) {
     var from = ["GRCh38#0", "CHM13#0"].map(pg.assemblyFor).filter(function (a) {
         return a && !/^https?:/.test(a);
     });
-    return pg.bareDb(db) + " is not in the pangenome. Open PanLift from " +
-           from.concat(["an HPRC assembly"]).join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
+    var differs = pg.graphNamesDiffer(pg.bareDb(db));
+    return pg.bareDb(db) + (differs ? " cannot be converted from yet." : " is not in the pangenome.") +
+           " Open PanLift from " +
+           from.concat([differs ? "another HPRC assembly" : "an HPRC assembly"])
+               .join(", ").replace(/, ([^,]*)$/, " or $1") + ".";
 }
 
 // Make sure the page opens in a state that can actually be converted: if the
@@ -1977,7 +1998,7 @@ function convertNow(seq) {
     clear($("pgcResults"));
     var what = fmtPos(src.contig, src.start, src.end);
     showBusy("Translating " + what + " to " + targets.length + " assembl" +
-             (targets.length === 1 ? "y" : "ies") + "…");
+             (targets.length === 1 ? "y" : "ies") + "…", CONVERT);
     postCmd("liftoverAll", { src: src.src, start: src.start, end: src.end, tgt: targets })
         .then(function (resp) {
             if (seq !== convertSeq) return;
@@ -1987,7 +2008,7 @@ function convertNow(seq) {
             renderAll(resp, src, targets);
         }).catch(function (err) {
             if (seq !== convertSeq) return;
-            showError("Conversion failed: " + err.message, doConvert);
+            showError("Conversion failed: " + err.message, doConvert, CONVERT);
         });
 }
 

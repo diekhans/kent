@@ -431,8 +431,6 @@ errCatchFree(&errCatch);
 return seq;
 }
 
-#define PG_MAX_OTHER_HITS 50    /* more than any install asks the mapper for */
-
 void doAlignTrack()
 /* Build the sequence track - the user's sequence aligned to one haplotype, as
  * a bigPsl custom track - and hand back a browser URL that draws it and one

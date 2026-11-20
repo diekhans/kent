@@ -282,47 +282,10 @@ dyStringFree(&out);
  * They end up in file paths, URLs and cart variables, so each is held to the
  * shape such a name really has before it goes anywhere. */
 
-boolean pgValidDb(char *db)
-/* Assembly names reach us from the page and end up in file paths and cart
- * variables, so keep them to the shape a db name actually has: letters, digits
- * and . _ - only, beginning with a letter or a digit. */
-{
-if (isEmpty(db) || strlen(db) > 128)
-    return FALSE;
-/* Begins with a letter or a digit, which is what keeps "." and ".." out: both
- * pass the character test below and both mean something in a path. */
-if (!isalnum((unsigned char)db[0]))
-    return FALSE;
-char *p;
-for (p = db; *p != '\0'; ++p)
-    if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '.' || *p == '-'))
-        return FALSE;
-return TRUE;
-}
-
-boolean pgSafeToken(char *tok)
-/* A sample name, a phase or a sequence name on its way into a file path.
- * The same shape pgValidDb insists on, named for the wider use. */
-{
-return pgValidDb(tok);
-}
-
-boolean pgPlainName(char *name)
-/* TRUE for a sequence name with no blank and no control character in it.  The
- * page sends the first word of a FASTA header, so a name of its own never has
- * either.  One posted straight here could, and a line break in a name starts a
- * second record in the FASTA a job's sequences are kept in. */
-{
-char *p;
-for (p = name; *p != '\0'; ++p)
-    if (isspace((unsigned char)*p) || iscntrl((unsigned char)*p))
-        return FALSE;
-return TRUE;
-}
-
-boolean pgValidJobId(char *s)
-/* Job ids go into a URL path, so restrict to a safe charset to avoid any
- * path/SSRF trickery. */
+static boolean pgPlainToken(char *s)
+/* At most 128 letters, digits and . _ - , beginning with a letter or a digit.
+ * The one test behind pgValidDb(), pgSafeToken() and pgValidJobId(), which
+ * are the same test under the name of what each is used on. */
 {
 if (isEmpty(s) || strlen(s) > 128)
     return FALSE;
@@ -332,9 +295,48 @@ if (!isalnum((unsigned char)s[0]))
     return FALSE;
 char *p;
 for (p = s; *p != '\0'; ++p)
-    if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '-' || *p == '.'))
+    if (!(isalnum((unsigned char)*p) || *p == '_' || *p == '.' || *p == '-'))
         return FALSE;
 return TRUE;
+}
+
+boolean pgValidDb(char *db)
+/* Assembly names reach us from the page and end up in file paths and cart
+ * variables, so keep them to the shape a db name actually has: letters, digits
+ * and . _ - only, beginning with a letter or a digit. */
+{
+return pgPlainToken(db);
+}
+
+boolean pgSafeToken(char *tok)
+/* A sample name, a phase or a sequence name on its way into a file path.
+ * The same shape pgValidDb insists on, named for the wider use. */
+{
+return pgPlainToken(tok);
+}
+
+boolean pgPlainName(char *name)
+/* TRUE for a sequence name with no blank and no control character in it.  The
+ * page sends the first word of a FASTA header, so a name of its own never has
+ * either.  One posted straight here could, and a line break in a name starts a
+ * second record in the FASTA a job's sequences are kept in.
+ *
+ * This refuses, at cmd=map, where the name is stored.  pgSafeName() in
+ * seqTrack.c is the other policy for the same hazard: it rewrites a name, at
+ * cmd=alignTrack, where the name is only a label on a track and a refusal
+ * would cost the reader the alignment. */
+{
+char *p;
+for (p = name; *p != '\0'; ++p)
+    if (isspace((unsigned char)*p) || iscntrl((unsigned char)*p))
+        return FALSE;
+return TRUE;
+}
+
+boolean pgValidJobId(char *s)
+/* Job ids go into a URL path, so they are held to the same plain shape. */
+{
+return pgPlainToken(s);
 }
 
 boolean pgValidHapName(char *s)
@@ -720,7 +722,8 @@ static long pgPageCoord(char *var)
  * the top of the page is out, so the reader would be left with half a page. */
 {
 char *s = cgiOptionalString(var);
-if (isEmpty(s) || strlen(s) > 10 || !isAllDigits(s))
+/* Nine digits at most: more than any sequence is long, and it fits an int. */
+if (isEmpty(s) || strlen(s) > 9 || !isAllDigits(s))
     return -1;
 return atol(s);
 }
@@ -824,6 +827,7 @@ struct pgCommand
     char *name;                 /* the value of "cmd" */
     void (*answer)(void);       /* writes the whole response */
     double botWeight;           /* weight with the bottleneck server; 0: not rate limited */
+    boolean runsUnchecked;      /* runs when the bottleneck server cannot be reached */
     boolean inCart;             /* runs inside the cart shell */
     boolean leavesCart;         /* ... and exits without saving the cart */
     };
@@ -852,30 +856,30 @@ static struct pgCommand commands[] = {
      * thirty for a full job - so it carries half the weight: a reader can
      * reload a large results page several times over without being slowed,
      * and a loop of them is still stopped. */
-    {"map",             doMap,             PG_FULL_WEIGHT, FALSE, FALSE},
-    {"poll",            doPoll,            0,              FALSE, FALSE},
-    {"haplotypes",      doHaplotypes,      PG_LIGHT_WEIGHT, FALSE, FALSE},
-    {"liftoverTargets", doLiftoverTargets, PG_FULL_WEIGHT, FALSE, FALSE},
-    {"liftoverAll",     doLiftoverAll,     PG_FULL_WEIGHT, FALSE, FALSE},
-    {"surject",         doSurject,         PG_FULL_WEIGHT, FALSE, FALSE},
-    {"surjectAll",      doSurjectAll,      PG_HALF_WEIGHT, FALSE, FALSE},
+    {"map",             doMap,             PG_FULL_WEIGHT,  FALSE, FALSE, FALSE},
+    {"poll",            doPoll,            0,               FALSE, FALSE, FALSE},
+    {"haplotypes",      doHaplotypes,      PG_LIGHT_WEIGHT, TRUE,  FALSE, FALSE},
+    {"liftoverTargets", doLiftoverTargets, PG_FULL_WEIGHT,  FALSE, FALSE, FALSE},
+    {"liftoverAll",     doLiftoverAll,     PG_FULL_WEIGHT,  FALSE, FALSE, FALSE},
+    {"surject",         doSurject,         PG_FULL_WEIGHT,  FALSE, FALSE, FALSE},
+    {"surjectAll",      doSurjectAll,      PG_HALF_WEIGHT,  FALSE, FALSE, FALSE},
     /* answered from files on this server, without the cart: the pages ask for
      * these whenever what they show changes.  cmd=locus is asked once for each
      * page of the results table and reads gene files for up to 200 rows, so it
      * is limited at the weight hgBlat and hgc carry. */
-    {"contigs",         doContigs,         PG_LIGHT_WEIGHT, FALSE, FALSE},
-    {"pclai",           doPclai,           PG_LIGHT_WEIGHT, FALSE, FALSE},
-    {"locus",           doLocus,           PG_HALF_WEIGHT, FALSE, FALSE},
+    {"contigs",         doContigs,         PG_LIGHT_WEIGHT, TRUE,  FALSE, FALSE},
+    {"pclai",           doPclai,           PG_LIGHT_WEIGHT, TRUE,  FALSE, FALSE},
+    {"locus",           doLocus,           PG_HALF_WEIGHT,  FALSE, FALSE, FALSE},
     /* building a hub or a custom track, which needs the cart (liftedTracks.c,
      * seqTrack.c).  cmd=extendChain is sent after the reader has followed the
      * link and nothing waits for its answer; saving its copy of the cart would
      * write over whatever the browser has done in the seconds since, undoing
      * tracks the reader turned on meanwhile.  It has nothing to save, so it
      * leaves without saving. */
-    {"quickLift",       doQuickLift,       PG_FULL_WEIGHT, TRUE,  FALSE},
-    {"extendChain",     doExtendChain,     PG_FULL_WEIGHT, TRUE,  TRUE},
-    {"refAnnot",        doRefAnnot,        PG_FULL_WEIGHT, TRUE,  FALSE},
-    {"alignTrack",      doAlignTrack,      PG_FULL_WEIGHT, TRUE,  FALSE},
+    {"quickLift",       doQuickLift,       PG_FULL_WEIGHT,  FALSE, TRUE,  FALSE},
+    {"extendChain",     doExtendChain,     PG_FULL_WEIGHT,  FALSE, TRUE,  TRUE},
+    {"refAnnot",        doRefAnnot,        PG_FULL_WEIGHT,  FALSE, TRUE,  FALSE},
+    {"alignTrack",      doAlignTrack,      PG_FULL_WEIGHT,  FALSE, TRUE,  FALSE},
 };
 
 static struct pgCommand *cartCommand = NULL;    /* the command doMiddle() is to run */
@@ -910,6 +914,12 @@ if (errCatch->gotError)
     emitJsonError("the request could not be completed: %.300s",
                   trimSpaces(errCatch->message->string));
     }
+else if (errCatch->gotWarning)
+    /* It answered, and the library warned of something on the way.  The catch
+     * took the warning so that it did not reach the browser; the log is where
+     * it can still be read. */
+    fprintf(stderr, "hgPangenome: cmd=%s warned: %s\n", command->name,
+            trimSpaces(errCatch->message->string));
 errCatchFree(&errCatch);
 }
 
@@ -918,8 +928,8 @@ static void pgWarnToLog(char *format, va_list args)
  * outside pgRunCartCommand()'s own catch, such as the ones that answer after
  * an abort: to the error log.  The cart shell's own handler would write it to
  * the browser as HTML, which next to the JSON leaves an answer the page script
- * cannot read.  A warning from inside the command never gets here: that catch
- * takes it, and it is shown only if the command then aborts. */
+ * cannot read.  A warning from inside the command never gets here: the catch
+ * around it takes it, and writes it to the log itself. */
 {
 fputs("hgPangenome: ", stderr);
 vfprintf(stderr, format, args);
@@ -1046,7 +1056,7 @@ if (command == NULL)
     return 0;
     }
 if (command->botWeight > 0 &&
-    !pgBotCheck(enteredMainTime, command->botWeight, command->botWeight < PG_HALF_WEIGHT))
+    !pgBotCheck(enteredMainTime, command->botWeight, command->runsUnchecked))
     return 0;
 if (command->inCart)
     {
@@ -1057,8 +1067,13 @@ if (command->inCart)
 else
     {
     /* The cart shell does this for the commands above.  A file under /gbdb
-     * can be a URL on a mirror, and udc keeps what it reads of one here. */
+     * can be a URL on a mirror, and udc keeps what it reads of one here.  It
+     * also keeps what it has learnt about a file for five minutes, as
+     * setUdcTimeout() has it for the cart commands; without a time it asks
+     * the far server again each time a file is opened. */
     setUdcCacheDir();
+    if (udcCacheTimeout() < 300)
+        udcSetCacheTimeout(300);
     command->answer();
     }
 return 0;

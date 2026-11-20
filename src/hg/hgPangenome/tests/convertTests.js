@@ -475,7 +475,11 @@ await (async function () {
         await check.wait(40);
         c.el.pgcSubmit.dispatch('click');
         await check.wait(20);
-        t.contains(c.el.pgcSrcNote.textContent, 'is not in the pangenome', 'the page says so');
+        t.contains(c.el.pgcSrcNote.textContent, 'GCA_018852615.3 cannot be converted from yet',
+                   'the page says so');
+        t.notOk(/not in the pangenome/.test(c.el.pgcSrcNote.textContent),
+                'and does not say that it is not in the pangenome, where it is');
+        t.contains(c.el.pgcSrcNote.textContent, 'hg38, hs1 or another HPRC assembly', 'and where to go');
         t.eq(liftPosts(c).length, 0, 'and the graph is not asked');
     });
     await t.test('a place on HG002 opens in its own assembly on this server', function () {
@@ -1463,6 +1467,77 @@ await t.test('it is kept: ticking the box then narrows the list without asking a
     slowReach.el.pgcReachableOnly.dispatch('change');
     t.eq(lateReach.asks, 1, 'no second question');
     t.eq(slowReach.el.pgcTargets.children.length, 1, 'the one haplotype that has the region');
+});
+
+t.suite('the status box, with a conversion and the reachability question both out');
+// One box for both.  The question keeps out of the conversion's way: its
+// answer takes away only what the question itself put there.
+function bothOut(liftAnswer) {
+    var held = {};
+    var c = startPage({ respond: function (u, b) {
+        if (b.indexOf('cmd=liftoverTargets') >= 0)
+            return new Promise(function (resolve) { held.reach = resolve; });
+        if (b.indexOf('cmd=liftoverAll') >= 0)
+            return liftAnswer || new Promise(function (resolve) { held.lift = resolve; });
+        return undefined;
+    } });
+    c.held = held;
+    return c;
+}
+function tickReach(c) {
+    c.el.pgcPos.value = 'CM094066.1:1-100';
+    c.el.pgcReachableOnly.checked = true;
+    c.el.pgcReachableOnly.dispatch('change');
+}
+function retryIn(c) {
+    return c.findAll(c.el.pgcStatus, function (n) {
+        return n.tagName === 'BUTTON' && n.textContent === 'Retry'; })[0];
+}
+await t.test('the answer to the question leaves a failed conversion\'s error and its Retry', async function () {
+    var c = bothOut({ status: 'error', error: 'graph server busy' });
+    await check.wait(60);
+    tickReach(c);
+    await check.wait(20);
+    convert(c, 'CM094066.1:1-100', ['CHM13#0']);
+    await check.wait(20);
+    t.contains(c.el.pgcStatus.textContent, 'Conversion failed: graph server busy', 'the conversion failed');
+    c.held.reach({ haplotypes: ['chm13#0'] });
+    await check.wait(20);
+    t.eq(c.el.pgcTargets.children.length, 1, 'the answer narrowed the list');
+    t.contains(c.el.pgcStatus.textContent, 'Conversion failed: graph server busy', 'and the error is still there');
+    t.ok(retryIn(c), 'with its Retry');
+});
+await t.test('nor does it take away the mark of a conversion still running', async function () {
+    var c = bothOut();
+    await check.wait(60);
+    tickReach(c);
+    await check.wait(20);
+    convert(c, 'CM094066.1:1-100', ['CHM13#0']);
+    await check.wait(20);
+    t.contains(c.el.pgcStatus.textContent, 'Translating', 'the conversion says that it is running');
+    c.held.reach({ haplotypes: ['chm13#0'] });
+    await check.wait(20);
+    t.contains(c.el.pgcStatus.textContent, 'Translating', 'and still does after the answer');
+});
+await t.test('a question asked while a conversion runs does not write over its mark', async function () {
+    var c = bothOut();
+    await check.wait(60);
+    convert(c, 'CM094066.1:1-100', ['CHM13#0']);
+    await check.wait(20);
+    tickReach(c);
+    await check.wait(20);
+    t.contains(c.el.pgcStatus.textContent, 'Translating', 'the conversion\'s mark stays');
+    t.eq(c.el.pgcReachableOnly.disabled, true, 'and the box itself shows that it is being asked');
+});
+await t.test('on its own, the question says that it is asking, and stops saying so when answered', async function () {
+    var c = bothOut();
+    await check.wait(60);
+    tickReach(c);
+    await check.wait(20);
+    t.contains(c.el.pgcStatus.textContent, 'Asking which assemblies contain', 'said');
+    c.held.reach({ haplotypes: ['chm13#0'] });
+    await check.wait(20);
+    t.eq(c.el.pgcStatus.textContent, '', 'and taken away');
 });
 
 t.suite('ranked destinations');

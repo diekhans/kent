@@ -69,6 +69,7 @@ def setUpModule():
 # ------------------------------------------------------------ the mock server
 
 def free_port():
+    """A port nothing listens on: for a server that is to be found down."""
     s = socket.socket()
     s.bind(("127.0.0.1", 0))
     port = s.getsockname()[1]
@@ -91,16 +92,19 @@ class Mock:
             self.clear()
             return
         self.stop()
-        self.port = free_port()
         self.clear()
+        # The mock takes a free port itself and says which: one chosen here
+        # could be taken by another program before the mock had it.
         log = os.path.join(TMP, "mock.err")
         with open(log, "w") as err:
             self.proc = subprocess.Popen(
-                [sys.executable, os.path.join(HERE, "mockMiddleware.py"), "--port", str(self.port),
+                [sys.executable, os.path.join(HERE, "mockMiddleware.py"), "--port", "0",
                  "--record", self.record] + list(args), stderr=err)
         self.args = args
         for _ in range(50):
-            if "listening" in read(log):
+            said = re.search(r"listening on (\d+)", read(log))
+            if said:
+                self.port = int(said.group(1))
                 return
             time.sleep(0.1)
         raise RuntimeError("the mock graph server did not start: " + read(log))
@@ -204,6 +208,10 @@ def run_cgi(cf, method, body="", qs="", box=None, split=False, program=None, mor
     """Run the CGI as the web server would.  Returns what the browser gets with
     what the error log gets after it; with split, the two apart."""
     env = {"HGDB_CONF": cf, "REMOTE_ADDR": "127.0.0.1", "REQUEST_METHOD": method}
+    # where this machine finds the CGI's shared libraries, if it has to be told
+    for name in ("LD_LIBRARY_PATH", "DYLD_LIBRARY_PATH", "DYLD_FALLBACK_LIBRARY_PATH"):
+        if name in os.environ:
+            env[name] = os.environ[name]
     env.update(more_env or {})
     if box is not None:
         # what makes the library keep its trash files in ../trash, as under the web server
@@ -389,7 +397,7 @@ class InputLimits(CgiTest):
         for what, name in [("a line break", "q1\\n>q2\\nAAAAAAAA"), ("a blank", "a b"), ("a tab", "a\\tb")]:
             out = post(self.conf, "map", '{"sequences":[{"name":"%s","sequence":"ACGT"}],"options":{}}' % name)
             self.has("sequence name with %s in it rejected" % what, out,
-                     "a sequence name has a blank or a line break in it")
+                     "a sequence name has a blank or a control character in it")
         self.eq("... and none of them forwarded", MOCK.count(), 0)
 
     def test_alignments_per_sequence(self):
@@ -405,6 +413,8 @@ class InputLimits(CgiTest):
                  post(self.conf, "map", one % "1000.0"), "too many alignments per sequence: 1000 (limit is 3)")
         self.has("... and written with an exponent", post(self.conf, "map", one % "1e3"),
                  "too many alignments per sequence")
+        self.has("... however large: the answer still names the limit", post(self.conf, "map", one % "1e300"),
+                 "too many alignments per sequence: 1e+300 (limit is 3)")
         self.has("a ceiling that is not a number rejected", post(self.conf, "map", one % '"9"'),
                  "max_multimaps must be a number")
         self.eq("none of them forwarded", MOCK.count(), 0)
@@ -564,8 +574,12 @@ class GraphServerFailures(CgiTest):
         self.lacks("... and quotes only the first part", out, "x" * 500)
         # The cut is at 400 bytes.  A letter that takes two bytes, lying across
         # it, is left out whole: half of one is not text.
+        # (from a file: the letter is not one every machine takes on a command line)
         accented = chr(233)
-        out = self.answer("--status", "500", "--body", '{"error":"' + "x" * 389 + accented * 20 + '"}')
+        path = os.path.join(TMP, "accented.json")
+        with open(path, "w", encoding="utf8") as fh:
+            fh.write('{"error":"' + "x" * 389 + accented * 20 + '"}')
+        out = self.answer("--status", "500", "--body-file", path)
         self.lacks("... and does not cut a letter of two bytes in half", out, chr(0xFFFD))
         self.has("... the letters before the cut are quoted", out, "x" * 389)
         # What is quoted is the graph server's own text.  A control character
@@ -676,7 +690,7 @@ class RateLimit(CgiTest):
         self.has("... and cmd=contigs, as far as its own complaint", get(self.bot, "cmd=contigs"),
                  "missing or malformed assembly")
 
-    def test_what_each_command_weighs(self):
+    def test_what_a_command_weighs(self):
         asks = (("haplotypes", lambda cf: get(cf, "cmd=haplotypes")),
                 ("contigs", lambda cf: get(cf, "cmd=contigs")),
                 ("pclai", lambda cf: post(cf, "pclai", '{"spots":[]}')),
@@ -688,7 +702,7 @@ class RateLimit(CgiTest):
         for _, ask in asks:
             ask(quiet.conf("quiet.conf"))
         quiet.close()
-        self.eq("the other commands are: a read that costs little a quarter",
+        self.eq("these five are: a read that costs little a quarter, a mapping the whole",
                 " ".join("%s %g" % (name, float(sent.split()[-1])) for (name, _), sent in zip(asks, quiet.asked)),
                 "haplotypes 0.25 contigs 0.25 pclai 0.25 locus 0.5 map 1")
         # 30 s of delay owed: past the 20 s at which a request is refused
@@ -752,7 +766,20 @@ class Commands(CgiTest):
         self.eq("pclai: so is one that is not an object with a list of points",
                 answer("other.json", '{"points":3}'), none)
         self.eq("pclai: and one far bigger than a panel is",
-                answer("big.json", '{"points":[' + "0," * (2200 * 1024) + '0]}'), none)
+                answer("big.json", '{"points":[' + "0," * (limit("PG_PCLAI_PANEL_MAX") // 2 + 1) + '0]}'), none)
+        # a page that has the panel already asks for the points alone
+        path = os.path.join(TMP, "panel.json")
+        cf = mock_conf("noPanel.conf", "pangenome.pclaiRefPanel=" + path)
+        self.lacks("pclai: the panel is left out for a request that says it has one",
+                   post(cf, "pclai", '{"spots":[],"panel":false}'), '"panel"')
+        self.has("... and sent for one that says nothing", post(cf, "pclai", '{"spots":[]}'), '"panel":{')
+        # a panel named under /gbdb is looked for where this server keeps /gbdb
+        os.makedirs(os.path.join(TMP, "gbdbPanel", "pg"))
+        os.rename(path, os.path.join(TMP, "gbdbPanel", "pg", "panel.json"))
+        cf = mock_conf("gbdbPanel.conf", "pangenome.pclaiRefPanel=/gbdb/pg/panel.json",
+                       "gbdbLoc1=%s/" % os.path.join(TMP, "gbdbPanel"))
+        self.has("pclai: a panel named under /gbdb is read from where /gbdb is kept",
+                 post(cf, "pclai", '{"spots":[]}'), '"panel":{')
 
 
 # ================================================================ where a region lands
@@ -852,6 +879,8 @@ class Liftover(CgiTest):
                  post(self.conf, "surjectAll", ask % (top + 1, 50)), over)
         self.has("... and when written with a decimal point",
                  post(self.conf, "surjectAll", ask % ("%d.0" % (top + 1), 50)), over)
+        self.has("... and however large: the answer still names the limit",
+                 post(self.conf, "surjectAll", ask % ("1e300", 50)), "too many targets: 1e+300 (limit is %d)" % top)
         self.has("surjectAll: a number of targets that is not a number refused",
                  post(self.conf, "surjectAll", ask % ('"all"', 50)), "max_targets must be a number")
         self.has("surjectAll: a coverage floor over 100 refused",
@@ -1118,12 +1147,13 @@ class CartCommands(CgiTest):
                 " ".join("%s:%s" % (r[0], r[1]) for r in rows), "chr1:100 chr1:11000 chr2:500")
         # ... the first fifty of them, whether they fit this assembly or not:
         # one that does not fit costs as much to find out as one that does
+        most = limit("PG_MAX_OTHER_HITS")
         misfit = '{"contig":"noSuchSeq","start":1,"strand":"+","cigar":"40M"}'
         fits = '{"contig":"chr1","start":100,"strand":"+","cigar":"40M"}'
-        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * 49 + [fits])))
-        self.eq("alignTrack: the fiftieth other hit is looked at", len(rows), 2)
-        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * 50 + [fits])))
-        self.eq("... and the fifty-first is not, whatever became of the fifty", len(rows), 1)
+        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * (most - 1) + [fits])))
+        self.eq("alignTrack: the last other hit within the limit is looked at", len(rows), 2)
+        rows = track_of(at('"cigar":"40M","strand":"+","others":[%s]' % ",".join([misfit] * most + [fits])))
+        self.eq("... and the one after it is not, whatever became of the others", len(rows), 1)
         # the CIGAR is input: anything odd is refused
         for bad in ["-5M45M", "10M30Z", "40", "M", "99999999999M", "50M", "10M 30S", "40S"]:
             self.has("alignTrack: CIGAR '%s' refused" % bad, at('"cigar":"%s","strand":"+"' % bad),
@@ -1243,6 +1273,11 @@ class CartCommands(CgiTest):
                  chains_of(blk(11000, 11100, -5000, -4900)), "empty or out-of-range")
         self.has("chain: a block past the end of the source sequence is refused",
                  chains_of(blk(q1 - 50, q1 + 50, 20000, 20100)), "empty or out-of-range")
+        huge = 2 ** 63 - 1
+        self.has("chain: a block at a coordinate no sequence has is refused, on either strand",
+                 chains_of(blk(huge - 100, huge, 20000, 20100, "-")), "empty or out-of-range")
+        self.has("... and so is one whose target is there",
+                 chains_of(blk(11000, 11100, huge - 100, huge)), "empty or out-of-range")
         self.has("chain: a block past the end of the target sequence is said plainly",
                  chains_of(blk(11000, 11100, q1 - 50, q1 + 50)), "a block ends past the end of chr1")
         self.has("chain: no blocks at all is said plainly", chains_of(), "returned no blocks")
@@ -1328,20 +1363,21 @@ class CartCommands(CgiTest):
         # The library warns when a session's custom tracks cannot be read;
         # "ctTest" is its own switch for trying that.  The cart shell would
         # write the warning to the browser as HTML.  It is caught with the
-        # command's aborts, and the answer is the JSON alone.  That catch is
-        # older than pgWarnToLog(), which this test does not reach: it is here
-        # so that the answer stays clean, whichever of the two does it.
+        # command's aborts, the answer is the JSON alone, and the warning
+        # goes to the error log under the command's name.
         self.need("bedToBigBed")
         os.makedirs(os.path.join(self.trash, "ct"))
         with open(os.path.join(self.trash, "ct", "ct_test.bed"), "w"):
             pass
-        out, _ = run_cgi(self.q, "POST", "cmd=quickLift&payload=%s&ctfile_hg38=%s&ctTest=1"
-                         % (enc(QL_FULL), enc("../trash/ct/ct_test.bed")), box=self.box, split=True)
+        out, err = run_cgi(self.q, "POST", "cmd=quickLift&payload=%s&ctfile_hg38=%s&ctTest=1"
+                           % (enc(QL_FULL), enc("../trash/ct/ct_test.bed")), box=self.box, split=True)
         head, _, body = out.partition("\n\n")
         self.eq("a library warning inside a conversion: the header is still the JSON one",
                 head.split("\n")[-1], "Content-Type: application/json")
         self.has("... the conversion is answered", body[:16], '{"status":"ok"')
         self.lacks("... and no HTML comes with it", out, "<")
+        self.has("... and the warning is in the error log", err,
+                 "hgPangenome: trackHubBuild(hg38) warned: Custom track loading error")
 
     def test_locus(self):
         # cmd=locus names the genes at each hit.  An interval far longer than

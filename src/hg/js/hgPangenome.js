@@ -174,7 +174,6 @@ function showValidationErrors(errors) {
 
 function showFatal(message, retryFn) {
     busyOff();
-    submitOff(false);
     var box = el("div", { class: "pgErrBox" });
     box.appendChild(el("span", { class: "pgErrText", text: message }));
     if (retryFn) {
@@ -207,6 +206,21 @@ var runSeq = 0;             // the search the page is waiting for: see pollJob()
 // second click sent a second job.
 function submitOff(off) {
     if ($("pgSubmit")) $("pgSubmit").disabled = !!off;
+}
+
+// A search is out from Submit until it ends, fails or is cleared, and Submit
+// comes back on only then: not for an error that has nothing to do with the
+// search, such as a file that would not read.
+var searchOut = false;
+
+function searchOver() {
+    searchOut = false;
+    submitOff(false);
+}
+
+function searchFailed(message) {
+    searchOver();
+    showFatal(message, run);
 }
 
 function collectOptions() {
@@ -247,6 +261,7 @@ function onSubmit() {
 
 function run() {
     var total = lastPayload.sequences.length;
+    searchOut = true;
     submitOff(true);
     showProgress(0, total);
     // Clear lets go of this search; the answer to it is then not followed up.
@@ -261,7 +276,7 @@ function run() {
         pollJob(resp.job_id, total);
     }).catch(function (err) {
         if (seq !== runSeq) return;
-        showFatal("Could not submit: " + err.message, run);
+        searchFailed("Could not submit: " + err.message);
     });
 }
 
@@ -287,7 +302,7 @@ function pollJob(jobId, total) {
     function failedTry(message) {
         errCount++;
         if (errCount > POLL_MAX_ERRORS) {
-            showFatal("Lost contact with the mapping server: " + message, run);
+            searchFailed("Lost contact with the mapping server: " + message);
             return;
         }
         again();
@@ -296,20 +311,23 @@ function pollJob(jobId, total) {
     function tick() {
         if (seq !== runSeq) return;
         if (Date.now() - started > POLL_MAX_MS) {
-            showFatal("The mapping did not finish in " + (POLL_MAX_MS / 60000) +
-                      " minutes. The server may be busy.", run);
+            searchFailed("The mapping did not finish in " + (POLL_MAX_MS / 60000) +
+                         " minutes. The server may be busy.");
             return;
         }
         readJob(jobId).then(function (job) {
             if (seq !== runSeq) return;
             if (pollEndsJob(job)) {
-                showFatal("Job failed: " + (job.error || "unknown error"), run);
+                searchFailed("Job failed: " + (job.error || "unknown error"));
                 return;
             }
             if (job && job.status === "error") { failedTry(job.error || "no answer"); return; }
             errCount = 0;
             var prog = (job && job.progress) || { completed: 0, total: total };
             if (job && job.status === "done") {
+                // Over, though Submit stays off until the results page is up:
+                // coming back to this page turns it on again (pageshow).
+                searchOut = false;
                 hideStatus();
                 // Hand off to the results table, the way hgBlat moves from the
                 // search form to its hit list.  The job id is the whole of the
@@ -360,7 +378,7 @@ function onClear() {
     // A search still running is let go: nothing is waiting for it any more.
     runSeq++;
     if (pollTimer) { window.clearTimeout(pollTimer); pollTimer = null; }
-    submitOff(false);
+    searchOver();
     hideStatus();
 }
 
@@ -608,8 +626,11 @@ function formBuild() {
 
     // Back from the results page: a browser that restores this page from its
     // back/forward cache restores the overlay with it, still spinning, and
-    // Submit still off.
-    window.addEventListener("pageshow", function () { busyOff(); submitOff(false); });
+    // Submit still off.  Restored with a search still out, both are right as
+    // they are: the search goes on from where it was.
+    window.addEventListener("pageshow", function () {
+        if (!searchOut) { busyOff(); submitOff(false); }
+    });
 
     formCount();
     if (typeof window.convertTitleTagsToMouseovers === "function")

@@ -118,7 +118,8 @@ class Handler(BaseHTTPRequestHandler):
 def main():
     global ARGS
     p = argparse.ArgumentParser()
-    p.add_argument('--port', type=int, required=True)
+    p.add_argument('--port', type=int, default=0,
+                   help='0, the default, takes a free one; the one taken is in the "listening" line')
     p.add_argument('--record')
     p.add_argument('--status', type=int, default=200)
     p.add_argument('--body', default=None)
@@ -128,9 +129,10 @@ def main():
     p.add_argument('--redirect', action='store_true')
     ARGS = p.parse_args()
     if ARGS.body_file:
-        with open(ARGS.body_file) as fh:
+        with open(ARGS.body_file, encoding='utf8') as fh:
             ARGS.body = fh.read()
     srv = HTTPServer(('127.0.0.1', ARGS.port), Handler)
+    ARGS.port = srv.server_address[1]
     # tell the caller we are ready
     sys.stderr.write('mock middleware listening on %d\n' % ARGS.port)
     sys.stderr.flush()

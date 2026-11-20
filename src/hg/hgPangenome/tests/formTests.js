@@ -27,11 +27,11 @@ var CFG = { pollIntervalMs: 5 };
 // Load the form, type a sequence and click Submit.  "responses" is what the
 // CGI answers: submit, and poll in turn (the last one repeats).  A poll
 // response of "fail" is a request that does not get through.
-function start(responses, cfg, seqText, before) {
+function start(responses, cfg, seqText, before, moreIds) {
     var calls = [];
     var i = -1, submits = 0;
     var c = loader.load({
-        ids: PAGE_IDS,
+        ids: PAGE_IDS.concat(moreIds || []),
         readyState: 'loading',
         fetch: function (url, opts) {
             calls.push({ url: url, opts: opts });
@@ -200,8 +200,35 @@ var twiceForm = start({ submit: [QUEUED, { job_id: 'j2', status: 'queued', n_seq
 function pollsOf(c, job) {
     return polls(c).filter(function (x) { return String(x.url).indexOf('job_id=' + job) >= 0; }).length;
 }
+// A file that will not read, chosen while a search is out
+var fileErr = start({ submit: QUEUED, poll: [RUNNING] }, null, null, function (c) {
+    c.sandbox.FileReader = function () {
+        var self = this;
+        this.readAsText = function () { if (self.onerror) self.onerror(); };
+    };
+});
+// The page shown again by the browser (back or forward) with a search still
+// out, and with none.  The form is built here as the browser builds it, which
+// is where the page listens for that.
+function shownAgain(responses) {
+    return start(responses, null, null, function (c) {
+        c.window.hgPangenomeFormData = { graphLabel: 'HPRC', exampleUrl: 'example.fa', exampleLabel: 'Example' };
+        c.window.addEventListener = function (ev, fn) { c.onWindow = c.onWindow || {}; c.onWindow[ev] = fn; };
+    }, ['pgFormBox', 'pgStatusSlot', 'pgTabPaste', 'pgTabUpload', 'pgExample', 'pgDrop']);
+}
+var backDuring = shownAgain({ submit: QUEUED, poll: [RUNNING] });
+var backAfter = shownAgain({ submit: QUEUED, poll: [DONE] });
 await check.wait(60);
 require('vm').runInContext('Date.now = function () { return 1e15; };', endless.sandbox);
+fileErr.el.pgFile.files = [{ name: 'reads.fa' }];
+fileErr.el.pgFile.dispatch('change', { target: fileErr.el.pgFile });
+fileErr.saidAfterFile = fileErr.el.pgStatus.textContent;
+fileErr.offAfterFile = fileErr.el.pgSubmit.disabled;
+[backDuring, backAfter].forEach(function (c) {
+    c.offBefore = c.el.pgSubmit.disabled;
+    if (c.onWindow && c.onWindow.pageshow) { c.onWindow.pageshow(); }
+    c.offAfter = c.el.pgSubmit.disabled;
+});
 clearedForm.el.pgClear.dispatch('click');
 clearedForm.pollsAtClear = polls(clearedForm).length;
 twiceForm.firstAtClick = pollsOf(twiceForm, 'j1');
@@ -322,5 +349,18 @@ await t.test('Submit is on again when the search has failed, and after Clear', f
     t.eq(jobFailed.el.pgSubmit.disabled, false, 'a job that failed');
     t.eq(lost.el.pgSubmit.disabled, false, 'contact lost');
     t.eq(clearedForm.el.pgSubmit.disabled, false, 'Clear');
+});
+
+await t.test('but not for an error that is not the search\'s: a file that will not read', function () {
+    t.contains(fileErr.saidAfterFile, 'Could not read file', 'the error is said');
+    t.eq(fileErr.offAfterFile, true, 'and Submit stays off, the search being still out');
+});
+
+await t.test('nor when the browser shows the page again with the search still out', function () {
+    t.ok(backDuring.onWindow && backDuring.onWindow.pageshow, 'the page listens for being shown again');
+    t.deepEq([backDuring.offBefore, backDuring.offAfter], [true, true], 'off before, and off after');
+    t.ok(/page=results/.test(String(backAfter.window.location)), 'a search that ended went to its results');
+    t.deepEq([backAfter.offBefore, backAfter.offAfter], [true, false],
+             'coming back from there, Submit is on again');
 });
 });

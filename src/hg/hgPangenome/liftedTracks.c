@@ -16,6 +16,7 @@
 #include "net.h"
 #include "jksql.h"
 #include <fcntl.h>
+#include <limits.h>
 #include "trashDir.h"
 #include "pipeline.h"
 #include "hdb.h"
@@ -27,6 +28,7 @@
 #include "chain.h"
 #include "bigChain.h"
 #include "bigLink.h"
+#include "bbiAlias.h"
 #include <ctype.h>
 #include "hgPangenome.h"
 
@@ -194,54 +196,45 @@ freez(&twoBitPath);
 return hash;
 }
 
-static struct hash *pgOtherNames(char *db)
-/* Every other name an assembly has for one of its sequences -> its own name
- * for it, from the assembly's chromAlias file.  Empty when it has no such
- * file.  Read whole, once for each assembly: the file is a row a sequence. */
+static char *pgOwnName(char *db, char *name)
+/* The assembly's own name for a sequence that goes by another of its names,
+ * from the assembly's chromAlias file, or NULL.  Looked up as chromAlias
+ * itself does it, through the file's indexes (bbiAlias.c), and remembered:
+ * the blocks of one conversion name the same few sequences many times over. */
 {
-static struct hash *byDb = NULL;
-if (byDb == NULL)
-    byDb = hashNew(4);
-struct hash *names = hashFindVal(byDb, db);
-if (names != NULL)
-    return names;
-names = hashNew(10);
-hashAdd(byDb, db, names);
+static struct hash *known = NULL;       /* "db name" -> own name, or NULL for none */
+if (known == NULL)
+    known = hashNew(8);
+char key[PATH_LEN];
+safef(key, sizeof(key), "%s %s", db, name);
+struct hashEl *hel = hashLookup(known, key);
+if (hel != NULL)
+    return hel->val;
+char *own = NULL;
 char *path = pgAssemblyFile(db, ".chromAlias.bb");
-if (path == NULL)
-    return names;
-struct errCatch *errCatch = errCatchNew();
-if (errCatchStart(errCatch))
+if (path != NULL)
     {
-    struct bbiFile *bbi = bigBedFileOpen(path);
-    struct lm *lm = lmInit(0);
-    struct bbiChromInfo *chrom, *chromList = bbiChromList(bbi);
-    for (chrom = chromList; chrom != NULL; chrom = chrom->next)
+    struct errCatch *errCatch = errCatchNew();
+    if (errCatchStart(errCatch))
         {
-        struct bigBedInterval *iv = bigBedIntervalQuery(bbi, chrom->name, 0, chrom->size, 0, lm);
-        for (; iv != NULL; iv = iv->next)
-            {
-            if (iv->rest == NULL)
-                continue;
-            char *rest = cloneString(iv->rest), *words[32];
-            int i, n = chopByChar(rest, '\t', words, ArraySize(words));
-            for (i = 0; i < n; i++)
-                if (!isEmpty(words[i]) && hashLookup(names, words[i]) == NULL)
-                    hashAdd(names, words[i], cloneString(chrom->name));
-            freez(&rest);
-            }
+        struct bbiFile *bbi = bigBedFileOpen(path);
+        struct lm *lm = lmInit(0);
+        own = bbiAliasFindNative(bbi, bbiAliasOpenExtra(bbi), lm, name);
+        lmCleanup(&lm);
+        bbiFileClose(&bbi);
         }
-    bbiChromInfoFreeList(&chromList);
-    lmCleanup(&lm);
-    bbiFileClose(&bbi);
+    errCatchEnd(errCatch);
+    if (errCatch->gotError)
+        {
+        fprintf(stderr, "hgPangenome: could not read %s: %s\n", path,
+                trimSpaces(errCatch->message->string));
+        own = NULL;
+        }
+    errCatchFree(&errCatch);
+    freez(&path);
     }
-errCatchEnd(errCatch);
-if (errCatch->gotError)
-    fprintf(stderr, "hgPangenome: could not read %s: %s\n", path,
-            trimSpaces(errCatch->message->string));
-errCatchFree(&errCatch);
-freez(&path);
-return names;
+hashAdd(known, key, own);
+return own;
 }
 
 char *pgSeqName(char *db, struct hash *sizes, char *name)
@@ -257,7 +250,7 @@ if (isEmpty(name))
     return NULL;
 if (hashLookup(sizes, name) != NULL)
     return name;
-char *own = hashFindVal(pgOtherNames(db), name);
+char *own = pgOwnName(db, name);
 return (own != NULL && hashLookup(sizes, own) != NULL) ? own : NULL;
 }
 
@@ -317,6 +310,17 @@ if (a->tStart != b->tStart)
 return 0;
 }
 
+static long pgCoord(struct jsonElement *el)
+/* A coordinate as a request or the graph server wrote it, or -1 for what is
+ * not one: no whole number, a negative one, or one past what a sequence can
+ * be long.  Tested here, before anything is added to it or taken from it. */
+{
+if (el == NULL || el->type != jsonNumber)
+    return -1;
+long v = el->val.jeNumber;
+return (v >= 0 && v <= INT_MAX) ? v : -1;
+}
+
 static struct pgBlock *pgParseBlocks(struct jsonElement *root, long qSize,
                                      char **retError)
 /* Turn the graph server's "blocks" array into chain-space blocks. */
@@ -358,12 +362,18 @@ for (ref = jsonListVal(blocksEl, "blocks"); ref != NULL; ref = ref->next)
         *retError = "a block's haplotype is not a full contig path";
         return NULL;
         }
-    long sStart = ss->val.jeNumber, sEnd = se->val.jeNumber;
+    long sStart = pgCoord(ss), sEnd = pgCoord(se);
+    long tStart = pgCoord(ts), tEnd = pgCoord(te);
+    if (sStart < 0 || sEnd < 0 || tStart < 0 || tEnd < 0)
+        {
+        *retError = "a block has an empty or out-of-range coordinate span";
+        return NULL;
+        }
     struct pgBlock *b;
     AllocVar(b);
     b->contig = contig;
-    b->tStart = ts->val.jeNumber;
-    b->tEnd = te->val.jeNumber;
+    b->tStart = tStart;
+    b->tEnd = tEnd;
     b->strand = (strand[0] == '-') ? '-' : '+';
     if (b->strand == '-')       /* chain query side is reverse-complemented */
         {
@@ -794,6 +804,12 @@ if (errCatch->gotError || isEmpty(built))
             errCatch->gotError ? trimSpaces(errCatch->message->string) : "no hub written");
     built = NULL;
     }
+else if (errCatch->gotWarning)
+    /* Built, and the library warned of something on the way, such as a
+     * session's custom tracks that would not load.  The catch kept the warning
+     * from the browser; the log is where it can still be read. */
+    fprintf(stderr, "hgPangenome: trackHubBuild(%s) warned: %s\n", db,
+            trimSpaces(errCatch->message->string));
 errCatchFree(&errCatch);
 
 if (theirs != NULL)
@@ -1389,13 +1405,8 @@ boolean hideTracks = sameOk(jsonOptionalStringField(root, "hideTracks", "off"), 
 /* The interval the user converted, and the single target this chain is for.
  * With these we can widen the chain ourselves rather than being limited to the
  * blocks the page happened to have. */
-long srcStart = -1, srcEnd = -1;
-struct jsonElement *el = jsonFindNamedField(root, "", "srcStart");
-if (el != NULL && el->type == jsonNumber)
-    srcStart = (long)el->val.jeNumber;
-el = jsonFindNamedField(root, "", "srcEnd");
-if (el != NULL && el->type == jsonNumber)
-    srcEnd = (long)el->val.jeNumber;
+long srcStart = pgCoord(jsonFindNamedField(root, "", "srcStart"));
+long srcEnd = pgCoord(jsonFindNamedField(root, "", "srcEnd"));
 char *tgtHap = jsonOptionalStringField(root, "tgt", NULL);
 
 if (!pgValidDb(srcDb) || !pgValidDb(tgtDb))
@@ -1569,6 +1580,9 @@ if (errCatchStart(errCatch))
 errCatchEnd(errCatch);
 boolean buildFailed = errCatch->gotError;
 char *buildMsg = buildFailed ? cloneString(trimSpaces(errCatch->message->string)) : NULL;
+if (!buildFailed && errCatch->gotWarning)
+    fprintf(stderr, "hgPangenome: writing the lifted tracks' hub warned: %s\n",
+            trimSpaces(errCatch->message->string));
 errCatchFree(&errCatch);
 
 pgRestoreDb(savedDb);

@@ -307,8 +307,97 @@ await t.test('the plot stays, in use, and says how many it is missing', async fu
     t.eq(p.x.pgpData.failed, 2, 'and the two that were not read are counted');
     t.contains(p.html(), '<svg', 'the plot is drawn');
     t.contains(p.html(), '2 haplotypes could not be read', 'and says so');
+    t.eq(p.x.pgpData.asked, 5, 'and are among the rows asked about: 3 of 5');
     p.x.pgpUpdate(spots(5));
     await check.wait(2);
     t.eq(p.out.length, 2, 'they are not asked about again for the same table');
+    t.eq(p.x.pgpData.failed, 2, 'and are still the two that are missing');
+});
+await t.test('they are asked about again with the next new rows', async function () {
+    var p = heldPlot(), rows = spots(3);
+    p.x.pgpInit(rows);
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    p.out[0].ok();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(5));
+    await check.wait(2);
+    p.out[1].fail();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(6));
+    await check.wait(2);
+    t.eq(p.out.length, 3, 'one more request');
+    if (p.out.length < 3) { return; }
+    t.eq(p.out[2].spots.map(function (s) { return s.id; }).sort().join(' '), 'a3 a4 a5',
+         'for the new row and the two not read before');
+    p.out[2].ok();
+    await check.wait(2);
+    t.eq(p.x.pgpData.points.length, 6, 'all six are plotted');
+    t.eq(p.x.pgpData.failed, 0, 'none is missing');
+    t.eq(p.x.pgpData.asked, 6, 'of six asked about');
+});
+await t.test('and forgotten when they are out of the table', async function () {
+    var p = heldPlot(), rows = spots(3);
+    p.x.pgpInit(rows);
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    p.out[0].ok();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(5));
+    await check.wait(2);
+    p.out[1].fail();
+    await check.wait(2);
+    p.x.pgpUpdate(spots(3));
+    await check.wait(2);
+    t.eq(p.x.pgpData.failed, 0, 'none is missing of the three rows left');
+    t.eq(p.x.pgpData.asked, 3, 'which are the three asked about');
+    t.notOk(/could not be read/.test(p.html()), 'and the plot no longer says that any is');
+});
+await t.test('an update that throws does not stop the ones after it', async function () {
+    var p = heldPlot(), rows = spots(3);
+    p.x.pgpInit(rows);
+    p.x.pgpOpen(rows);
+    await check.wait(2);
+    p.out[0].ok();
+    await check.wait(2);
+    var draw = p.x.pgpDraw;
+    p.x.pgpDraw = function () { throw new Error('drawing failed'); };
+    p.x.pgpUpdate(spots(4));
+    await check.wait(2);
+    p.out[1].ok();
+    await check.wait(2);
+    p.x.pgpDraw = draw;
+    p.x.pgpUpdate(spots(5));
+    await check.wait(2);
+    t.eq(p.out.length, 3, 'the next rows are asked about all the same');
+});
+
+t.suite('the reference panel is asked for once');
+await t.test('a request made when the page has the panel says so', async function () {
+    var asks = [];
+    var x = loadPlot(function (url, opts) {
+        var ask = JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1]));
+        asks.push(ask);
+        return answer({ status: 'ok', points: pointsFor(ask.spots).map(function (pt) {
+                            pt.windows = []; return pt; }),
+                        asked: ask.spots.length, found: ask.spots.length,
+                        panel: ask.panel === false ? undefined : PANEL });
+    });
+    var rows = spots(250);
+    x.pgpInit(rows, { fresh: true });
+    x.pgpOpen(rows);
+    await check.wait(10);
+    t.eq(asks.length, 3, 'three requests for 250 rows');
+    t.deepEq(asks.map(function (a) { return a.panel; }), [undefined, false, false],
+             'the first asks for the panel, the two after it have it');
+    t.ok(x.pgpData && x.pgpData.panel, 'and the plot has the panel');
+    x.pgpUpdate(spots(251));
+    await check.wait(5);
+    t.eq(asks.length, 4, 'one more request for one more row');
+    t.eq(asks[3].panel, false, 'which has the panel too');
+    x.pgpReadWindows('a0');
+    await check.wait(5);
+    t.eq(asks.length, 5, 'and one for the windows of a chosen haplotype');
+    t.deepEq([asks[4].windows, asks[4].panel], [true, false], 'the windows without the panel');
 });
 });

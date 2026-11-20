@@ -154,26 +154,32 @@ function pgpField(s) {
 // pieces, one after another, and the answers put together.
 var PGP_PER_REQUEST = 100;
 
-function pgpFetchOne(spots, windows) {
-    return pg.post("pclai", windows ? {spots: spots, windows: true} : {spots: spots}).then(pg.json);
+// The reference panel comes with an answer unless the request says it has one:
+// it is the same for every request, and the page keeps the first.
+function pgpFetchOne(spots, windows, havePanel) {
+    var ask = {spots: spots};
+    if (windows) { ask.windows = true; }
+    if (havePanel) { ask.panel = false; }
+    return pg.post("pclai", ask).then(pg.json);
 }
 
-function pgpFetch(spots) {
+function pgpFetch(spots, havePanel) {
     var chunks = [];
     for (var i = 0; i < spots.length; i += PGP_PER_REQUEST) {
         chunks.push(spots.slice(i, i + PGP_PER_REQUEST));
     }
     // The first answer decides whether there is a plot at all.  A later one
-    // that fails leaves its spots out, counted in "failed" so that the plot
-    // can say how many it is missing.
+    // that fails leaves its spots out, kept by key in "failedKeys" and counted
+    // in "failed" and in "asked", so that the plot can say how many it is
+    // missing of how many, and so that they are asked about again.
     var merged = null;
     return chunks.reduce(function (prev, chunk, i) {
         return prev.then(function () {
             if (i === 0) {
-                return pgpFetchOne(chunk).then(function (r) { merged = r; });
+                return pgpFetchOne(chunk, false, havePanel).then(function (r) { merged = r; });
             }
             if (!merged || merged.status !== "ok") { return; }
-            return pgpFetchOne(chunk).then(function (r) {
+            return pgpFetchOne(chunk, false, havePanel || !!merged.panel).then(function (r) {
                 if (!r || r.status !== "ok") { throw new Error("no answer"); }
                 merged.points = (merged.points || []).concat(r.points || []);
                 merged.asked = (merged.asked || 0) + (r.asked || 0);
@@ -181,10 +187,17 @@ function pgpFetch(spots) {
                 // The panel comes with the first answer that could find it.
                 merged.panel = merged.panel || r.panel;
             }).catch(function () {
-                merged.failed = (merged.failed || 0) + chunk.length;
+                merged.failedKeys = merged.failedKeys || Object.create(null);
+                chunk.forEach(function (sp) { merged.failedKeys[pgpKeyOf(sp)] = true; });
             });
         });
-    }, Promise.resolve()).then(function () { return merged; });
+    }, Promise.resolve()).then(function () {
+        if (merged && merged.failedKeys) {
+            merged.failed = Object.keys(merged.failedKeys).length;
+            merged.asked = (merged.asked || 0) + merged.failed;
+        }
+        return merged;
+    });
 }
 
 // ---- the plot ---------------------------------------------------------------
@@ -589,7 +602,7 @@ function pgpReadWindows(key) {
     // own, where this key may be another region.
     var store = pgpWindows;
     store[key] = null;
-    pgpFetchOne([spot], true).then(function (r) {
+    pgpFetchOne([spot], true, true).then(function (r) {
         var p = r && r.points && r.points[0];
         store[key] = (p && p.windows) || [];
     }).catch(function () {
@@ -1056,17 +1069,35 @@ function pgpUpdate(spots) {
         pgpSpots = spots;
         var old = pgpData;
         if (!old || !pgpDataSpots) { return; }     // not read yet: opening reads them all
+        // A row whose read failed is not one the plot has.  It is forgotten
+        // once it is out of the table, and asked about again with the next new
+        // rows: not on its own, which would ask a server that is failing once
+        // more for every row the table gains.
         var had = Object.create(null), wanted = Object.create(null);
-        pgpDataSpots.forEach(function (sp) { had[pgpKeyOf(sp)] = true; });
+        var oldFailed = old.failedKeys || Object.create(null);
+        pgpDataSpots.forEach(function (sp) {
+            if (!oldFailed[pgpKeyOf(sp)]) { had[pgpKeyOf(sp)] = true; }
+        });
         spots.forEach(function (sp) { wanted[pgpKeyOf(sp)] = true; });
         var gone = Object.keys(had).filter(function (k) { return !wanted[k]; }).length;
-        var fresh = spots.filter(function (sp) { return !had[pgpKeyOf(sp)]; });
+        var fresh = spots.filter(function (sp) {
+            return !had[pgpKeyOf(sp)] && !oldFailed[pgpKeyOf(sp)];
+        });
+        var again = spots.filter(function (sp) { return oldFailed[pgpKeyOf(sp)]; });
+        // What is known of a list of rows none of which was read.
+        var unread = function (list) {
+            var r = { failed: list.length, asked: list.length, failedKeys: Object.create(null) };
+            list.forEach(function (sp) { r.failedKeys[pgpKeyOf(sp)] = true; });
+            return r;
+        };
         var keep = (old.points || []).filter(function (pt) { return wanted[pgpKeyOf(pt)]; });
         var done = function (resp) {
             pgpData = { status: "ok", panel: old.panel || (resp && resp.panel),
-                        failed: (old.failed || 0) + ((resp && resp.failed) || 0),
+                        failed: (resp && resp.failed) || 0,
+                        failedKeys: (resp && resp.failedKeys) || null,
                         points: keep.concat((resp && resp.points) || []),
-                        asked: Math.max(0, (old.asked || 0) - gone) + ((resp && resp.asked) || 0),
+                        asked: Math.max(0, (old.asked || 0) - (old.failed || 0) - gone) +
+                               ((resp && resp.asked) || 0),
                         found: keep.length + ((resp && resp.found) || 0) };
             pgpDataSpots = spots;
             var host = pg.byId("pgrPclaiPlot");
@@ -1080,8 +1111,9 @@ function pgpUpdate(spots) {
                 if (Math.abs(moved) >= 1) { window.scrollBy(0, moved); }
             }
         };
-        if (!fresh.length) { done(null); return; }
-        return pgpFetch(fresh).then(function (resp) {
+        if (!fresh.length) { done(again.length ? unread(again) : null); return; }
+        fresh = fresh.concat(again);
+        return pgpFetch(fresh, !!old.panel).then(function (resp) {
             return (resp && resp.status === "ok") ? resp : null;
         }, function () {
             return null;
@@ -1089,8 +1121,12 @@ function pgpUpdate(spots) {
             if (gen !== pgpGen) { return; }
             // Not read: the plot stays as it is and stays in use, and says how
             // many it is missing, as it does for a batch that failed.
-            done(resp || { failed: fresh.length });
+            done(resp || unread(fresh));
         });
+    }).catch(function (err) {
+        // One update that throws is said and let go: left as it fell, it
+        // would be the end of every update after it.
+        if (window.console) { console.error("hgPangenome: ancestry plot update failed:", err); }
     });
     return pgpUpdating;
 }

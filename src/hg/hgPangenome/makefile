@@ -16,7 +16,7 @@ compile: $O
 	mv ${AOUT} $A${EXE}
 
 # "make test" here runs the suite in tests/, which builds the CGI from this
-# tree and removes it again.  See tests/README.
+# tree and, if there was none here before, removes it again.  See tests/README.
 #
 # "make test" in src/hg comes here too (TEST_DIRS there).  So a layer that
 # cannot run on this machine - the JavaScript ones need node 18 or later - is
