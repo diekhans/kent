@@ -1,0 +1,1088 @@
+/* resultsTests.js - tests for the results page (js/hgPangenomeResults.js).
+ *
+ * The page is hgBlat's new results table: a DataTable whose cells, detail
+ * panel and download are drawn by functions in that file.  These test those
+ * functions directly - the cell renderers, the row order, the tab-separated
+ * download, the record parsing - so that the presentation can change without
+ * the meaning of a number changing with it.  No DataTable, no network: the
+ * file is loaded into a vm with just enough of a window to evaluate.
+ *
+ * Run:  node resultsTests.js
+ */
+
+'use strict';
+
+var test = require('node:test');
+var check = require('./check.js');
+var vm = require('vm');
+var loader = require('./loadClient.js');
+
+test("PanAlign's results page (js/hgPangenomeResults.js)", async function (ctx) {
+var t = check.under(ctx);
+
+// The results page's file is loaded without its module wrapper (loadClient.js
+// body()), so its functions land on the vm context and can be called from
+// here.  "plot" in extra stands in for the ancestry plot.
+var NO_PLOT = { init: function () {}, update: function () {}, togglePick: function () {},
+                isPicked: function () { return false; } };
+
+function loadResults(extra) {
+    var ctx = {
+        window: { location: { pathname: '/cgi-bin/hgPangenome' },
+                  sessionStorage: { getItem: function () { return null; }, setItem: function () {} } },
+        document: { readyState: 'complete', getElementById: function () { return null; },
+                    addEventListener: function () {} },
+        console: { log: function () {}, error: function () {} },
+        setTimeout: function () {},
+        fetch: function () { return new Promise(function () {}); },
+        Promise: Promise, Math: Math, JSON: JSON, Date: Date, Object: Object,
+        String: String, Number: Number, Array: Array, RegExp: RegExp, isNaN: isNaN
+    };
+    Object.keys(extra || {}).forEach(function (k) {
+        if (k === 'plot') { ctx.window.pangenomePlot = extra[k]; } else { ctx[k] = extra[k]; }
+    });
+    vm.createContext(ctx);
+    vm.runInContext(loader.source('hgPangenomeAssemblies.js'), ctx);
+    vm.runInContext(loader.source('hgPangenomeCommon.js'), ctx);
+    vm.runInContext(loader.body('hgPangenomeResults.js'), ctx);
+    return ctx;
+}
+
+var R = loadResults({ pangenomePclai: false });
+
+function row(over) {
+    var r = { query: 'q1', queryLength: 1000, placement: 0, placements: 1, hap: 'HG00097#2',
+              db: 'GCA_044164745.1', contig: 'CM094075.1', start: 999, end: 1999,
+              strand: '+', identity: 99.5, coverage: 98.25, surjMapq: 60, mapq: 60,
+              matches: 990, mismatches: 5, inserted: 2, deleted: 3, cigar: '1000M',
+              qStart: 0, qEnd: 1000, rank: 0 };
+    Object.keys(over || {}).forEach(function (k) { r[k] = over[k]; });
+    return r;
+}
+
+t.suite('identity colours match hgBlat');
+await t.test('the four bands', function () {
+    t.eq(R.pgrIdColor(100), '#1f7a34', '>=98');
+    t.eq(R.pgrIdColor(98), '#1f7a34', 'boundary 98');
+    t.eq(R.pgrIdColor(97.9), '#4d7c0f', '>=95');
+    t.eq(R.pgrIdColor(92), '#b45309', '>=90');
+    t.eq(R.pgrIdColor(89.9), '#b1301f', 'below 90');
+});
+
+t.suite('position cell');
+await t.test('a placed row links its 1-based position, with a new-tab link', function () {
+    var h = R.pgrPositionCell(row());
+    t.contains(h, 'CM094075.1:1,000-1,999', '1-based start, commas');
+    t.contains(h, 'data-act="browser"', 'opens the browser');
+    t.contains(h, 'data-act="newtab"', 'and a new tab');
+    t.contains(h, 'data-rank="0"', 'names its row');
+});
+await t.test('an unplaced row says why instead of linking', function () {
+    t.contains(R.pgrPositionCell(row({ contig: null, placeStatus: 'no_anchors' })), 'not present', 'no anchors');
+    t.contains(R.pgrPositionCell(row({ contig: null, placeStatus: 'surjection_failed' })), 'no alignment', 'failed');
+    t.contains(R.pgrPositionCell(row({ contig: null })), 'not placed', 'anything else');
+    t.notOk(/data-act/.test(R.pgrPositionCell(row({ contig: null }))), 'nothing to click');
+    t.eq(R.pgrActionsCell(row({ contig: null })), '', 'no Alignment link either');
+});
+await t.test('a contig name cannot inject markup', function () {
+    var h = R.pgrPositionCell(row({ contig: '<img src=x onerror=alert(1)>' }));
+    t.notOk(/<img/.test(h), 'escaped');
+});
+
+t.suite('coverage cell');
+await t.test('the bar shows where on the query it aligned, the figure how much', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '250S500M250S', coverage: 49.5 }));
+    t.contains(h, 'left:25.0%;width:50.0%', 'bases 251-750 of 1000');
+    t.contains(h, '49.5%', 'coverage figure');
+    t.contains(h, 'Bases 251-750 of your 1,000 bp', 'tooltip is 1-based');
+});
+await t.test('a quarter aligned is a quarter of the bar, not all of it', function () {
+    // What the graph server sends for four copies of a 20 kb sequence: the
+    // query extent it reports runs to the end of the clipped part.
+    var h = R.pgrCoverageCell(row({ queryLength: 80000, cigar: '20000M60000S', qStart: 0,
+                                    qEnd: 80000, coverage: 24.97 }));
+    t.contains(h, 'left:0.0%;width:25.0%', 'the first quarter');
+    t.notOk(/width:100/.test(h), 'not the whole bar');
+    t.contains(h, 'Bases 1-20,000 of your 80,000 bp', 'tooltip says which bases');
+});
+await t.test('each aligned block is its own piece, as on hgBlat', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '100M300I200M400S', coverage: 30 }));
+    t.contains(h, 'left:0.0%;width:10.0%', 'the first block');
+    t.contains(h, 'left:40.0%;width:20.0%', 'the second, after the bases that did not align');
+    t.eq(h.split('<i ').length - 1, 2, 'two pieces');
+});
+await t.test('blocks too close to tell apart on the bar are drawn as one', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '500M1I499M', coverage: 99.9 }));
+    t.eq(h.split('<i ').length - 1, 1, 'one piece');
+    t.contains(h, 'left:0.0%;width:100.0%', 'the whole query');
+});
+await t.test('a deletion does not break the bar: the query is unbroken there', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '400M50D600M' }));
+    t.eq(h.split('<i ').length - 1, 1, 'one piece');
+});
+await t.test('on the reverse strand the bar is turned round to the query as given', function () {
+    // The CIGAR runs along the reversed query, as in SAM: the 200 aligned
+    // bases here are the query's last 200.
+    var h = R.pgrCoverageCell(row({ cigar: '200M800S', strand: '-', coverage: 20 }));
+    t.contains(h, 'left:80.0%;width:20.0%', 'the last fifth');
+    t.contains(h, 'Bases 801-1,000 of', 'tooltip');
+});
+await t.test('a CIGAR that does not add up to the query falls back to the extent given', function () {
+    var h = R.pgrCoverageCell(row({ cigar: '500M', qStart: 250, qEnd: 750 }));
+    t.contains(h, 'left:25.0%;width:50.0%', 'the extent');
+    t.isNull(R.pgrQuerySegments('500M', '+', 1000), 'too short');
+    t.isNull(R.pgrQuerySegments('1000M junk', '+', 1000), 'unreadable');
+    t.isNull(R.pgrQuerySegments('1000S', '+', 1000), 'nothing aligned');
+    t.isNull(R.pgrQuerySegments(null, '+', 1000), 'none');
+});
+await t.test('a row with no extent still shows its coverage', function () {
+    var h = R.pgrCoverageCell(row({ cigar: null, qStart: null, qEnd: null }));
+    t.contains(h, '98.3%', 'figure');
+    t.notOk(/pgrCov"/.test(h), 'no bar');
+});
+await t.test('no coverage at all draws nothing', function () {
+    t.eq(R.pgrCoverageCell(row({ coverage: null })), '', 'empty');
+});
+
+t.suite('MAPQ and the plot box');
+await t.test('a low MAPQ is marked, a good one is not', function () {
+    t.contains(R.pgrMapqCell(row({ surjMapq: 3 })), 'pgrLowMapq', 'marked under 10');
+    t.eq(R.pgrMapqCell(row({ surjMapq: 60 })), '60', 'plain');
+    t.eq(R.pgrMapqCell(row({ surjMapq: null, mapq: 12 })), '12', 'falls back to the mapping MAPQ');
+});
+await t.test('a MAPQ that is not a number prints nothing, not itself', function () {
+    t.eq(R.pgrMapqCell(row({ surjMapq: '<b>60</b>' })), '', 'markup dropped');
+    t.eq(R.pgrMapqCell(row({ surjMapq: '7' })), R.pgrMapqCell(row({ surjMapq: 7 })), 'numeric string as number');
+});
+await t.test('no box on a row the plot cannot draw', function () {
+    var P = loadResults({ pangenomePclai: true, plot: NO_PLOT });
+    t.contains(P.pgrPickCell(row()), 'pgrPick', 'a GenArk haplotype gets one');
+    t.eq(P.pgrPickCell(row({ hap: 'GRCh38#0', db: 'hg38' })), '', 'GRCh38 does not');
+    t.eq(P.pgrPickCell(row({ hap: 'CHM13#0', db: 'hs1' })), '', 'nor CHM13');
+    t.eq(P.pgrPickCell(row({ contig: null })), '', 'nor an unplaced row');
+});
+
+t.suite('row order follows hgBlat: query, then placement, then identity');
+await t.test('queries in the order given, placements in turn, best identity first', function () {
+    var rows = [
+        row({ query: 'B', placement: 0, identity: 99 }),
+        row({ query: 'A', placement: 1, identity: 100 }),
+        row({ query: 'A', placement: 0, identity: 98 }),
+        row({ query: 'B', placement: 0, identity: 100 }),
+        row({ query: 'A', placement: 0, identity: 99.9 })
+    ];
+    rows.sort(R.pgrRowOrder(['A', 'B']));
+    t.eq(rows.map(function (r) { return r.query + r.placement + ':' + r.identity; }).join(' '),
+         'A0:99.9 A0:98 A1:100 B0:100 B0:99', 'order');
+});
+await t.test('a query not in the list sorts after those that are', function () {
+    var rows = [row({ query: 'zz' }), row({ query: 'A' })];
+    rows.sort(R.pgrRowOrder(['A']));
+    t.eq(rows[0].query, 'A', 'known first');
+});
+
+t.suite('sample and haplotype, hit');
+await t.test('a PanSN name is shown as its sample and haplotype number', function () {
+    t.eq(R.pgrSampleOf('HG00097#2'), 'HG00097', 'sample');
+    t.eq(R.pgrPhaseOf('HG00097#2'), '2', 'haplotype');
+    t.eq(R.pgrSampleOf('GRCh38#0'), 'GRCh38', 'a reference is its own sample');
+    t.eq(R.pgrPhaseOf('GRCh38#0'), '0', 'haplotype 0');
+    t.eq(R.pgrPhaseOf('odd'), '', 'no number to show');
+    R.window.pangenomeSamples = { hg00097: ['GBR', 'British from England and Scotland'] };
+    t.eq(R.pgrPopOf('HG00097#2'), 'British from England and Scotland (GBR)', 'population, as PanConvert words it');
+    t.eq(R.pgrPopOf('GRCh38#0'), '', 'a reference has none');
+});
+await t.test('a hit reads "2 of 3", not a placement', function () {
+    t.eq(R.pgrHitText(row({ placement: 1, placements: 3 })), '2 of 3', 'one-based');
+});
+
+await t.test('the locus cell: waiting, the words, or nothing', function () {
+    t.contains(R.pgrLocusCell(row()), 'pgrUnplaced', 'not read yet');
+    t.eq(R.pgrLocusCell(row({ locus: 'exon <b>X</b>' })), 'exon\u00a0&lt;b&gt;X&lt;/b&gt;', 'escaped');
+    t.eq(R.pgrLocusCell(row({ locus: 'exon LCT-MCM6' })), 'exon\u00a0LCT\u2011MCM6',
+         'a short one stays on one line');
+    t.eq(R.pgrLocusCell(row({ locus: 'intergenic GTF2H2C-ENSG00000293689' })),
+         'intergenic GTF2H2C\u2011ENSG00000293689', 'a long one may wrap at the space only');
+    t.eq(R.pgrLocusCell(row({ locus: '' })), '', 'nothing near');
+    t.eq(R.pgrLocusCell(row({ contig: null })), '', 'no position, no locus');
+});
+
+await t.test('a hub assembly is named without its hub_ prefix', function () {
+    t.eq(R.pgrAssemblyLabel('hub_4837794_HG002v1.1.MAT'), 'HG002v1.1.MAT', 'bare');
+    t.eq(R.pgrAssemblyLabel('https://x/cgi-bin/hgTracks?db=hub_4837794_HG002v1.1.PAT&hubUrl=y'),
+         'HG002v1.1.PAT', 'from a link too');
+    t.eq(R.pgrAssemblyLabel('GCA_018466835.2'), 'GCA_018466835.2', 'others unchanged');
+});
+
+t.suite('download table');
+await t.test('one header and one line per row, 21 columns, positions 1-based', function () {
+    var tsv = R.pgrRowsToTsv([row({ locus: 'exon SMN1' }), row({ contig: null })]);
+    var lines = tsv.trim().split('\n');
+    t.eq(lines.length, 3, 'header + 2');
+    lines.forEach(function (l, i) { t.eq(l.split('\t').length, 21, 'columns on line ' + i); });
+    var f = lines[1].split('\t');
+    t.eq(f[6], '1000', 'start is 1-based');
+    t.eq(f[7], '1999', 'end');
+    t.eq(f[8], '1000', 'span');
+    t.eq(f[9], 'exon SMN1', 'locus');
+    t.eq(f[13], '1', 'qStart is 1-based');
+    t.eq(lines[2].split('\t')[4], '', 'an unplaced row has no contig');
+});
+await t.test('a tab or newline in a query name cannot break the columns', function () {
+    var l = R.pgrRowsToTsv([row({ query: 'a\tb\nc' })]).trim().split('\n');
+    t.eq(l.length, 2, 'still one data line');
+    t.eq(l[1].split('\t').length, 21, 'still 21 columns');
+});
+await t.test('the query FASTA wraps at 60 bases', function () {
+    var fa = R.pgrFasta([{ name: 'x', seq: new Array(131).join('a') }]);
+    t.eq(fa.split('\n')[0], '>x', 'header');
+    t.eq(fa.split('\n')[1].length, 60, 'first line');
+    t.eq(fa.split('\n')[3].length, 10, 'remainder');
+    t.contains(fa, 'AAAA', 'upper-cased');
+});
+
+t.suite('surjection records');
+await t.test('the query extent is carried for the coverage bar', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'HG00097#2#CM094075.1', target_start: 10,
+                          target_end: 20, query_start: 3, query_end: 13, coverage: 99,
+                          identity: 0.995, strand: '+', cigar: '10M', mapping_quality: 60 });
+    t.eq(r.qStart, 3, 'qStart');
+    t.eq(r.qEnd, 13, 'qEnd');
+    t.eq(r.identity, 99.5, 'identity as a percentage');
+});
+await t.test('the extent is read off the CIGAR, not taken from the record', function () {
+    // The record's own extent counts the clipped end as aligned.
+    var r = { queryLength: 80000 };
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'GRCh38#0#chr2', target_start: 10,
+                          target_end: 20010, query_start: 0, query_end: 80000, coverage: 24.97,
+                          identity: 1, strand: '+', cigar: '20000M60000S' });
+    t.eq(r.qStart, 0, 'qStart');
+    t.eq(r.qEnd, 20000, 'qEnd is the last aligned base');
+    var s = { queryLength: 80000 };
+    R.pgrApplySurjection(s, { surjection: { status: 'ok', target: 'GRCh38#0#chr2', position: 10,
+                                           strand: '-', cigar: '20000M60000S' } });
+    t.eq(s.qStart, 60000, 'the mapping\'s own surjection gets one too, turned round');
+    t.eq(s.qEnd, 80000, 'to the end of the query');
+});
+await t.test('a record without one leaves it unset, not zero', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'HG00097#2#CM094075.1', target_start: 10,
+                          target_end: 20, coverage: 99, identity: 1, strand: '+', cigar: '10M' });
+    t.ok(r.qStart === undefined, 'unset');
+});
+
+await t.test('a record that did not place says so, and still carries the mapping figures', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'no_anchors', coverage: 72.5, graph_identity: 98.1 });
+    t.ok(r.placeFailed, 'failed');
+    t.eq(r.placeStatus, 'no_anchors', 'with the reason');
+    t.eq(r.coverage, 72.5, 'coverage kept');
+    t.eq(r.listIdentity, 98.1, 'identity along the graph kept');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+await t.test('a record on a fragment has the fragment\'s offset added', function () {
+    var a = {}, b = {};
+    R.pgrApplyRecord(a, { status: 'ok', haplotype: 'CHM13#0#chr10#1000', target_start: 100,
+                          target_end: 150, strand: '+', cigar: '50M' });
+    R.pgrApplyRecord(b, { status: 'ok', haplotype: 'CHM13#0#chr10[1000]', target_start: 100,
+                          target_end: 150, strand: '+', cigar: '50M' });
+    t.eq(a.contig, 'chr10', 'the contig, without the offset');
+    t.eq(a.start, 1100, 'start');
+    t.eq(a.end, 1150, 'end');
+    t.deepEq([b.contig, b.start, b.end], [a.contig, a.start, a.end], 'both notations agree');
+});
+await t.test('a record on a name that cannot be read is not placed by guessing', function () {
+    var r = {};
+    R.pgrApplyRecord(r, { status: 'ok', haplotype: 'CHM13#0#chr10#foo', target_start: 1,
+                          target_end: 2 });
+    t.ok(r.placeFailed, 'failed');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+
+t.suite('reference bases a CIGAR consumes');
+await t.test('simple match', function () {
+    t.eq(R.pgrCigarSpan('150M'), 150, '150M');
+    t.eq(R.pgrCigarSpan('1500M'), 1500, 'multi-digit');
+    t.eq(R.pgrCigarSpan('1M'), 1, 'single base');
+});
+await t.test('missing or unmapped CIGAR is zero', function () {
+    t.eq(R.pgrCigarSpan(''), 0, 'empty');
+    t.eq(R.pgrCigarSpan(null), 0, 'null');
+    t.eq(R.pgrCigarSpan(undefined), 0, 'undefined');
+    t.eq(R.pgrCigarSpan('*'), 0, 'star');
+});
+await t.test('deletions and skips consume reference', function () {
+    t.eq(R.pgrCigarSpan('75M3D72M'), 150, 'deletion');
+    t.eq(R.pgrCigarSpan('20M100N20M'), 140, 'skip (intron)');
+});
+await t.test('insertions, soft and hard clips do not consume reference', function () {
+    t.eq(R.pgrCigarSpan('10M5I10M'), 20, 'insertion');
+    t.eq(R.pgrCigarSpan('5S140M5S'), 140, 'soft clip');
+    t.eq(R.pgrCigarSpan('3H10M3H'), 10, 'hard clip');
+});
+await t.test('= and X (sequence match/mismatch) consume reference', function () {
+    t.eq(R.pgrCigarSpan('10=5X10='), 25, 'eq/x');
+});
+await t.test('mixed operations', function () {
+    t.eq(R.pgrCigarSpan('10S5M2I3D4M6H'), 12, '5M+3D+4M');
+});
+
+t.suite('the sequence a target name points at');
+await t.test('a plain three-field name is its contig, at offset 0', function () {
+    t.deepEq(R.pgrSplitTarget('CHM13#0#chr10'), { contig: 'chr10', offset: 0 }, 'chr10');
+    t.deepEq(R.pgrSplitTarget('GRCh38#0#CM000663.2'), { contig: 'CM000663.2', offset: 0 },
+             'an accession keeps its dot');
+});
+await t.test('a fragment\'s offset is read from either notation', function () {
+    t.deepEq(R.pgrSplitTarget('CHM13#0#chr10#1407250'), { contig: 'chr10', offset: 1407250 }, '#N');
+    t.deepEq(R.pgrSplitTarget('GRCh38#0#chr1[585988]'), { contig: 'chr1', offset: 585988 }, '[N]');
+});
+await t.test('a name that cannot be read yields nothing, not a guess', function () {
+    t.isNull(R.pgrSplitTarget('CHM13#0#chr10#foo'), 'non-numeric fourth field');
+    t.isNull(R.pgrSplitTarget('CHM13#0'), 'too few fields');
+    t.isNull(R.pgrSplitTarget('chr10'), 'not a PanSN name');
+    t.isNull(R.pgrSplitTarget(null), 'null');
+});
+
+t.suite('the mapping\'s own surjection');
+function surj(over) {
+    var s = { status: 'ok', target: 'CHM13#0#chr10', position: 19113, strand: '+',
+              cigar: '24M', score: 100, mapping_quality: 60, identity: 0.5 };
+    Object.keys(over || {}).forEach(function (k) { s[k] = over[k]; });
+    return { surjection: s };
+}
+function placed(over) { var r = {}; R.pgrApplySurjection(r, surj(over)); return r; }
+await t.test('the row gets the contig, a 0-based start and an end from the CIGAR', function () {
+    var r = placed();
+    t.eq(r.contig, 'chr10', 'contig');
+    t.eq(r.start, 19113, 'start as reported');
+    t.eq(r.end, 19137, '24M ends 24 bases on');
+    t.eq(r.strand, '+', 'strand');
+    t.eq(r.surjMapq, 60, 'MAPQ');
+    t.eq(r.identity, 50, 'identity as a percentage');
+    t.notOk(r.placeFailed, 'placed');
+});
+await t.test('position 0 is a real coordinate, not a missing value', function () {
+    var r = placed({ position: 0, cigar: '10M' });
+    t.eq(r.start, 0, 'start');
+    t.eq(r.end, 10, 'end');
+    t.notOk(r.placeFailed, 'placed');
+});
+await t.test('deletions widen the range', function () {
+    var r = placed({ position: 100, cigar: '75M3D72M' });
+    t.eq(r.end - r.start, 150, '150 reference bases');
+});
+await t.test('a missing or unmapped CIGAR leaves an empty range at the position', function () {
+    t.eq(placed({ position: 100, cigar: null }).end, 100, 'null cigar');
+    t.eq(placed({ position: 100, cigar: '*' }).end, 100, 'star cigar');
+});
+await t.test('a fragment\'s offset is added to the position, in either notation', function () {
+    var a = placed({ target: 'CHM13#0#chr10#1000', position: 100, cigar: '50M' });
+    var b = placed({ target: 'CHM13#0#chr10[1000]', position: 100, cigar: '50M' });
+    t.deepEq([a.contig, a.start, a.end], ['chr10', 1100, 1150], '#N');
+    t.deepEq([b.contig, b.start, b.end], ['chr10', 1100, 1150], '[N]');
+});
+await t.test('an unreadable target is not placed by guessing', function () {
+    var r = placed({ target: 'CHM13#0#chr10#foo' });
+    t.ok(r.placeFailed, 'failed');
+    t.ok(r.contig === undefined, 'no coordinate');
+});
+await t.test('every failure status leaves the row unplaced, with the status', function () {
+    ['incompatible', 'unknown_path', 'surjection_failed', 'empty_input', 'path_not_indexed']
+        .forEach(function (st) {
+            var r = placed({ status: st });
+            t.ok(r.placeFailed, st + ' failed');
+            t.eq(r.placeStatus, st, st + ' kept');
+            t.ok(r.contig === undefined, st + ' has no coordinate');
+        });
+});
+await t.test('a haplotype with no path there is "no_anchors", whatever the status says', function () {
+    var r = placed({ status: 'surjection_failed', detail: 'no_anchors: nothing to place on' });
+    t.eq(r.placeStatus, 'no_anchors', 'read from the detail');
+});
+await t.test('no surjection at all is a failure, not a crash', function () {
+    var r = {};
+    R.pgrApplySurjection(r, {});
+    t.ok(r.placeFailed, 'empty answer');
+    r = {};
+    R.pgrApplySurjection(r, null);
+    t.ok(r.placeFailed, 'no answer');
+});
+
+t.suite('one haplotype at every hit');
+await t.test('every placement of every query is a place to fill, from the rows alone', function () {
+    R.pgrMapping = null;
+    R.pgrRows = [row({ query: 'a', placements: 3 }), row({ query: 'a', placement: 2, placements: 3 }),
+                 row({ query: 'b', placements: 1 })];
+    var p = R.pgrPlaces().map(function (x) { return x.query + x.index; }).join(',');
+    t.eq(p, 'a0,a1,a2,b0', 'three for a, one for b, none twice');
+    t.ok(R.pgrHasRow('hg00097#2', 'a', 2), 'a row there, matched case-blind');
+    t.notOk(R.pgrHasRow('HG00097#2', 'a', 1), 'none at the placement it is missing from');
+    R.pgrRows = [];
+});
+await t.test('a haplotype placed on request carries the mapping figures and its surjection', function () {
+    var res = { name: 'q', query_length: 300, alignments: [{}, {}] };
+    var aln = { score: 50, mapping_quality: 0,
+                haplotypes: { names: ['NA21106#2#JBHIJB010000016.1'], representative: 'CHM13#0#chr6' },
+                haplotype_coverage: [{ haplotype: 'NA21106#2', coverage: 97.36, identity: 96.04 }] };
+    var r = R.pgrRowForHap(res, aln, 1, 'NA21106#2', { haplotype: 'NA21106#2', surjection: {
+        status: 'ok', target: 'NA21106#2#JBHIJB010000016.1#6631428', position: 100, strand: '-',
+        cigar: '296M7S', mapping_quality: 0, identity: 0.976351, matches: 289 } });
+    t.ok(r.extra, 'kept apart from the best-few rows');
+    t.eq(r.placement, 1, 'placement');
+    t.eq(r.placements, 2, 'of two');
+    t.eq(r.coverage, 97.36, "the mapping's coverage");
+    t.ok(r.isCarrier, 'a carrier, by sample#phase');
+    t.eq(r.contig, 'JBHIJB010000016.1', 'contig without the offset');
+    t.eq(r.start, 6631528, 'fragment offset added');
+    t.eq(r.end, 6631824, 'end from the reference bases the CIGAR consumes');
+    t.eq(r.db, 'GCA_042076865.1', 'its assembly');
+});
+await t.test('a haplotype with no path there reads "not present"', function () {
+    var r = R.pgrRowForHap({ name: 'q', alignments: [{}] }, {}, 0, 'XX00000#1',
+        { surjection: { status: 'surjection_failed', detail: 'no_anchors (unknown_path)' } });
+    t.eq(r.placeStatus, 'no_anchors', 'status');
+    t.contains(R.pgrPositionCell(r), 'not present', 'shown so');
+    t.eq(r.coverage, null, 'no coverage to show');
+});
+await t.test('a row placed on request gets no number and no plot box', function () {
+    var R2 = loadResults({ pangenomePclai: true, plot: NO_PLOT });
+    t.eq(R2.pgrPickCell(row({ extra: true })), '', 'no box');
+    t.contains(R2.pgrPickCell(row()), 'pgrPick', 'a table row keeps its box');
+});
+
+t.suite('every hit');
+function setRows(R, rows) {
+    R.pgrRows = rows;
+    R.pgrQueryNames = ['a', 'b'];
+}
+await t.test('the table numbers its own rows first, those aligned on request after, with no gaps', function () {
+    setRows(R, [
+        row({ query: 'a', placement: 1, placements: 2, identity: 99, hap: 'X#1' }),
+        row({ query: 'a', placement: 0, placements: 2, identity: 98, hap: 'Y#1', extra: true }),
+        row({ query: 'a', placement: 0, placements: 2, identity: 97, hap: 'Z#1' })]);
+    R.pgrRerank();
+    t.eq(R.pgrRows.map(function (r) { return r.hap + ':' + r.rank; }).join(' '),
+         'Z#1:0 X#1:1 Y#1:2', 'best hit first, the extra last');
+});
+await t.test('hits are counted among the places with rows, per query', function () {
+    setRows(R, [row({ query: 'a', placement: 0, placements: 3 }),
+                row({ query: 'a', placement: 2, placements: 3, hap: 'X#1' }),
+                row({ query: 'b', placement: 0, placements: 1 })]);
+    R.pgrRerank();
+    var by = {};
+    R.pgrRows.forEach(function (r) { by[r.query + r.placement] = R.pgrHitText(r); });
+    t.eq(by.a0, '1 of 2', 'the first');
+    t.eq(by.a2, '2 of 2', 'the third place is the second with rows');
+    t.eq(by.b0, '1 of 1', 'another query counts its own');
+    setRows(R, []);
+});
+await t.test('the coverage floor hides rows under it and cannot go below the install floor', function () {
+    R.pgrMinShown = null;
+    t.ok(R.pgrShown(row({ coverage: 50 })), 'at the default floor');
+    t.notOk(R.pgrShown(row({ coverage: 49.9 })), 'under it');
+    t.ok(R.pgrShown(row({ coverage: null })), 'a row with no figure is not hidden by it');
+    t.notOk(R.pgrShown(row({ extra: true })), 'rows aligned on request, for the track, are not in the table');
+    R.pgrSetCovFloor('90');
+    t.notOk(R.pgrShown(row({ coverage: 89 })), 'raised to 90');
+    R.pgrSetCovFloor('10');
+    t.eq(R.pgrMinShown, 50, 'clamped to the install floor');
+    R.pgrSetCovFloor('x');
+    t.eq(R.pgrMinShown, 50, 'not a number: the floor');
+    R.pgrMinShown = null;
+});
+await t.test('with no fetch floor, 50% is still the default and can be lowered', function () {
+    var L = loadResults({ pangenomePclai: false, pangenomeMinCoverage: 0 });
+    L.pgrRows = [row({ query: 'a', coverage: 100 }), row({ query: 'a', coverage: 30, hap: 'X#1' }),
+                 row({ query: 'b', coverage: 42, hap: 'Y#1' }), row({ query: 'b', coverage: 20, hap: 'Z#1' })];
+    L.pgrNumberHits();
+    var shown = function () { return L.pgrRows.filter(L.pgrShown).map(function (r) { return r.hap; }).join(' '); };
+    t.eq(L.pgrCovFloor(), 50, 'default 50');
+    t.eq(shown(), 'HG00097#2 Y#1 Z#1', "a's 30% fragment hidden; b never reaches 50, so all of b stays");
+    L.pgrSetCovFloor('10');
+    t.eq(L.pgrCovFloor(), 10, 'lowered to 10');
+    t.eq(shown(), 'HG00097#2 X#1 Y#1 Z#1', 'everything');
+});
+await t.test('the strip offers the floor as a number box', function () {
+    t.contains(R.pgrCovControl(), 'id="pgrMinCov"', 'box');
+    t.contains(R.pgrCovControl(), 'min="50"', 'its minimum is the install floor');
+});
+
+t.suite('reference annotations');
+var REFS = [{ hap: 'GRCh38#0', label: 'GRCh38', db: 'hg38' },
+            { hap: 'CHM13#0', label: 'CHM13', db: 'hs1' }];
+function annotPage(over, saved) {
+    var page = { annotRefs: REFS, annotDefault: 'GRCh38#0' };
+    Object.keys(over || {}).forEach(function (k) { page[k] = over[k]; });
+    var store = { 'hgPangenome.annotRef': saved };
+    var R2 = loadResults({ pangenomePclai: false, pangenomeResultsPage: page });
+    R2.window.localStorage = { getItem: function (k) { return store[k] === undefined ? null : store[k]; },
+                               setItem: function (k, v) { store[k] = v; } };
+    R2.pgrAnnotInit();
+    return { R: R2, store: store };
+}
+await t.test('names match a reference by label or haplotype, any case; none is none', function () {
+    var x = annotPage();
+    t.eq(x.R.pgrAnnotMatch('chm13').db, 'hs1', 'label');
+    t.eq(x.R.pgrAnnotMatch('GRCh38#0').db, 'hg38', 'haplotype');
+    t.eq(x.R.pgrAnnotMatch('none'), null, 'none');
+    t.eq(x.R.pgrAnnotMatch('GREF'), undefined, 'unknown');
+});
+await t.test('the link wins over what was chosen last, which wins over the default', function () {
+    t.eq(annotPage().R.pgrAnnotRef.label, 'GRCh38', 'default');
+    t.eq(annotPage({}, 'CHM13#0').R.pgrAnnotRef.label, 'CHM13', 'remembered');
+    t.eq(annotPage({ annotUrl: 'none' }, 'CHM13#0').R.pgrAnnotRef, null, 'link says none');
+    t.eq(annotPage({ annotUrl: 'chm13' }).R.pgrAnnotRef.label, 'CHM13', 'link names one');
+    t.eq(annotPage({ annotUrl: 'GREF' }, 'CHM13#0').R.pgrAnnotRef.label, 'CHM13', 'an unknown name is skipped');
+    t.eq(annotPage({ annotRefs: [] }).R.pgrAnnotRef, null, 'nothing offered: none');
+});
+await t.test('a choice is remembered for next time', function () {
+    var x = annotPage();
+    x.R.pgrAnnotSet('none');
+    t.eq(x.store['hgPangenome.annotRef'], 'none', 'none');
+    x.R.pgrAnnotSet('CHM13#0');
+    t.eq(x.store['hgPangenome.annotRef'], 'CHM13#0', 'CHM13');
+    t.eq(x.R.pgrAnnotRef.db, 'hs1', 'and in effect');
+});
+await t.test('which rows get annotations', function () {
+    var x = annotPage();
+    t.eq(x.R.pgrAnnotFor(row()).label, 'GRCh38', 'a haplotype');
+    t.eq(x.R.pgrAnnotFor(row({ hap: 'GRCh38#0', db: 'hg38', contig: 'chr1' })), null, 'GRCh38 itself');
+    t.eq(x.R.pgrAnnotFor(row({ contig: null })), null, 'no position');
+    t.eq(x.R.pgrAnnotFor(row({ db: 'https://genome.ucsc.edu/cgi-bin/hgTracks?db=hub_1_HG002' })), null, 'a hub assembly');
+    x.R.pgrAnnotSet('CHM13#0');
+    t.eq(x.R.pgrAnnotFor(row({ hap: 'GRCh38#0', db: 'hg38', contig: 'chr1' })).label, 'CHM13', 'CHM13 onto GRCh38');
+    x.R.pgrAnnotSet('none');
+    t.eq(x.R.pgrAnnotFor(row()), null, 'none chosen');
+});
+await t.test('the opened URL keeps its genome and position and gains the hubs', function () {
+    var u = R.pgrJoinUrl('hgTracks?db=hub_7_GCA_1.1&position=CM1.1%3A1-9',
+        'hgTracks?db=GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.204866=1&hgHubConnect.hub.12=1');
+    t.eq(u, 'hgTracks?db=hub_7_GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.204866=1&hgHubConnect.hub.12=1', 'joined');
+    t.eq(R.pgrQueryParam('hgTracks?db=x&position=CM1.1%3A1-9', 'position'), 'CM1.1:1-9', 'position read back');
+    t.eq(R.pgrJoinUrl('a?db=x', 'b?db=y&position=z'), 'a?db=x', 'nothing to add');
+});
+await t.test('each opening has a session of its own, named by the server and passed on', function () {
+    // The page's session is not sent: the server starts one for this opening.
+    // Shared, a second click changed the assembly under the first.
+    var sent = [];
+    var x = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+        sent.push(opts.body);
+        return Promise.resolve({ ok: true, json: function () {
+            return Promise.resolve({ status: 'ok', url: 'hgTracks?hgsid=77_new&db=d&position=p',
+                                     details: 'hgc?hgsid=77_new', hgsid: '77_new' }); } });
+    } });
+    x.pangenomeConfig = { hgsid: '11_page' };
+    x.pgrArm(row(), true);
+    t.contains(sent[0], 'cmd=alignTrack', 'the track is asked for');
+    t.notOk(/hgsid/.test(sent[0]), 'without the page\'s session');
+    x.pgrRefAnnot(row(), { hap: 'CHM13#0', label: 'CHM13' }, 'CM1.1:1-9', '77_new');
+    t.contains(sent[1], 'cmd=refAnnot', 'the annotations are asked for');
+    t.contains(sent[1], 'hgsid=77_new', 'in the session the track was written into');
+    t.notOk(/11_page/.test(sent[1]), 'not the page\'s');
+    var u = x.pgrJoinUrl('hgTracks?hgsid=77_new&db=hub_7_GCA_1.1&position=CM1.1%3A1-9',
+                         'hgTracks?hgsid=99_other&db=GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.5=1');
+    t.eq(u, 'hgTracks?hgsid=77_new&db=hub_7_GCA_1.1&position=CM1.1%3A1-9&hgHubConnect.hub.5=1',
+         'the opened link keeps that session');
+});
+await t.test('the strip offers each reference and none, the current one selected', function () {
+    var x = annotPage({}, 'CHM13#0');
+    var h = x.R.pgrAnnotControl();
+    t.contains(h, '<option value="CHM13#0" selected>CHM13</option>', 'CHM13 selected');
+    t.contains(h, '<option value="none">none</option>', 'none offered');
+    t.eq(annotPage({ annotRefs: [] }).R.pgrAnnotControl(), '', 'nothing when QuickLift is off');
+});
+
+t.suite('a waiting row on the page is placed');
+// A table whose search box holds "term" and whose current page shows "shown";
+// timers are kept instead of run, and the hits asked for are recorded.
+function waitingPage() {
+    var timers = [], asked = [], cleared = 0;
+    var S = loadResults({
+        pangenomePclai: false,
+        setTimeout: function (fn, ms) { timers.push({ fn: fn, ms: ms }); return timers.length; },
+        clearTimeout: function (id) { if (timers[id - 1]) { timers[id - 1].fn = null; cleared++; } }
+    });
+    S.pgrPlaceAll = function (p) { asked.push(p.query + '/' + p.index); };
+    var dt = { term: '', shown: [],
+               search: function () { return dt.term; },
+               rows: function () { return { data: function () { return { toArray: function () { return dt.shown; } }; } }; } };
+    var live = function () { return timers.filter(function (x) { return x.fn; }).length; };
+    var run = function () { timers.forEach(function (x) { if (x.fn) { var f = x.fn; x.fn = null; f(); } }); };
+    return { S: S, dt: dt, timers: timers, asked: asked, run: run, live: live, cleared: function () { return cleared; } };
+}
+function waiting(over) {
+    var r = row({ contig: null, pending: true });
+    Object.keys(over || {}).forEach(function (k) { r[k] = over[k]; });
+    return r;
+}
+await t.test('a search that shows a waiting row asks for its hit, after a pause', function () {
+    var x = waitingPage();
+    x.dt.term = 'CHM13';
+    x.dt.shown = [waiting({ hap: 'CHM13#0', placement: 2 })];
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.asked.length, 0, 'nothing asked while the reader may still be typing');
+    t.eq(x.timers.length, 1, 'one timer set');
+    t.eq(x.timers[0].ms, x.S.PGR_FILL_WAIT, 'for the pause');
+    x.run();
+    t.deepEq(x.asked, ['q1/2'], 'the hit of the row shown, once');
+});
+await t.test('each keystroke restarts the pause, and only the last text is acted on', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting({ placement: 1 })];
+    ['H', 'HG', 'HG0'].forEach(function (term) { x.dt.term = term; x.S.pgrFillSoon(x.dt); });
+    t.eq(x.cleared(), 2, 'the two earlier timers were cancelled');
+    x.run();
+    t.deepEq(x.asked, ['q1/1'], 'asked once');
+});
+await t.test('a sort that brings a waiting row up asks for it too, with no search', function () {
+    var x = waitingPage();
+    x.dt.shown = [row(), waiting({ placement: 0 }), waiting({ hap: 'HG01234#1', placement: 1 })];
+    x.S.pgrFillSoon(x.dt);
+    x.run();
+    t.deepEq(x.asked.sort(), ['q1/0', 'q1/1'], 'each hit with a waiting row, once');
+});
+await t.test('redraws while the pause runs do not put it off or add another', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting()];
+    x.S.pgrFillSoon(x.dt);
+    x.S.pgrFillSoon(x.dt);
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 1, 'still the one timer');
+    t.eq(x.cleared(), 0, 'not restarted');
+});
+await t.test('nothing is asked when no row on the page is waiting', function () {
+    var x = waitingPage();
+    x.dt.term = 'HG00097';
+    x.dt.shown = [row()];
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 0, 'no timer for a page of placed rows');
+    x.dt.term = '';
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.timers.length, 0, 'nor for an emptied search');
+});
+await t.test('a hit already asked for, or already tried, is not asked for again', function () {
+    var x = waitingPage();
+    x.dt.shown = [waiting({ placement: 0 })];
+    x.S.pgrFullBusy[x.S.pgrPlaceKey('q1', 0)] = new Promise(function () {});
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.live(), 0, 'not while its request is out');
+    x.S.pgrFullBusy[x.S.pgrPlaceKey('q1', 0)] = null;
+    x.S.pgrFull[x.S.pgrPlaceKey('q1', 0)] = true;
+    x.S.pgrFillSoon(x.dt);
+    t.eq(x.live(), 0, 'nor once it has been answered');
+});
+t.suite('position sort');
+await t.test('sequence names sort in natural order, whatever the length of their numbers', function () {
+    var k = R.pgrContigSortKey;
+    t.ok(k('chr2') < k('chr10'), 'chr2 before chr10');
+    t.ok(k('CM087364.1') < k('CM094066.1'), 'accessions in numeric order');
+    // Keeping the last four digits made these two the same, and put a
+    // six-digit accession before a five-digit one.
+    t.notOk(k('CM087364.1') === k('CM097364.1'), 'names that differ early are not confused');
+    t.ok(k('CM99999.1') < k('CM100000.1'), 'five digits before six');
+    t.ok(k('JBIRDI010000011.1') < k('JBIRDI010000012.1'), 'long numbers kept whole');
+});
+
+t.suite('sequences that are not in the table');
+await t.test('one the mapper found no place for, and one it could not map, are told apart', function () {
+    var out = R.pgrLeftOutFrom([
+        { name: 'ok1', status: 'mapped', alignments: [{}] },
+        { name: 'none1', status: 'unmapped', error: null, alignments: [] },
+        { name: 'bad1', status: 'error', error: 'sequence has no minimizers', alignments: [] }]);
+    t.eq(out.length, 2, 'the mapped one is not among them');
+    t.eq(out[0].error, null, 'not found: no reason to give');
+    t.eq(out[1].error, 'sequence has no minimizers', 'failed: the mapper\'s reason');
+    var notes = R.pgrLeftOutNotes(out, 3);
+    t.eq(notes[0], '1 of your 3 sequences did not map: none1.', 'how many, of how many, and which');
+    t.eq(notes[1], 'bad1 could not be mapped: sequence has no minimizers.', 'and why, of the other');
+});
+await t.test('the mapping server\'s "mapped" with an empty alignment is a sequence not found', function () {
+    // What it really sends for a sequence it could not place: status mapped,
+    // and one alignment with no path, score, haplotype or position.
+    var none = { name: 'allN', status: 'mapped', error: null, query_length: 300,
+                 alignments: [{ primary: true, score: null, mapping_quality: 0, graph_path: '*',
+                                haplotypes: { count: 0, names: [] }, haplotype_coverage: [],
+                                surjection: null }] };
+    var real = { name: 'r1', status: 'mapped', alignments: [{ graph_path: '>1>2', score: 176,
+                 haplotype_coverage: [{ haplotype: 'CHM13#0', coverage: 100 }] }] };
+    t.notOk(R.pgrIsHit(none.alignments[0]), 'the empty alignment is not a hit');
+    t.ok(R.pgrIsHit(real.alignments[0]), 'a real one is');
+    t.eq(R.pgrHitCount(none), 0, 'so the sequence has no hits');
+    t.deepEq(R.pgrLeftOutFrom([real, none]), [{ name: 'allN', error: null }], 'and is named as not found');
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrMapping = [real, none];
+    x.pgrPlaceList = null;
+    t.deepEq(x.pgrPlaces().map(function (p) { return p.query + '/' + p.index; }), ['r1/0'],
+             'and nothing is asked of the server for it');
+});
+await t.test('many not found are counted, not all listed; names cannot inject markup', function () {
+    var many = [];
+    for (var i = 0; i < 8; i++) { many.push({ name: 's' + i, error: null }); }
+    t.eq(R.pgrLeftOutNotes(many, 20)[0],
+         '8 of your 20 sequences did not map: s0, s1, s2, s3, s4 and 3 more.', 'five names and a count');
+    t.contains(R.pgrLeftOutNotes([{ name: '<b>x', error: null }], 2)[0], '&lt;b&gt;x', 'escaped');
+});
+await t.test('they are in the notes above the table', function () {
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrLeftOut = [{ name: 'none1', error: null }];
+    x.pgrQueryCount = 4;
+    t.eq(x.pgrNotes([row()], true, false)[0], '1 of your 4 sequences did not map: none1.', 'first note');
+});
+
+t.suite('what the strip and the notes count');
+// Two sequences' worth of rows: q1 at two places, the second of which only
+// fragments reach, and one haplotype hit at both.
+function countRows() {
+    return [row({ hap: 'HG00097#1', placement: 0, hits: 2, coverage: 98 }),
+            row({ hap: 'HG00097#2', placement: 0, hits: 2, coverage: 97 }),
+            row({ hap: 'HG00097#2', placement: 1, hits: 2, coverage: 12 }),
+            row({ hap: 'HG01234#1', placement: 1, hits: 2, coverage: 8 })];
+}
+function countPage(floor) {
+    var x = loadResults({ pangenomePclai: false, pangenomeMinCoverage: 0, pangenomeShowCoverage: floor });
+    x.pgrQueryBest.q1 = 98;
+    x.pgrQueryCount = 1;
+    return x;
+}
+await t.test('Haplotypes counts haplotypes shown, not rows', function () {
+    var x = countPage(0);
+    t.eq(x.pgrHapsShown(countRows()), 3, 'four rows, three haplotypes');
+    t.contains(x.pgrSummaryStrip(1, countRows(), true), '<span id="pgrHapCount">3</span>', 'in the strip');
+    var y = countPage(50);
+    t.eq(y.pgrHapsShown(countRows()), 2, 'and only those the coverage floor leaves');
+    t.contains(y.pgrSummaryStrip(1, countRows(), true), '<span id="pgrHapCount">2</span>', 'in the strip');
+});
+await t.test('a place the coverage floor hides is said to be hidden', function () {
+    var y = countPage(50);
+    var notes = y.pgrNotes(countRows(), false, true).join(' ');
+    t.contains(notes, 'Your sequence aligned to 2 places', 'both places counted');
+    t.notOk(/Every one is listed/.test(notes), 'not said to be listed');
+    t.contains(notes, '1 place is under Min. coverage and not shown.', 'the hidden one is owned up to');
+    var x = countPage(0);
+    t.notOk(/not shown/.test(x.pgrNotes(countRows(), false, true).join(' ')), 'nothing hidden, nothing said');
+    t.eq(y.pgrHitsHidden(countRows()), 1, 'one hit with no row shown');
+    t.eq(x.pgrHitsHidden(countRows()), 0, 'none with the floor at nothing');
+});
+
+t.suite('why a row has no position');
+await t.test('the mapping server\'s reason is kept and shown on hover', function () {
+    var r = { queryLength: 100 };
+    R.pgrApplyRecord(r, { status: 'surjection_failed', detail: 'path "x" has no <anchors>' });
+    t.eq(r.placeDetail, 'path "x" has no <anchors>', 'kept');
+    var h = R.pgrPositionCell(r);
+    t.contains(h, 'title="path &quot;x&quot; has no &lt;anchors&gt;"', 'on hover, escaped');
+    t.contains(h, '>no alignment<', 'the short word still in the cell');
+    t.notOk(/title=/.test(R.pgrPositionCell({ placeFailed: true, placeStatus: 'surjection_failed' })),
+            'no hover text without one');
+});
+
+t.suite('a placement that failed');
+var failSaved = null, failMsgs = [];
+var F = loadResults({ pangenomePclai: false,
+                      fetch: function () { return Promise.reject(new Error('server down')); } });
+F.window.sessionStorage = { getItem: function () { return null; },
+                            setItem: function (k, v) { failSaved = JSON.parse(v); } };
+F.pgrFail = function (m) { failMsgs.push(m); };
+F.pgrRedrawKeep = function () {};
+F.pgrRows = [row({ contig: null, pending: true, rank: 0 })];
+F.pgrPlaceAll({ query: 'q1', index: 0 });
+
+// The download: a table with rows of two hits still waiting, and placed rows
+// whose locus was never asked for, more of them than one request reads.
+var dlAsked = [], dlLoci = [], dlActive = 0, dlMost = 0;
+var D = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+    var items = JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1])).items;
+    dlLoci.push(items.length);
+    return Promise.resolve({ ok: true, json: function () {
+        return Promise.resolve({ loci: items.map(function (it) { return 'exon G' + it.start; }) }); } });
+} });
+var dlRows = [row({ rank: 0, locus: 'exon LCT' }),
+              row({ rank: 1, hap: 'HG01234#1', contig: null, pending: true, placement: 0 }),
+              row({ rank: 2, hap: 'HG01234#2', contig: null, pending: true, placement: 1 }),
+              row({ rank: 3, hap: 'HG02000#1', contig: null, pending: true, placement: 1 })];
+for (var dl = 0; dl < 250; dl++) { dlRows.push(row({ rank: 4 + dl, hap: 'S' + dl + '#1', start: dl, end: dl + 10 })); }
+D.pgrRows = dlRows;
+D.pgrDt = { rows: function () { return { data: function () { return { toArray: function () { return D.pgrRows; } }; } }; } };
+D.pgrPlaceAll = function (p) {
+    dlAsked.push(p.query + '/' + p.index);
+    dlMost = Math.max(dlMost, ++dlActive);
+    return new Promise(function (resolve) { setTimeout(function () {
+        D.pgrRows.forEach(function (r) {
+            if (r.pending && r.placement === p.index) { r.pending = false; r.contig = 'CM9.1'; r.start = 10; r.end = 20; }
+        });
+        dlActive--;
+        resolve();
+    }, 2); });
+};
+var dlDone = false;
+D.pgrCompleteForExport().then(function () { dlDone = true; });
+
+await check.wait(25);
+t.suite('the download is the whole table');
+await t.test('rows still waiting are placed first, a hit at a time', function () {
+    t.ok(dlDone, 'finished');
+    t.deepEq(dlAsked, ['q1/0', 'q1/1'], 'each hit with a waiting row, once');
+    t.eq(dlMost, 1, 'one request at a time');
+    var tsv = D.pgrRowsToTsv(D.pgrExportRows()).split('\n');
+    var head = tsv[0].split('\t'), second = tsv[2].split('\t');
+    t.eq(second[head.indexOf('contig')], 'CM9.1', 'so the file has their positions');
+});
+await t.test('and the loci nobody paged to are read, 200 rows a request', function () {
+    t.deepEq(dlLoci, [200, 53], 'two requests for 253 rows');
+    t.eq(D.pgrRows.filter(function (r) { return r.locus === undefined; }).length, 0, 'none left blank');
+    t.eq(D.pgrRows[0].locus, 'exon LCT', 'one already known is not asked again');
+});
+
+await check.wait(30);
+await t.test('on this page the rows stop waiting and say so', function () {
+    t.eq(F.pgrRows[0].pending, false, 'no longer waiting');
+    t.ok(F.pgrRows[0].placeFailed, 'marked as not placed');
+    t.contains(failMsgs[0] || '', 'server down', 'and the reason is given once, at the top');
+});
+await t.test('but it is not remembered: the copy kept for the tab has them waiting still', function () {
+    t.ok(failSaved && failSaved.rows, 'a copy was written');
+    if (!failSaved) { return; }
+    t.eq(failSaved.rows[0].pending, true, 'waiting, so a reload asks again');
+    t.notOk(failSaved.rows[0].placeFailed, 'not failed');
+    t.notOk(failSaved.full && failSaved.full[F.pgrPlaceKey('q1', 0)], 'and the hit is not marked done');
+});
+
+t.suite('opening a row');
+// The page with the requests an opening makes held back: each one waits in
+// "arms" until the test answers it.
+function actPage() {
+    var arms = [], fails = [], tabs = [];
+    var x = loadResults({ pangenomePclai: false });
+    x.pgrHapEverywhere = function () { return Promise.resolve(); };
+    x.pgrAnnotFor = function () { return null; };
+    x.pgrArm = function (r) {
+        return new Promise(function (resolve, reject) { arms.push({ row: r, resolve: resolve, reject: reject }); });
+    };
+    x.pgrFail = function (m) { fails.push(m); };
+    x.window.open = function () { var tab = { location: null, close: function () { tab.closed = true; } }; tabs.push(tab); return tab; };
+    return { x: x, arms: arms, fails: fails, tabs: tabs };
+}
+await t.test('a second click on a link that is opening is left alone', async function () {
+    var p = actPage(), link = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row(), 'browser', link);
+    t.eq(link.innerHTML, 'opening&#8230;', 'the link says it is opening');
+    p.x.pgrAct(row(), 'browser', link);
+    await check.wait(2);
+    t.eq(p.arms.length, 1, 'asked for once');
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    t.eq(link.innerHTML, 'CM1.1:1-9', 'after a failure the link has its own words back');
+    t.eq(p.fails.length, 1, 'and the failure is said once');
+    p.x.pgrAct(row(), 'browser', link);
+    await check.wait(2);
+    t.eq(p.arms.length, 2, 'and it can be clicked again');
+});
+await t.test('nor is a click on the same row\'s link, drawn anew with the table while the first waits', async function () {
+    var p = actPage(), link = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row(), 'browser', link);
+    // More rows were placed: the table is drawn again, and the row has a new link.
+    var anew = { innerHTML: 'CM1.1:1-9' };
+    p.x.pgrAct(row({ rank: 4 }), 'browser', anew);
+    await check.wait(2);
+    t.eq(p.arms.length, 1, 'asked for once');
+    t.eq(anew.innerHTML, 'CM1.1:1-9', 'and the new link keeps its words');
+    p.x.pgrAct(row({ rank: 4 }), 'details', { innerHTML: 'details' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'browser', { innerHTML: 'B' });
+    await check.wait(2);
+    t.eq(p.arms.length, 3, 'another link of the row, and another row, are their own');
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    p.x.pgrAct(row({ rank: 4 }), 'browser', anew);
+    await check.wait(2);
+    t.eq(p.arms.length, 4, 'and once the first has ended the new link can be clicked');
+});
+await t.test('the page goes where the reader clicked last, whichever answer is first', async function () {
+    var p = actPage(), a = { innerHTML: 'A' }, b = { innerHTML: 'B' };
+    p.x.pgrAct(row(), 'browser', a);
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'browser', b);
+    await check.wait(2);
+    p.arms[1].resolve({ url: 'hgTracks?second' });
+    await check.wait(2);
+    t.eq(String(p.x.window.location), 'hgTracks?second', 'the second click is followed');
+    p.arms[0].resolve({ url: 'hgTracks?first' });
+    await check.wait(2);
+    t.eq(String(p.x.window.location), 'hgTracks?second', 'the answer to the first is not');
+    t.eq(a.innerHTML, 'A', 'and its link has its words back');
+});
+await t.test('a failure of the click before is not reported over the one that took its place', async function () {
+    var p = actPage();
+    p.x.pgrAct(row(), 'browser', { innerHTML: 'A' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'details', { innerHTML: 'B' });
+    await check.wait(2);
+    p.arms[0].reject(new Error('server down'));
+    await check.wait(2);
+    t.eq(p.fails.length, 0, 'nothing said');
+});
+await t.test('a new tab is its own opening: it takes nothing over and is not taken over', async function () {
+    var p = actPage();
+    p.x.pgrAct(row(), 'browser', { innerHTML: 'A' });
+    p.x.pgrAct(row({ hap: 'HG01234#1', rank: 1 }), 'newtab', { innerHTML: 'tab' });
+    await check.wait(2);
+    p.arms[1].resolve({ url: 'hgTracks?tab' });
+    p.arms[0].resolve({ url: 'hgTracks?page' });
+    await check.wait(2);
+    t.eq(p.tabs[0].location, 'hgTracks?tab', 'the tab opens its own');
+    t.eq(String(p.x.window.location), 'hgTracks?page', 'and the page still goes where it was sent');
+});
+
+t.suite('the link that opens a row without its annotations');
+await t.test('opens the row it was offered for after the table is renumbered', function () {
+    var nodes = {}, results = loader.makeNode('div');
+    results.insertBefore = function (n) { this._kids.unshift(n); nodes.pgrErr = n; };
+    nodes.pgrResults = results;
+    var x = loadResults({ pangenomePclai: false, document: {
+        readyState: 'complete', addEventListener: function () {},
+        getElementById: function (id) { return nodes[id] || null; },
+        createElement: loader.makeNode,
+        createTextNode: function (s) { var n = loader.makeNode(); n._text = String(s); return n; } } });
+    x.pgrRows = [row({ rank: 0, hap: 'HG00097#2' }), row({ rank: 1, hap: 'HG01234#1' }), row({ rank: 2, hap: 'HG02000#1' })];
+    x.pgrFail('Could not bring GRCh38 annotations onto HG01234#1.', x.pgrRows[1]);
+    var link = loader.findAll(nodes.pgrErr, function (n) { return n.tagName === 'A'; })[0];
+    t.eq(link.getAttribute('data-act'), 'plain', 'the link is there');
+    t.eq(x.pgrLinkRow(link).hap, 'HG01234#1', 'it is for the row that failed');
+    // More rows placed: the same rows, in another order, numbered again.
+    x.pgrRows = [row({ rank: 0, hap: 'HG00001#1' }), row({ rank: 1, hap: 'HG00002#1' }),
+                 row({ rank: 2, hap: 'HG00097#2' }), row({ rank: 3, hap: 'HG01234#1' })];
+    t.eq(x.pgrLinkRow(link).hap, 'HG01234#1', 'still that row, not the one that has its number now');
+    x.pgrRows = x.pgrRows.slice(0, 3);
+    t.eq(x.pgrLinkRow(link), undefined, 'a row that is gone opens nothing');
+    var cell = loader.makeNode('a');
+    cell.setAttribute('data-act', 'browser');
+    cell.setAttribute('data-rank', 2);
+    t.eq(x.pgrLinkRow(cell).hap, 'HG00097#2', 'a link in the table goes by its number, as before');
+});
+
+t.suite('copying the query sequence');
+function copyPage(clipboard, exec, library) {
+    var said = [];
+    var extra = { pangenomePclai: false, navigator: clipboard ? { clipboard: clipboard } : {} };
+    if (library) { extra.copyButtonSaysCopied = function (b) { said.push(b); b.innerHTML = 'Copied'; }; }
+    var x = loadResults(extra);
+    x.document.execCommand = function () { if (exec === 'throws') { throw new Error('no'); } return exec; };
+    return { x: x, said: said };
+}
+await t.test('the button says Copied only when the text reached the clipboard', async function () {
+    var wrote = [];
+    var ok = copyPage({ writeText: function (s) { wrote.push(s); return Promise.resolve(); } }, false);
+    t.eq(await ok.x.pgrCopy('>q1\nACGT'), true, 'written');
+    t.eq(wrote[0], '>q1\nACGT', 'the text itself');
+    var refused = copyPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, false);
+    t.eq(await refused.x.pgrCopy('ACGT'), false, 'refused by the browser, and the older way fails too');
+    var older = copyPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, true);
+    t.eq(await older.x.pgrCopy('ACGT'), true, 'refused, but the older way of copying worked');
+    t.eq(await copyPage(null, true).x.pgrCopy('ACGT'), true, 'a browser with only the older way');
+    t.eq(await copyPage(null, 'throws').x.pgrCopy('ACGT'), false, 'which can fail as well');
+    var button = { textContent: 'Copy to Clipboard' };
+    ok.x.pgrCopySays(button, true);
+    t.eq(button.textContent, 'Copied', 'said');
+    ok.x.pgrCopySays(button, false);
+    t.eq(button.textContent, 'Not copied', 'and said when it did not');
+});
+await t.test('with the Genome Browser\'s helper (utils.js) on the page, the helper is used, for a failure too', function () {
+    var lib = copyPage(null, true, true), button = { innerHTML: 'Copy to Clipboard' };
+    lib.x.pgrCopySays(button, true);
+    t.eq(lib.said.length, 1, 'the helper is used');
+    t.eq(button.innerHTML, 'Copied', 'Copied');
+    lib.x.pgrCopySays(button, false);
+    t.eq(lib.said.length, 2, 'for a failure too, so that the label is put back');
+    t.eq(button.innerHTML, 'Not copied', 'with the failure said');
+});
+
+await t.test('a click on the button in the sequence box says what became of the copy', async function () {
+    // The handler itself, on the button the box is drawn with.
+    function boxPage(clipboard, exec) {
+        var nodes = {};
+        var c = copyPage(clipboard, exec);
+        c.x.document.getElementById = function (id) {
+            if (!nodes[id]) { nodes[id] = { id: id, style: {}, select: function () { nodes.selected = true; } }; }
+            return nodes[id];
+        };
+        c.x.pangenomeResultsPage = { querySeqs: [{ name: 'q1', seq: 'acgt' }] };
+        c.x.pgrShowSeq();
+        c.nodes = nodes;
+        return c;
+    }
+    var wrote = [];
+    var ok = boxPage({ writeText: function (s) { wrote.push(s); return Promise.resolve(); } }, false);
+    ok.nodes.pgrSeqCopy.onclick();
+    await check.wait(2);
+    t.eq(wrote[0], '>q1\nACGT\n', 'the sequence in the box is what is copied');
+    t.eq(ok.nodes.pgrSeqCopy.textContent, 'Copied', 'and the button says so');
+    var refused = boxPage({ writeText: function () { return Promise.reject(new Error('not focused')); } }, false);
+    refused.nodes.pgrSeqCopy.onclick();
+    await check.wait(2);
+    t.eq(refused.nodes.pgrSeqCopy.textContent, 'Not copied', 'refused: the button does not say Copied');
+    t.ok(refused.nodes.selected, 'and the text is selected, for Ctrl+C');
+});
+
+t.suite('the Download button, drawn anew with the table');
+await t.test('a download being put together is not started a second time from the new button', async function () {
+    var nodes = {}, held = [], saved = [];
+    var newButton = function () { nodes.pgrTsvBtn = { textContent: 'Download table', disabled: false }; return nodes.pgrTsvBtn; };
+    var x = loadResults({ pangenomePclai: false, document: {
+        readyState: 'complete', addEventListener: function () {},
+        getElementById: function (id) { return nodes[id] || null; } } });
+    x.pgrCompleteForExport = function () { return new Promise(function (resolve) { held.push(resolve); }); };
+    x.pgrExportRows = function () { return []; };
+    x.window.pangenomeCommon.saveFile = function (text, name) { saved.push(name); };
+    var first = newButton();
+    x.pgrWireTsv('pangenome_q1');
+    first.onclick();
+    t.deepEq([first.disabled, first.textContent], [true, 'Preparing\u2026'], 'the button says it is preparing');
+    var second = newButton();           // more rows placed: the table and its button are drawn again
+    x.pgrWireTsv('pangenome_q1');
+    t.deepEq([second.disabled, second.textContent], [true, 'Preparing\u2026'], 'and so does the one drawn in its place');
+    second.onclick();
+    await check.wait(2);
+    t.eq(held.length, 1, 'a click on it starts nothing');
+    held[0]();
+    await check.wait(2);
+    t.deepEq(saved, ['pangenome_q1.tsv'], 'one file');
+    t.deepEq([second.disabled, second.textContent], [false, 'Download table'],
+             'and the button on the page has its words back');
+    second.onclick();
+    await check.wait(2);
+    t.eq(held.length, 2, 'and can be clicked again');
+});
+
+t.suite('the download and the page look up loci in turn');
+await t.test('a download during the page\'s own lookup waits for it and asks only for the rest', async function () {
+    var posts = [];
+    var x = loadResults({ pangenomePclai: false, fetch: function (url, opts) {
+        var items = JSON.parse(decodeURIComponent(/payload=([^&]*)/.exec(opts.body)[1])).items;
+        return new Promise(function (resolve) {
+            posts.push({ n: items.length, answer: function () {
+                resolve({ ok: true, json: function () {
+                    return Promise.resolve({ loci: items.map(function () { return 'exon G'; }) }); } });
+            } });
+        });
+    } });
+    x.pgrCacheWrite = function () {};
+    x.pgrRows = [row({ rank: 0 }), row({ rank: 1, hap: 'HG01234#1' }), row({ rank: 2, hap: 'HG02000#1' })];
+    var shown = x.pgrRows.slice(0, 2);
+    var table = function (rows) { return { data: function () { return { toArray: function () { return rows; } }; },
+                                           invalidate: function () {} }; };
+    x.pgrDt = { rows: function (sel) { return table(sel && sel.page ? shown : x.pgrRows); }, draw: function () {} };
+    x.pgrFillLoci(x.pgrDt);                 // the page asks for the two rows it shows
+    var done = false;
+    x.pgrLociForExport().then(function () { done = true; });
+    await check.wait(2);
+    t.eq(posts.length, 1, 'one request out, not two at once');
+    t.eq(posts[0].n, 2, 'the page\'s');
+    posts[0].answer();
+    await check.wait(2);
+    t.eq(posts.length, 2, 'then the download\'s');
+    t.eq(posts[1].n, 1, 'for the one row the page did not ask about');
+    posts[1].answer();
+    await check.wait(2);
+    t.ok(done, 'and the download goes on');
+    t.eq(x.pgrRows.filter(function (r) { return r.locus === 'exon G'; }).length, 3, 'with every locus');
+});
+});

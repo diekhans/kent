@@ -240,6 +240,8 @@ static struct jsonElement *jsonParseObjectLm(char *str, int *posPtr, struct lm *
 {
 struct hash *h = hashNewLm(5, lm);
 getSpecificChar('{', str, posPtr);
+// an empty object may have white space in it: "{ }", which is how jsonWrite writes one
+skipLeadingSpacesWithPos(str, posPtr);
 while(str[*posPtr] != '}')
     {
     // parse out a name : val pair
@@ -264,6 +266,8 @@ static struct jsonElement *jsonParseListLm(char *str, int *posPtr, struct lm *lm
 {
 struct slRef *list = NULL;
 getSpecificChar('[', str, posPtr);
+// and so may an empty list: "[ ]"
+skipLeadingSpacesWithPos(str, posPtr);
 while(str[*posPtr] != ']')
     {
     struct slRef *e;
@@ -302,6 +306,8 @@ for(i = 0;; i++)
     char c = str[*posPtr + i];
     if(c == 'e' || c == 'E' || c == '.')
         integral = FALSE;
+    else if(c == '+' && i > 0 && tolower(str[*posPtr + i - 1]) == 'e')
+        ;       // the sign of an exponent: 1e+06, as jsonWriteDouble() writes a million
     else if(!c || (!isdigit(c) && c != '-'))
         break;
     }

@@ -11,7 +11,7 @@ BROWSER_BINS=cartReset das hgBlat makeDb/hgCgiData hgCollection hgConvert \
 	encode/hgEncodeDataVersions encode/hgEncodeVocab encode/hgEncodeApi \
 	phyloPng hgCustom hgPal hgFileUi hgFileSearch makeDb/hgCgiData \
 	js htdocs/style hgMirror hgBeacon hgGtexTrackSettings pyLib \
-	hgGeneGraph hgs hubApi hgPhyloPlace hgSearch
+	hgGeneGraph hgs hubApi hgPhyloPlace hgSearch hgPangenome
 
 ifdef LOWELAB
     BROWSER_BINS += $(HOME)/lowelab/src/browser/tooltip $(HOME)/lowelab/src/browser/chooseorg
@@ -28,7 +28,7 @@ BROWSER_LOADERS += utils/regionsToChain
 #endif
 
 # these should not be included in UTILS_APPLIST or parallel test runs will fail
-TEST_DIRS = lib utils
+TEST_DIRS = lib utils hgPangenome
 
 TEST_EXTRA = cgilib
 

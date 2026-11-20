@@ -178,6 +178,19 @@ if (askAboutQuickLift)
         "});\n");
     }
 
+/* The haplotypes of the human pangenome mostly have no chain between them, so they are not in
+ * the list above; PanConvert converts between them through the pangenome graph.  Offered where the
+ * pangenome tools are turned on (hg.conf pangenomeTools=on, as hgPangenome reads it) and the
+ * source is human. */
+if (cfgOptionBooleanDefault("pangenomeTools", FALSE) && sameWord(fromDb->organism, "Human"))
+    {
+    puts("<div class='fieldRow' style='margin-top: 15px;'>\n");
+    hPrintf("To a pangenome haplotype? "
+            "<a href='../cgi-bin/hgPangenome?page=convert&%s&db=%s&position=%s'>Use PanConvert</a>\n",
+            cartSidUrlString(cart), cgiEncode(trackHubSkipHubName(database)), cgiEncode(fromPos));
+    puts("</div>\n");
+    }
+
 /* The assembly list only offers targets that already have a chain from this source, so
  * this is where a user finds out theirs is missing.  Point them at the request page. */
 if (cfgOptionBooleanDefault("showLiftRequest", FALSE))

@@ -1263,7 +1263,7 @@ void hNibForChrom(char *db, char *chromName, char retNibName[HDB_MAX_PATH_STRING
 if (multiRegionSpaceForDb(db) != NULL)
     errAbort("%s is being drawn in a multi-region coordinate space, which has no "
              "sequence file.  This code path needs to go through hChromSeq().", db);
-if (startsWith("GC", db))
+if (trackHubDatabase(db) || startsWith("GC", db))
     {
     struct trackHubGenome *genome = trackHubGetGenome(db);
 
@@ -1273,8 +1273,10 @@ if (startsWith("GC", db))
     if (genome == NULL)
         errAbort("cannot find %s in loaded track hubs", db);
 
-    if (genome->twoBitPath)
-        safef(retNibName, HDB_MAX_PATH_STRING, "%s", genome->twoBitPath);
+    /* Without this the caller reads a file name out of memory nobody wrote. */
+    if (genome->twoBitPath == NULL)
+        errAbort("the hub of %s names no twoBitPath for it", db);
+    safef(retNibName, HDB_MAX_PATH_STRING, "%s", genome->twoBitPath);
     return;
     }
 if (cfgOptionBooleanDefault("forceTwoBit", TRUE) == TRUE && !trackHubDatabase(db))

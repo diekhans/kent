@@ -1739,6 +1739,14 @@ if(scriptName)
     menuStr = replaceChars(menuStr, "<!-- SHARE_LINK -->", shareLi);
     }
 
+// The pangenome tools' Tools menu items are commented out in globalNavBar.inc, so a static page
+// or a server that has not turned the tools on (hg.conf pangenomeTools=on) does not offer them.
+if (cfgOptionBooleanDefault("pangenomeTools", FALSE))
+    {
+    menuStr = replaceChars(menuStr, "<!-- OPTIONAL_PANGENOME_MENU_START", "");
+    menuStr = replaceChars(menuStr, "OPTIONAL_PANGENOME_MENU_END -->", "");
+    }
+
 // My Data > Restore Previous Session: the copies of the cart made in this web browser in the
 // last days just before a session or settings load replaced it, see cartKeepCopyBeforeLoad()
 // The link carries the hgsid like the other menu links, so it does not start a new cart.

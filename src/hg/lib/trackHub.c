@@ -1939,7 +1939,22 @@ while ((hel = hashNext(&cookie)) != NULL)
         if (cartSelected != NULL)
             {
             char *str = (sameWord(cartSelected, "on") || atoi(cartSelected) > 0) ? "on" : "off";
-            dyStringPrintf(dy, "parent %s %s\n", trackHubSkipHubName(tdb->parent->track), str);
+            // A track can have the setting and no parent linked to it; the branch below allows
+            // for that too.  The parent is then named as the setting names it.
+            char *parentName = (tdb->parent != NULL) ? tdb->parent->track
+                                                     : cloneFirstWord((char *)hel->val);
+            dyStringPrintf(dy, "parent %s %s\n", trackHubSkipHubName(parentName), str);
+            }
+        else if (tdb->parent != NULL)
+            {
+            // The setting names the parent as its trackDb spelled it, but a hub's track names
+            // are polished when it is read (trackHubFixName turns the dots of
+            // "GCA_009914755.4_T2T-CHM13v2.0ChainNet" into underbars), and the stanza we
+            // wrote for the parent carries the polished name.  Name it that way here too, or
+            // the lifted hub fails with "Parent ... doesn't exist".  Keep any on/off after it.
+            char *rest = skipToSpaces((char *)hel->val);
+            dyStringPrintf(dy, "parent %s%s\n", trackHubSkipHubName(tdb->parent->track),
+                           rest ? rest : "");
             }
         else
             dyStringPrintf(dy, "%s %s\n", hel->name, trackHubSkipHubName(((char *)hel->val)));
@@ -2360,7 +2375,16 @@ for(grp = grpList; grp; grp = grp->next)
 for(tdb = tdbList; tdb; tdb = tdb->next)
     {
     grp = hashFindVal(groupHash, tdb->grp);
-    tdb->groupPriority = grp->priority;
+    /* A track can name a group that is not in the list.  For a native database
+     * makeGroupList() rewrites any such name to a known one first, so the
+     * lookup always hits; but that repair is skipped for an assembly served
+     * from a hub (cartTrackDb.c, "if (!trackHubDatabase(db))"), and a hub
+     * database has no grp table to repair against either.  So for a hub-served
+     * assembly the lookup misses and this dereference segfaults.  Leaving the
+     * priority at its default just means the sort below falls back to the
+     * track's own priority, which is what a group of unknown rank deserves. */
+    if (grp != NULL)
+        tdb->groupPriority = grp->priority;
     }
 slSort(&tdbList, cmpPriority);
 

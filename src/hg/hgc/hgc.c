@@ -8861,7 +8861,12 @@ if (restrictToWindow)
     {
     psl = pslTrimToTargetRange(wholePsl, winStart, winEnd);
     if (psl == NULL)
+       {
+       /* Nothing of it is in the window: the window is beside the alignment, or inside one of
+        * its introns, where the alignment spans the window and no block of it is there. */
        fprintf(body, "<p>No alignment of %s within browser window.", wholePsl->qName);
+       return 0;
+       }
     }
 
 struct dnaSeq *dnaSeq;
@@ -8912,6 +8917,9 @@ return blockCount;
  * then renders the modern or classic body to match.  These are forward-declared here because
  * showSomeAlignment() sits above their definitions. */
 static boolean gAlnModern = FALSE;
+/* Set to have showSomeAlignmentModern() draw only the part of the alignment inside the browser
+ * window, the modern counterpart of showSomePartialDnaAlignment(). */
+static boolean gAlnInWindow = FALSE;
 static void showSomeAlignmentModern(struct psl *psl, bioSeq *oSeq, enum gfType qType,
                        int qStart, int qEnd, char *qName, int cdsS, int cdsE, boolean blatContext);
 
@@ -8976,8 +8984,15 @@ exit(0);	/* Avoid cartHtmlEnd. */
 
 void showSomePartialDnaAlignment(struct psl *partPsl, struct psl *wholePsl,
 				 bioSeq *oSeq, char *qName, int cdsS, int cdsE)
-/* Display protein or DNA alignment in a frame. */
+/* Display protein or DNA alignment in a frame (or the modern single page when gAlnModern). */
 {
+if (gAlnModern)
+    {   /* modern single-page view of the part in the window, as showSomeAlignment() does the whole */
+    gAlnInWindow = (partPsl != wholePsl);
+    showSomeAlignmentModern(wholePsl, oSeq, gftDna, 0, oSeq->size, qName, cdsS, cdsE, FALSE);
+    webEndGb();
+    exit(0);   // we drew the whole page; skip the frameset close
+    }
 int blockCount, i;
 struct tempName indexTn, bodyTn;
 FILE *index, *body;
@@ -8985,9 +9000,10 @@ FILE *index, *body;
 trashDirFile(&indexTn, "index", "index", ".html");
 trashDirFile(&bodyTn, "body", "body", ".html");
 
-/* Writing body of alignment. */
+/* Writing body of alignment.  partPsl is NULL when nothing of the alignment is in the window,
+ * so the names are read from wholePsl, which has the same ones. */
 body = mustOpen(bodyTn.forCgi, "w");
-htmStartDirDepth(body, partPsl->qName, 2);
+htmStartDirDepth(body, wholePsl->qName, 2);
 blockCount = showPartialDnaAlignment(wholePsl, oSeq, body, cdsS, cdsE, TRUE);
 htmEnd(body);
 fclose(body);
@@ -8996,13 +9012,14 @@ chmod(bodyTn.forCgi, 0666);
 /* Write index. */
 index = mustOpen(indexTn.forCgi, "w");
 if (qName == NULL)
-    qName = partPsl->qName;
+    qName = wholePsl->qName;
+boolean partInWindow = (partPsl != NULL && partPsl != wholePsl);
 htmStartDirDepth(index, qName, 2);
 fprintf(index, "<H3>Alignment of %s</H3>", qName);
 fprintf(index, "<A HREF=\"../%s#cDNA\" TARGET=\"body\">%s</A><BR>\n", bodyTn.forCgi, qName);
-if (partPsl != wholePsl)
+if (partInWindow)
     fprintf(index, "<A HREF=\"../%s#cDNAStart\" TARGET=\"body\">%s in browser window</A><BR>\n", bodyTn.forCgi, qName);
-fprintf(index, "<A HREF=\"../%s#genomic\" TARGET=\"body\">%s.%s</A><BR>\n", bodyTn.forCgi, hOrganism(database), partPsl->tName);
+fprintf(index, "<A HREF=\"../%s#genomic\" TARGET=\"body\">%s.%s</A><BR>\n", bodyTn.forCgi, hOrganism(database), wholePsl->tName);
 for (i=1; i<=blockCount; ++i)
     {
     fprintf(index, "<A HREF=\"../%s#%d\" TARGET=\"body\">block%d</A><BR>\n",
@@ -9019,7 +9036,7 @@ printf("  <FRAME SRC=\"%s\" NAME=\"index\">\n", indexTn.forCgi);
 // Start the body frame at the #cDNAStart anchor.  This used to be an ONLOAD
 // attribute on the FRAMESET, but our CSP puts a nonce in script-src, so
 // browsers ignore 'unsafe-inline' and never run an inline event handler.
-if (partPsl != wholePsl)
+if (partInWindow)
     printf("  <FRAME SRC=\"%s#cDNAStart\" NAME=\"body\">\n", bodyTn.forCgi);
 else
     printf("  <FRAME SRC=\"%s\" NAME=\"body\">\n", bodyTn.forCgi);
@@ -9267,7 +9284,7 @@ if (tdb == NULL)
     errAbort("BUG: bigPsl alignment table '%s' not found; this maybe causes by `.' in track names", aliTable);
 char title[1024];
 safef(title, sizeof title, "%s vs Genomic [%s]", acc, aliTable);
-htmlFramesetStart(title);
+alnModernStart(title);   // modern page when modernAlignPage is set, as htcBigPslAli()
 
 /* Get some environment vars. */
 start = cartInt(cart, "l");
@@ -10011,6 +10028,15 @@ printf("<div class='blatAlnStrip'>"
        "<div class='blatAlnStat'><span class='k'>Strand</span><span class='v'>%s</span></div>"
        "</div>\n",
        qNameHtml, chromHtml, tStartC, tEndC, idColor, ident, matchC, qSizeC, psl->strand);
+/* Not when nothing of it is in the window: what is below then says so itself. */
+if (gAlnInWindow && pslTrimToTargetRange(psl, winStart, winEnd) != NULL)
+    {
+    char winStartC[32], winEndC[32];
+    sprintLongWithCommas(winStartC, winStart + 1);
+    sprintLongWithCommas(winEndC, winEnd);
+    printf("<p>Below is the part of this alignment within the browser window, %s:%s-%s.</p>\n",
+           chromHtml, winStartC, winEndC);
+    }
 if (isNotEmpty(aliasStr))
     {
     char *aliasStrHtml = htmlEncode(aliasStr);
@@ -10041,20 +10067,23 @@ if (!captured)
     /* open_memstream failed (out of memory): render straight to stdout, skipping the section
      * reorder, rather than passing a NULL FILE to the renderer and then calling fclose(NULL). */
     if (qType == gftRna || qType == gftDna)
-        showPartialDnaAlignment(psl, oSeq, stdout, cdsS, cdsE, FALSE);
+        showPartialDnaAlignment(psl, oSeq, stdout, cdsS, cdsE, gAlnInWindow);
     else
         showGfAlignment(psl, oSeq, stdout, qType, qStart, qEnd, qName);
     }
 else
     {
     if (qType == gftRna || qType == gftDna)
-        showPartialDnaAlignment(psl, oSeq, alnF, cdsS, cdsE, FALSE);
+        showPartialDnaAlignment(psl, oSeq, alnF, cdsS, cdsE, gAlnInWindow);
     else
         showGfAlignment(psl, oSeq, alnF, qType, qStart, qEnd, qName);
     fclose(alnF);
     }
 struct bafBlock *blocks = bafBlocksDrawn();
 bafLabelBlocks(FALSE, NULL, NULL);
+/* fuzzyShow.c marks where the window's part of the query begins, but not in every case */
+boolean hasWinStart = gAlnInWindow && captured && alnHtml != NULL
+                      && stringIn("<A NAME=cDNAStart>", alnHtml) != NULL;
 if (captured)
     {
     if (blocks != NULL)   /* the block table goes above the alignment, so not in the uncaptured case */
@@ -10078,8 +10107,10 @@ printf("</div>\n");   /* #blatAlnContent */
 printf("<div id='blatAlnNav'><div id='blatAlnNavInner'>\n");
 if (blocks != NULL && captured)
     printf("<a href='#alnBlockTable'>Aligned blocks</a>\n");
-printf("<a href='#cDNA'>Only query sequence</a>\n"
-       "<a href='#ali'>Side by side alignment</a>\n");
+printf("<a href='#cDNA'>Only query sequence</a>\n");
+if (hasWinStart)
+    printf("<a href='#cDNAStart'>Query in browser window</a>\n");
+printf("<a href='#ali'>Side by side alignment</a>\n");
 if (slCount(blocks) > 1)   /* per-block jump links, indented under the side by side alignment */
     {
     struct bafBlock *b;

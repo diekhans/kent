@@ -1,0 +1,250 @@
+hgPangenome test suite
+======================
+
+Tests for PanAlign and PanConvert: the page scripts (js/hgPangenome*.js) and the
+CGI (hgPangenome.c and the files beside it).  Nothing here needs a browser or
+the real graph server.
+
+Run it:
+
+    make test          # builds the CGI from this tree, tests it, removes it
+    make testWithDb    # the same, plus the commands that run inside the cart
+
+"make test" contacts nothing outside this machine.  "make testWithDb" adds the
+checks on quickLift, refAnnot and alignTrack; those need the browser's central
+database, taken from your hg.conf, and each request starts a session row
+there, so they are not in the default run.
+
+A layer that cannot run - no node, no CGI built - is reported as NOT RUN and
+the suite result is INCOMPLETE, not PASS.  A file that ends without a verdict
+is a failure.  "make help" lists the targets.
+
+"make test" in src/hg runs this suite with the tree's other tests (TEST_DIRS
+in src/hg/makefile), by way of "make test" one directory up from here.  That
+way in, an INCOMPLETE result is printed and let go: the JavaScript layers need
+node 18 or later, and a machine without it is not a tree with a failing test.
+A test that fails stops that run as it stops this one.  Do not start two runs
+in one checkout at the same moment: both build the CGI in the source
+directory, and one of them loses it.
+
+Run one file, or one class of the CGI tests:
+
+    node unitTests.js                  # exit 0 = all passed
+    python3 cgiTests.py InputLimits    # needs the CGI: "make compile" in ..
+
+
+What runs the tests
+-------------------
+The JavaScript files run on node's own test runner (node:test) and the CGI
+tests on python's (unittest): what comes with node and python3, no npm
+packages and nothing to install.  src/hg/js/test/ holds a JsTestDriver (2011)
+harness that needs java plus a captured browser; these need neither, and run
+in a few seconds.
+
+A JavaScript file is one top-level test, and each check in it is a subtest run
+where it is written: many look at a page that the lines between them have just
+changed.  node counts the file's own test too, so a file of 36 checks reports
+37.  Where a page has to settle - a request answered, a timer - the file waits
+with "await check.wait(ms)".  A page's own timers do not keep the test process
+alive (loadClient.js), so a form left polling does not stop its file ending.
+
+
+Files
+-----
+check.js        What the JavaScript files share on top of node:test: a
+                file's checks as subtests (t.suite, t.test), assertions that
+                say what they expected and got (eq/deepEq/ok/notOk/isNull/
+                contains), and wait().
+loadClient.js   Loads js/hgPangenome.js (or another page's script) into a node vm with a
+                minimal window/document stub, and returns the client's test
+                exports.  With no page elements present the client's init()
+                returns early, which is what unit tests want; pass ids:[...]
+                for a working element tree (used by the form layer).
+                Also source() and body(): a script's text as shipped, and
+                without its module wrapper (see "Reaching inside a script").
+unitTests.js    LAYER 1: pure-function unit tests.
+commonTests.js  What the page scripts share (js/hgPangenomeCommon.js), and the
+                scripts as shipped: loaded in the page's order, each may add
+                only its own name to the global scope, and the pages start.
+formTests.js    LAYER 3: the PanAlign search form, driven through a stubbed
+                fetch: the request, polling, the hand-off to the results page,
+                and its failure messages.
+resultsTests.js Results page (js/hgPangenomeResults.js): the table's cell
+                renderers, row order, tab-separated download and record
+                parsing, tested as functions - no DataTable, no network.
+convertTests.js PanConvert (js/hgPangenomeConvert.js): the source, the picker,
+                the request, the table of where a region lands, its links.
+                Also holds that file to its four parts: the result view names
+                nothing the form declares, and runs with the form cut out.
+plotTests.js    The ancestry plot both tools share (js/hgPangenomePclai.js):
+                what it keeps between one set of regions and the next, how it
+                reads its points in batches, what it says when it cannot draw.
+mockMiddleware.py
+                Stand-in graph server for Layer 2: configurable status, body
+                and delay; records every request (method, path, headers, body) as JSON
+                lines so tests can assert what the CGI actually sent upstream.
+                --body-file serves a body too long for a command line.
+cgiTests.py     LAYER 2: the CGI, run as a real CGI against the mock.
+runTests.sh     Runs the layers and prints one result line for each.
+makefile        Standard kent entry point: make test / testWithDb /
+                updateAssemblies / help.
+
+The two generated tables
+------------------------
+js/hgPangenomeAssemblies.js, haplotype -> assembly, is generated from the HPRC
+browser index CSV, which is committed at
+hgPangenome/ucsc_browser_hprc_r2_v1.0.index.csv - so generating it needs no
+network access and is reproducible.  The generated file records the CSV's
+name, sha256 and upstream URL.  Regenerate with:
+
+    make updateAssemblies        # runs makeAssemblyMap.py, then the tests
+
+For a new HPRC release, add its index CSV beside the script and point
+DEFAULT_SRC (or the command line) at it.
+
+js/hgPangenomeSamples.js, sample -> population, is generated the same way by
+../makeSampleMap.py from ../hprc_release2_sample_metadata.csv.
+
+
+What Layer 2 covers
+-------------------
+Runs the compiled CGI as a real CGI (POST with a urlencoded body on stdin, GET
+with QUERY_STRING) against mockMiddleware.py.
+
+Most limits are fixed values in ../hgPangenome.h and no hg.conf reaches them.
+The checks read them from that file - limit("PG_MAX_LIFT_SPAN") - and are made
+at the values that ship: one past each limit refused, exactly at it accepted.
+The two that are settings, pangenome.maxSequences and pangenome.maxSeqLen, are
+tested at their defaults, read from ../hgPangenome.c, and again set lower.
+
+input caps       one sequence too many rejected / as many as the limit
+                 accepted (boundary); over-long sequence rejected and one
+                 exactly at the limit accepted; the most sequences at the
+                 greatest length fit one request; non-ACGTN and
+                 RNA "U" rejected; lower case accepted; over-size body
+                 rejected, as JSON; malformed JSON rejected without aborting
+                 the CGI; missing 'sequences', empty array, entry without a
+                 sequence, empty sequence.  Each rejection also asserts the
+                 request was NOT forwarded upstream.
+request shaping  forwarded once, as POST, to /api/v1/map, with
+                 Content-Type: application/json, payload byte-for-byte
+                 identical, Accept and User-Agent set; poll forwarded as GET to
+                 /api/v1/map/<job_id>; trailing slash in apiBase normalized;
+                 graph server answer passed through.
+auth             configured token sent as X-Pangenome-Token on both map and
+                 poll; no header at all when unconfigured.
+job_id guard     rejects "../../etc/passwd", "a/b", "a?x=1", "a&b", "a;b",
+                 "a b", a full URL, "$(id)", an over-long id and a missing id -
+                 and asserts none of them are forwarded; accepts the normal
+                 [A-Za-z0-9._-] charset.
+error mapping    400/401/403/429/500/503 surfaced as an error envelope naming
+                 the status; non-JSON 200 passed through; unreachable
+                 graph server reported clearly; a slow graph server times out
+                 instead of hanging; missing apiBase reported on map and poll.
+rate limit       with the bottleneck server pointed at a dead port, cmd=map,
+                 cmd=locus and cmd=surjectAll consult it and fail closed, in
+                 JSON; the light reads (haplotypes, contigs, pclai) consult it
+                 and are answered all the same; cmd=poll does not consult it.
+                 With a stand-in for the bottleneck server: what the light
+                 reads, a locus lookup and a mapping weigh, and that a reader
+                 far over the limit is refused them all, but not the poll of
+                 a job already running.
+commands        every command the page scripts send is one the CGI knows;
+                 an unknown cmd is not forwarded and is answered with a JSON
+                 error that names it.
+
+Every request runs in a temporary directory laid out as cgi-bin is, so the
+CGI's ../trash is there too and nothing is left in the source tree.
+
+Isolation: the test hg.conf files are standalone (they do NOT include the site
+hg.conf), so Layer 2 never touches the shared bottleneck server, MySQL, or the
+real graph server.  The exception is its last section, the commands that run
+inside the cart, which is only run by "make testWithDb".  The CGI is $PG_CGI,
+else ../hgPangenome as "make compile" leaves it; an installed CGI is never
+used, and with neither the layer is NOT RUN.
+
+
+What Layer 1 covers
+-------------------
+parseInput      one-per-line and FASTA input; wrapped sequence lines; header
+                name tokenizing; bare ">"; blank lines; CRLF and bare-CR;
+                indented headers; data before the first header; line numbers.
+validate        autogenerated names (seq_N); duplicate-name uniquifying;
+                collisions with Object.prototype member names; lower-case
+                input; N allowed; U/digits/punctuation rejected; empty
+                sequence; per-sequence errors with line numbers; the 50
+                boundary and the 51 rejection; configured maxSequences.
+
+
+Reaching inside a script
+------------------------
+Every script is one module: (function () { 'use strict'; ... }());  The tests
+get at what is inside in one of two ways.
+
+js/hgPangenome.js and js/hgPangenomeConvert.js end with
+
+    if (typeof module !== "undefined" && module.exports)
+        module.exports = { ... };
+
+In a browser "module" is undefined, so this is a no-op there.  Under node it
+exposes the functions these tests exercise.  Keep it in sync when adding
+functions worth testing.
+
+js/hgPangenomeResults.js and js/hgPangenomePclai.js have no such list: their
+tests read and replace too much of them.  resultsTests.js and plotTests.js
+load those two with loadClient.js body(), which takes the wrapper off, so
+every function and variable is on the vm context.  The body still runs in
+strict mode.  commonTests.js is where the wrapped files themselves are run.
+
+
+Bugs this layer has already caught
+----------------------------------
+1. validate() used a plain {} as its seen-names map, so sequences named
+   "constructor"/"toString" (truthy via the prototype chain) were renamed
+   spuriously, and duplicate "__proto__" names were never deduplicated.
+   Fixed with Object.create(null).
+2. refDbFor() looked names up on an object literal without hasOwnProperty, so
+   a haplotype sample named "constructor" resolved to Object.prototype's
+   member instead of "no such assembly".  Fixed with a hasOwnProperty guard.
+3. When the bottleneck (rate limiter) server was unreachable, the JSON API
+   path answered with an HTML 500 page, which the browser showed as raw
+   markup.  Fixed by catching the abort and emitting the error envelope, with
+   the host/port detail going to the error log rather than to the user.
+   Finding that also exposed a build problem: the tree's prebuilt libraries
+   (lib/$MACHTYPE/jkhgap.a, jkweb.a) were months older than the sources, so
+   the CGI linked an old botDelay whose behavior did not match botDelay.c.
+   Rebuild the libraries after a git pull:
+       (cd src/lib && make) ; (cd src/hg/lib && make)
+
+
+What Layer 3 covers
+-------------------
+The PanAlign search form.  Each test loads the form, types a sequence, clicks
+Submit and answers the form's requests with fixtures.
+
+the request      posted to our own CGI as cmd=map, form-encoded; the sequence
+                 named and upper-cased; a position always asked for; no
+                 per-haplotype alignments; the configured number of placements
+                 and coverage cutoff.
+input            invalid input and too many sequences are explained and
+                 nothing is sent.
+polling          GET with the job id, until the job is done and no longer.
+hand-off         a finished job opens page=results with the job id, the
+                 session and a link's refAnnot.
+failures         an error envelope, an answer with no job id, a failed job,
+                 polls that do not get through, and contact lost for good.
+
+The results are drawn by the results page; its coordinate arithmetic, cells
+and download are tested as functions in resultsTests.js.
+
+
+Not covered yet
+---------------
+Layer 4  Ground-truth round-trips against the live graph server: cut reads from
+         known reference coordinates, assert haplotypes, surjected position and
+         the browser link land exactly where they should (off-by-one probe).
+Layer 5  Negative/security: direct POST bypass, malformed responses, stuck
+         jobs, expired job ids, XSS-ish sequence names, auth mismatch.
+Layer 6  Non-functional: rate limiting, concurrency/429 behavior, tunnel loss,
+         post-deploy smoke test (js/css/trash all 200 on the live vhost),
+         cross-browser, accessibility.
