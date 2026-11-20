@@ -113,8 +113,8 @@ carefulClose(&f);
 }
 
 static char *pgAssemblyFile(char *db, char *suffix)
-/* Path to one of an assembly's files, e.g. ".2bit" or ".chrom.sizes.txt".
- * NULL if it is not there.
+/* Where one of an assembly's files is, e.g. ".2bit" or ".chrom.sizes.txt".
+ * NULL if it is not there.  A URL on a server that reads /gbdb from UCSC.
  *
  * Deliberately not hNibForChrom(): for a GenArk assembly that resolves through
  * the hubs loaded in this process, and aborts outright when none are - which
@@ -122,12 +122,28 @@ static char *pgAssemblyFile(char *db, char *suffix)
  * pointed at.  genArkPath gives the same layout without that dependency. */
 {
 char path[PATH_LEN];
-char *arkPath = genArkPath(db);
-if (arkPath != NULL)
-    safef(path, sizeof(path), "/gbdb/genark/%s/%s/%s%s", arkPath, db, db, suffix);
+char *arkDir = pgGenArkDir(db);
+if (arkDir != NULL)
+    safef(path, sizeof(path), "%s/%s%s", arkDir, db, suffix);
 else
     safef(path, sizeof(path), "/gbdb/%s/%s%s", db, db, suffix);
-return fileExists(path) ? cloneString(path) : NULL;
+freez(&arkDir);
+return pgGbdbFile(path);
+}
+
+static struct hash *pgSizesFromFile(char *path)
+/* name -> size out of a chrom.sizes file, NULL if it will not open.  What
+ * hChromSizeHashFromFile() does, for a file that can be a URL. */
+{
+struct lineFile *lf = lineFileUdcMayOpen(path, TRUE);
+if (lf == NULL)
+    return NULL;
+struct hash *hash = hashNew(0);
+char *row[2];
+while (lineFileRow(lf, row))
+    hashAddInt(hash, row[0], sqlUnsigned(row[1]));
+lineFileClose(&lf);
+return hash;
 }
 
 static char *pgChromSizesPath(char *db)
@@ -147,9 +163,10 @@ struct hash *pgChromSizes(char *db)
 char *path = pgChromSizesPath(db);
 if (path != NULL)
     {
-    struct hash *hash = hChromSizeHashFromFile(path);
+    struct hash *hash = pgSizesFromFile(path);
     freez(&path);
-    return hash;
+    if (hash != NULL)
+        return hash;
     }
 char *twoBitPath = pgAssemblyFile(db, ".2bit");
 if (twoBitPath == NULL)
@@ -180,11 +197,14 @@ return hash;
 char *pgChromSizesFile(char *db, struct hash *sizes, boolean renamed)
 /* bedToBigBed wants a chrom.sizes file.  Use the assembly's own where there is
  * one, but not once we have renamed the sequences to their display names - the
- * shipped file is keyed by accession and bedToBigBed would reject every row. */
+ * shipped file is keyed by accession and bedToBigBed would reject every row.
+ * Nor when it is a URL: the sizes are in hand, and written out here they are
+ * not fetched a second time. */
 {
 char *path = renamed ? NULL : pgChromSizesPath(db);
-if (path != NULL)
+if (path != NULL && !hasProtocol(path))
     return path;
+freez(&path);
 struct tempName tn;
 trashDirDateFile(&tn, "pangenomeQuickLift", "chromSizes", ".txt");
 FILE *f = mustOpen(tn.forCgi, "w");

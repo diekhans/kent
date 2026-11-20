@@ -1241,6 +1241,68 @@ class CartCommands(CgiTest):
         self.eq("... and so do the eleven asked for twice over", for_twice, for_one)
         self.eq("... each still answered in its place", (each[:1], twice), (one, each + each))
 
+    # ---- a server that keeps /gbdb somewhere else ----
+
+    def gbdb_at(self, name, *links):
+        """A directory to stand for a mirror's own /gbdb, holding links to
+        these of the real ones, and a conf that names it as gbdbLoc1."""
+        at = os.path.join(TMP, "%s%d" % (name, CartCommands.boxes))
+        os.makedirs(at)
+        for link in links:
+            os.symlink("/gbdb/" + link, os.path.join(at, link))
+        return at, conf(os.path.basename(at) + ".conf", "include " + self.q, "gbdbLoc1=%s/" % at, tools=False)
+
+    def test_gbdb_somewhere_else(self):
+        # A mirror names the directory it keeps /gbdb in as gbdbLoc1 in
+        # hg.conf, and every file read from /gbdb is then looked for there.
+        # "moved" holds one assembly that is nowhere else, and the real GenArk
+        # files; "bare" holds nothing.  The GenArk files have a setting of
+        # their own as well, genarkHubPrefix, for a mirror that reads them
+        # from UCSC's download server: there they are not under /gbdb.
+        moved, at_moved = self.gbdb_at("gbdbMoved", "genark")
+        bare, at_bare = self.gbdb_at("gbdbBare")
+        at_prefix, at_no_prefix = (conf("prefix%d.conf" % n, "include " + self.q, "genarkHubPrefix=" + where,
+                                        tools=False) for n, where in enumerate((moved + "/genark", bare)))
+        os.makedirs(os.path.join(moved, "pgMoved"))
+        with open(os.path.join(moved, "pgMoved", "pgMoved.chrom.sizes.txt"), "w") as fh:
+            fh.write("chrA\t1000\nchrB\t200\n")
+        self.has("gbdb moved: an assembly that is only in the moved directory gives its sequences",
+                 get(at_moved, "cmd=contigs&db=pgMoved"), '{"name":"chrB","display":"chrB","size":200}')
+        self.has("... and is not found where /gbdb is in its usual place",
+                 get(self.q, "cmd=contigs&db=pgMoved"), "no sequence sizes available for pgMoved")
+
+        at = '"contig":"CM089723.1","start":135714502,"end":135738459'
+        asks = (("the sequences of an HPRC assembly", None, "cmd=contigs&db=GCA_042077495.1",
+                 '"display":"chr2"', "no sequence sizes available"),
+                ("its ancestry, with the reference panel", "pclai",
+                 '{"spots":[{"id":"a","hap":"NA19036#1","acc":"GCA_042077495.1",%s}]}' % at,
+                 '"found":1,"panel":{', '"found":0}'),
+                ("its genes", "locus", '{"items":[{"db":"GCA_042077495.1",%s}]}' % at,
+                 '"loci":["exon LCT-MCM6"]', '"loci":[null]'))
+        for what, cmd, request, there, absent in asks:
+            def ask(cf):
+                return post(cf, cmd, request) if cmd else get(cf, request)
+            here = ask(self.q)
+            self.has("gbdb moved: %s, first with /gbdb in its usual place" % what, here, there)
+            self.eq("... the moved directory gives the same answer", ask(at_moved) == here, True)
+            self.has("... and a moved directory with nothing in it gives none", ask(at_bare), absent)
+            self.eq("... the same answer again with the GenArk files under another name", ask(at_prefix) == here, True)
+            self.has("... and none with that name set to where they are not", ask(at_no_prefix), absent)
+
+    def test_a_conversion_with_gbdb_somewhere_else(self):
+        # The sizes of both assemblies are read from the moved directory, and
+        # the hub tells the browser to read the source's sequence there too.
+        self.need("bedToBigBed")
+        moved, at_moved = self.gbdb_at("gbdbHub", "hg38")
+        out = self.in_box("cmd=quickLift&payload=" + enc(QL_FULL), cf=at_moved)
+        self.has("gbdb moved: a conversion gives a browser link", out, '"url":"hgTracks?db=hg38')
+        hub = read(self.hubs()[0]) if self.hubs() else ""
+        self.has("... and its hub names the sequence file in the moved directory", hub,
+                 "otherTwoBitUrl %s/hg38/hg38.2bit\n" % moved)
+        bare, at_bare = self.gbdb_at("gbdbNone")
+        self.has("... and a moved directory with nothing in it gives no conversion",
+                 self.in_box("cmd=quickLift&payload=" + enc(QL_FULL), cf=at_bare), '"status":"error"')
+
     # ---- the pages ----
 
     def test_page_parameters_are_not_saved(self):

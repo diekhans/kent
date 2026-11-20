@@ -123,6 +123,14 @@ char *pgPclaiRefPanel(void);
  * in place of the one in the assembly's own contrib directory.  NULL when it
  * is not set. */
 
+char *pgGenArkDir(char *acc);
+/* Where the files of a GenArk assembly are, under hg.conf genarkHubPrefix.
+ * NULL for an assembly that is not one.  Can be a URL. */
+
+char *pgGbdbFile(char *path);
+/* Where this server keeps a file named under /gbdb - hg.conf can move /gbdb,
+ * or point it at UCSC - or NULL when it does not have it.  Can be a URL. */
+
 /* ---- hgPangenome.c - answering, and the names a request may carry ---- */
 
 void emitJson(char *json);

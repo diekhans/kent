@@ -67,6 +67,10 @@
 #include "errCatch.h"
 #include "portable.h"
 #include "quickLift.h"
+#include "hdb.h"
+#include "genark.h"
+#include "udc.h"
+#include "net.h"
 #include <ctype.h>
 #include "hgPangenome.h"
 
@@ -183,6 +187,49 @@ char *pgPclaiRefPanel()
  * is not set. */
 {
 return cfgOption("pangenome.pclaiRefPanel");
+}
+
+char *pgGenArkDir(char *acc)
+/* Where the files of a GenArk assembly are, NULL for an assembly that is not
+ * one.  Under hg.conf genarkHubPrefix, the library's own setting for it:
+ * /gbdb/genark at UCSC, and on a mirror often UCSC's download server, which
+ * has these files under /hubs and has no /gbdb/genark. */
+{
+char *arkPath = genArkPath(acc);        /* NULL too when the prefix is not set */
+if (arkPath == NULL)
+    return NULL;
+char dir[PATH_LEN];
+safef(dir, sizeof(dir), "%s/%s/%s", cfgOption("genarkHubPrefix"), arkPath, acc);
+freez(&arkPath);
+return cloneString(dir);
+}
+
+char *pgGbdbFile(char *path)
+/* Where this server keeps a file named under /gbdb, or NULL when it does not
+ * have it.
+ *
+ * A mirror can keep /gbdb in another directory, or read it from UCSC over the
+ * network: hg.conf gbdbLoc1 and gbdbLoc2, which hReplaceGbdb() applies.  With
+ * neither set, as at UCSC, the name comes back as it went in.  The answer can
+ * therefore be a URL, as the name can already be for a GenArk assembly, and
+ * what opens it has to take one. */
+{
+char *at = hReplaceGbdb(path);
+boolean there = FALSE;
+if (hasProtocol(at))
+    {
+    /* udc asks the far server, and aborts on some of the ways that fails */
+    struct errCatch *errCatch = errCatchNew();
+    if (errCatchStart(errCatch))
+        there = udcExists(at);
+    errCatchEnd(errCatch);
+    errCatchFree(&errCatch);
+    }
+else
+    there = fileExists(at);
+if (!there)
+    freez(&at);
+return at;
 }
 
 /* ---- Answering -------------------------------------------------------------- */
@@ -971,6 +1018,11 @@ if (command->inCart)
     cartEmptyShellNoContent(doMiddle, hUserCookie(), excludeVars, oldVars);
     }
 else
+    {
+    /* The cart shell does this for the commands above.  A file under /gbdb
+     * can be a URL on a mirror, and udc keeps what it reads of one here. */
+    setUdcCacheDir();
     command->answer();
+    }
 return 0;
 }

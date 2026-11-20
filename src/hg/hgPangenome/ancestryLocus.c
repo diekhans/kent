@@ -13,6 +13,7 @@
 #include "hdb.h"
 #include "genark.h"
 #include "bigBed.h"
+#include "udc.h"
 #include <ctype.h>
 #include <limits.h>
 #include "hgPangenome.h"
@@ -49,7 +50,8 @@
 #define PCLAI_PANEL_MAX (4 * 1024 * 1024)   /* the published panel is 94 kb */
 
 static char *pgPclaiDir(char *acc)
-/* The contrib directory holding one assembly's pcLAI, or NULL.
+/* The contrib directory holding one assembly's pcLAI, or NULL.  A name, not
+ * yet looked for: a file in it is found with pgGbdbFile().
  *
  * The path comes from genArkPath(), which resolves through the genark table,
  * so an accession we do not serve yields NULL rather than a path - the caller
@@ -57,12 +59,12 @@ static char *pgPclaiDir(char *acc)
 {
 if (isEmpty(acc))
     return NULL;
-char *arkPath = genArkPath(acc);
-if (arkPath == NULL)
+char *arkDir = pgGenArkDir(acc);
+if (arkDir == NULL)
     return NULL;
 char dir[PATH_LEN];
-safef(dir, sizeof(dir), "/gbdb/genark/%s/%s/%s", arkPath, acc, PCLAI_CONTRIB);
-freez(&arkPath);
+safef(dir, sizeof(dir), "%s/%s", arkDir, PCLAI_CONTRIB);
+freez(&arkDir);
 return cloneString(dir);
 }
 
@@ -103,9 +105,10 @@ static boolean pgPclaiRead(char *dir, char *chrom, int start, int end,
  * and comes back clipped, so the mapping cannot be re-derived from the colours
  * and is not reimplemented here: the file's own value is passed through. */
 {
-char path[PATH_LEN];
-safef(path, sizeof(path), "%s/pclai.bb", dir);
-if (!fileExists(path))
+char name[PATH_LEN];
+safef(name, sizeof(name), "%s/pclai.bb", dir);
+char *path = pgGbdbFile(name);
+if (path == NULL)
     return FALSE;
 
 boolean got = FALSE;
@@ -182,6 +185,7 @@ if (errCatch->gotError)
     got = FALSE;
     }
 errCatchFree(&errCatch);
+freez(&path);
 return got;
 }
 
@@ -206,7 +210,7 @@ if (!startsWith("GCA_", acc) && !startsWith("GCF_", acc))
     {
     char path[PATH_LEN];
     safef(path, sizeof(path), "/gbdb/%s/catLiftOffGenesV1/catLiftOffGenesV1.bb", acc);
-    return fileExists(path) ? cloneString(path) : NULL;
+    return pgGbdbFile(path);
     }
 char *dir = pgPclaiDir(acc);
 if (dir == NULL)
@@ -214,7 +218,7 @@ if (dir == NULL)
 char path[PATH_LEN];
 safef(path, sizeof(path), "%s/catGenes.bb", dir);
 freez(&dir);
-return fileExists(path) ? cloneString(path) : NULL;
+return pgGbdbFile(path);
 }
 
 static void pgLocusAddGene(char **genes, int *count, char *name)
@@ -462,6 +466,23 @@ else
 dyStringFree(&out);
 }
 
+static char *pgSmallFile(char *path, off_t maxSize)
+/* The text of a file, here or at a URL.  NULL when it is not there, is bigger
+ * than maxSize, or will not read.  Through udc, which reads both. */
+{
+char *text = NULL;
+struct errCatch *errCatch = errCatchNew();
+if (errCatchStart(errCatch))
+    {
+    off_t size = udcFileSize(path);
+    if (size >= 0 && size <= maxSize)
+        text = udcFileReadAllIfExists(path, NULL, 0, NULL);
+    }
+errCatchEnd(errCatch);
+errCatchFree(&errCatch);
+return text;
+}
+
 static char *pgPclaiPanel(char *path)
 /* The reference panel file's text, or NULL when there is no file, it is far
  * bigger than a panel is, or it does not read as an object with a "points"
@@ -471,11 +492,9 @@ static char *pgPclaiPanel(char *path)
  * a data push would make the whole answer unreadable; left out, the page says
  * that there is no panel. */
 {
-if (isEmpty(path) || !fileExists(path) || fileSize(path) > PCLAI_PANEL_MAX)
+char *text = isEmpty(path) ? NULL : pgSmallFile(path, PCLAI_PANEL_MAX);
+if (text == NULL)
     return NULL;
-char *text = NULL;
-size_t size = 0;
-readInGulp(path, &text, &size);
 boolean ok = FALSE;
 struct errCatch *errCatch = errCatchNew();
 if (errCatchStart(errCatch))
@@ -627,15 +646,18 @@ dyStringPrintf(out, "],\"asked\":%d,\"found\":%d", asked, found);
  * file symlinked into every assembly's contrib directory, and it is what makes
  * a coordinate readable.  Taken from a directory we have already resolved, so
  * the answer stays within the files the points came from. */
-char panelPath[PATH_LEN];
+char *panelPath = NULL;
 char *cfgPanel = pgPclaiRefPanel();
 if (cfgPanel != NULL)
-    safef(panelPath, sizeof(panelPath), "%s", cfgPanel);
+    panelPath = cloneString(cfgPanel);
 else if (panelDir != NULL)
-    safef(panelPath, sizeof(panelPath), "%s/pclaiRefPanel.json", panelDir);
-else
-    panelPath[0] = '\0';
+    {
+    char name[PATH_LEN];
+    safef(name, sizeof(name), "%s/pclaiRefPanel.json", panelDir);
+    panelPath = pgGbdbFile(name);
+    }
 char *panel = pgPclaiPanel(panelPath);
+freez(&panelPath);
 if (panel != NULL)
     {
     dyStringAppend(out, ",\"panel\":");
